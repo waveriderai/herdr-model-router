@@ -1,5 +1,24 @@
 # Privacy
 
+## Rules mode (default)
+
+- `roles`, `plan`, and `run --dry-run` read the rules file and `.model-router/policy.json`
+  only. They make no network call, start no process, query no credential store, and create no
+  router state.
+- An ambient `TYPESAFE_API_KEY` is ignored unless `--routing-mode semantic` is given without
+  `--role`. Only then is the key looked up and the task text sent to TypeSafe.
+- A launch records the task's role, worktree path, rules path, lanes, native argv, pane and
+  agent names, and each prompt attempt's state and evidence. Prompts are stored as SHA-256
+  hashes, not text.
+- The router never reads, stores, or changes provider credentials. Each CLI uses its own login.
+- A launched CLI starts through `/usr/bin/env -i` with only the allowlist in
+  [Rules mode](rules.md#launch), read from its new pane's shell. API keys and cloud credentials
+  exported by your shell are dropped. Persistent CLI auth configuration is operator-owned.
+- Launch scripts under `<router home>/launch/` contain only the working directory, executable
+  path, and native argv, are mode 0600, and are deleted after the launch is observed.
+
+## Quota mode and shared components
+
 - TypeSafe state must not include credentials, cookies, account labels, or raw heartbeats. Recognizable credentials are rejected locally before the first TypeSafe call; arbitrary sensitive narrative text still remains the caller's responsibility.
 - Task enrichment sends a bucketed pull request size to TypeSafe: one of five size
   buckets, one of five file-count buckets, and a boolean — at most ~5.6 bits per run

@@ -1,0 +1,5 @@
+  Cursor Agent
+  v2026.10.01
+  → Plan, search, build anything
+  Plan (shift+tab to cycle)
+  Composer 2 · Run Everything

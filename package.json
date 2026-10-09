@@ -1,10 +1,11 @@
 {
-  "name": "model-router",
+  "name": "herdr-model-router",
+  "description": "Route coding tasks to the models your pstack-models.mdc role rules name, in Herdr panes",
   "private": true,
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "workspaces": [
     "packages/*"
@@ -16,11 +17,12 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "verify": "npm run typecheck && npm run lint && npm run format:check && npm test -- --run && npm run build"
+    "verify": "npm run build --workspace @agent-router/hermes-heartbeat && npm run typecheck && npm run lint && npm run format:check && npm test -- --run && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.3",
+    "esbuild": "^0.28.1",
     "eslint": "^10.10.0",
     "prettier": "^3.9.7",
     "typescript": "^6.0.3",

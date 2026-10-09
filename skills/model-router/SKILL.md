@@ -9,10 +9,23 @@ Call the explicit CLI. Do not invent routing policy, quotas, or model catalogs.
 
 ## Invoke
 
+Rules mode (default): the role's models come from the user's `pstack-models.mdc`. Pick the role from `router roles`; never guess one.
+
 ```sh
-router run "<task>" --dry-run
-router run "<task>"
-router run --session <id> "<next-phase task>"
+router roles
+router plan --role <role> [--parent provider:model@effort]
+router run "<task>" --role <role> --dry-run
+router run "<task>" --role <role>
+router task status [id]
+router task revise <id> "<revision>"
+```
+
+Quota mode (opt-in, TypeSafe-billed): only when the user asks for it.
+
+```sh
+router run --routing-mode quota "<task>" --dry-run
+router run --routing-mode quota "<task>"
+router run --routing-mode quota --session <id> "<next-phase task>"
 router effort --session <id> "<sub-step>" [--step-kind <k>] [--consecutive-failures <n>] [--tests-failing] [--files-touched <n>] [--diff-lines <n>] [--blocked]
 router status [--usage]
 router session [id] [--list]
@@ -21,22 +34,24 @@ router usage refresh --dry-run
 router usage refresh --source browser --dry-run
 ```
 
-`--dry-run` prints the decision and does not create a Herdr pane or consume launch quota.
+`--dry-run` prints the decision and does not create a Herdr pane or consume launch quota. In rules mode it reads only the rules file and project policy.
+
+A rules-mode panel role launches every lane, read-only. A writer task owns its worktree until `router task complete <id> --evidence "..."`; send changes with `router task revise`, never a new `run`. An idle pane is not completion. If a prompt attempt is `unknown`, do not resend: show the user `router task status <id>`.
 
 `router run` without `--dry-run` still requires `HERDR_ENV=1` and should wait for user confirmation before any launch that would consume subscription quota.
 
-Default `router run` reads local-session quota caches. Add `--usage` for official CLI/API and browser collectors. Personal accounts stay eligible without known quota. Shared accounts still need known usage.
+Quota-mode `router run` reads local-session quota caches. Add `--usage` for official CLI/API and browser collectors. Personal accounts stay eligible without known quota. Shared accounts still need known usage.
 
 If the CLI prints two eligible routes, ask the user to choose. If it prints exclusions, report those reasons. Never override the 40% shared reserve.
 
 ## End of a phase
 
-If your task was launched by model-router, it ends with `Router session: <id>`. When the phase you were given is complete (for example planning is done and implementation is next):
+If your task was launched by quota-mode model-router, it ends with `Router session: <id>`. When the phase you were given is complete (for example planning is done and implementation is next):
 
 1. Write the result the next agent needs to a file in the repo, such as the plan or handoff notes (for example `docs/plans/<feature>.md`). The next agent starts in a new pane and does not see this conversation.
 2. Tell the user the phase is complete, name the file, and ask whether to route the next phase. Do not launch anything until they agree.
 3. Run `router session <id>` and confirm the phase and route you were given.
-4. Run `router run --session <id> "<next-phase task>" --dry-run`. The task must name the next phase and reference the file, for example `Implement the approved plan in docs/plans/billing.md`. Show the user the decision card.
+4. Run `router run --routing-mode quota --session <id> "<next-phase task>" --dry-run`. The task must name the next phase and reference the file, for example `Implement the approved plan in docs/plans/billing.md`. Show the user the decision card.
 5. If the user confirms, run the same command without `--dry-run`. Report the new session id, agent, and pane from the output.
 6. If the output says `Continue in this session`, the next phase runs here: continue it yourself at the stated effort, using the new `Router session:` id it prints. If it says to end your turn, end it with a one-line status; the next phase is already queued. This is the only case where you continue the next phase yourself.
 

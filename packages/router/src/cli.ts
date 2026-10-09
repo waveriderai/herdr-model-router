@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command, CommanderError } from "commander";
 import { executeRun, type RunDeps } from "./commands/run.js";
@@ -30,6 +31,24 @@ import { collectUsageChain } from "./collectors/collector-chain.js";
 import { collectorsForAccount } from "./collectors/registry.js";
 import type { Account } from "./domain/account.js";
 import type { UsageSnapshot } from "./domain/usage.js";
+import {
+  executePlan,
+  executeRoles,
+  userHome,
+  type CommandResult,
+} from "./commands/rules-commands.js";
+import { executeRulesRun } from "./commands/rules-run.js";
+import {
+  createRulesRunDeps,
+  openDispatchDeps,
+  type RulesRuntimeOverrides,
+} from "./commands/rules-runtime.js";
+import {
+  executeTaskClose,
+  executeTaskRecover,
+  executeTaskRevise,
+  executeTaskStatus,
+} from "./commands/task-commands.js";
 
 export interface CliIo {
   write(chunk: string): boolean;
@@ -45,7 +64,14 @@ export interface CliOptions {
   createRunDeps?: typeof createDefaultRunDeps;
   effort?: typeof executeEffort;
   effortDeps?: EffortDeps;
+  /** Directory rules-mode commands resolve the project and rules from. Default: cwd. */
+  cwd?: string;
+  /** Test seams for rules-mode launches, semantic classification, and task commands. */
+  rulesOverrides?: RulesRuntimeOverrides;
 }
+
+const ROUTING_MODES = ["rules", "semantic", "quota"] as const;
+type RoutingModeFlag = (typeof ROUTING_MODES)[number];
 
 function effortDepsFrom(deps: RunDeps): EffortDeps {
   if (!deps.sessions || !deps.effortChanges) {
@@ -100,7 +126,12 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
   };
   const env = options.env ?? process.env;
   const program = new Command() as Command & { exitCode?: number };
-  program.name("router").description("Explicit model router CLI").version(ROUTER_VERSION);
+  program
+    .name("router")
+    .description(
+      "Herdr Model Router: route a task to a role's models from your pstack-models.mdc rules (alias: hmr)",
+    )
+    .version(ROUTER_VERSION);
   program.configureOutput({
     writeOut: (chunk) => {
       stdout.write(chunk);
@@ -110,17 +141,97 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     },
   });
   program.exitOverride();
+  const cwd = options.cwd ?? process.cwd();
+  const emit = (result: CommandResult, json: boolean | undefined) => {
+    (result.code === 0 || json ? stdout : stderr).write(
+      `${json ? JSON.stringify(result.json) : result.output}\n`,
+    );
+    program.exitCode = result.code;
+  };
+  const guarded = (action: () => CommandResult | Promise<CommandResult>, json?: boolean) =>
+    Promise.resolve()
+      .then(action)
+      .then((result) => emit(result, json))
+      .catch((error: unknown) => {
+        stderr.write(`${formatError(error)}\n`);
+        program.exitCode = 1;
+      });
+  program
+    .command("roles")
+    .alias("list")
+    .description("List the roles in the rules file (reads files only)")
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--json", "Emit JSON", false)
+    .action((flags: { rules?: string; json?: boolean }) =>
+      guarded(
+        () =>
+          executeRoles({
+            cwd,
+            home: userHome(env),
+            ...(flags.rules ? { rulesFlag: flags.rules } : {}),
+          }),
+        flags.json,
+      ),
+    );
+  program
+    .command("plan")
+    .alias("preview")
+    .description("Show the lanes, models and native argv a role would launch (reads files only)")
+    .requiredOption("--role <name>", "Role from the rules file")
+    .option(
+      "--parent <descriptor>",
+      "provider:model@effort the parent runs; resolves parent aliases",
+    )
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--read-only", "Plan a single-lane role as read-only", false)
+    .option("--json", "Emit JSON", false)
+    .action(
+      (flags: {
+        role: string;
+        parent?: string;
+        rules?: string;
+        readOnly?: boolean;
+        json?: boolean;
+      }) =>
+        guarded(
+          () =>
+            executePlan(
+              { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
+              {
+                role: flags.role,
+                ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+                ...(flags.readOnly ? { readOnly: true } : {}),
+              },
+            ),
+          flags.json,
+        ),
+    );
   program
     .command("run")
     .argument("<task>")
+    .option("--role <name>", "Role from the rules file (required unless --routing-mode semantic)")
+    .option(
+      "--routing-mode <mode>",
+      "rules (default, offline rules file), semantic (TypeSafe picks a role; API-billed), quota (legacy TypeSafe quota ranking; API-billed)",
+    )
+    .option(
+      "--parent <descriptor>",
+      "provider:model@effort the parent runs; resolves parent aliases",
+    )
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--read-only", "Run a single-lane role read-only", false)
     .option("--dry-run", "Print the route without launching", false)
     .option("--json", "Emit JSON for plugins", false)
-    .option("--session <id>", "Route the next phase of an earlier router session")
-    .option("--usage", "Also run official CLI/API and browser quota collectors (slower)", false)
-    .option("--no-enrich", "Skip pull request size resolution")
+    .option("--session <id>", "Route the next phase of an earlier router session (quota mode)")
+    .option(
+      "--usage",
+      "Also run official CLI/API and browser quota collectors (slower; quota mode)",
+      false,
+    )
+    .option("--no-enrich", "Skip pull request size resolution (quota mode)")
     .option(
       "--worktree",
-      "Launch in a new Git worktree and branch from the committed HEAD (needs a clean checkout)",
+      "Launch in a new Git worktree and branch from the committed HEAD (quota mode; needs a clean checkout)",
       false,
     )
     .action(
@@ -133,8 +244,55 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           session?: string;
           enrich?: boolean;
           worktree?: boolean;
+          role?: string;
+          routingMode?: string;
+          parent?: string;
+          rules?: string;
+          readOnly?: boolean;
         },
       ) => {
+        const mode = (flags.routingMode ?? "rules") as RoutingModeFlag;
+        if (!ROUTING_MODES.includes(mode)) {
+          stderr.write(`--routing-mode must be one of ${ROUTING_MODES.join(", ")}\n`);
+          program.exitCode = 2;
+          return;
+        }
+        if (mode !== "quota") {
+          const quotaOnly = [
+            flags.session ? "--session" : undefined,
+            flags.worktree ? "--worktree" : undefined,
+            flags.usage ? "--usage" : undefined,
+            flags.enrich === false ? "--no-enrich" : undefined,
+          ].filter(Boolean);
+          if (quotaOnly.length > 0) {
+            stderr.write(`${quotaOnly.join(", ")} need --routing-mode quota\n`);
+            program.exitCode = 2;
+            return;
+          }
+          await guarded(
+            () =>
+              executeRulesRun(
+                task,
+                {
+                  mode,
+                  dryRun: Boolean(flags.dryRun),
+                  ...(flags.role ? { role: flags.role } : {}),
+                  ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+                  ...(flags.readOnly ? { readOnly: true } : {}),
+                },
+                createRulesRunDeps(env, cwd, flags.rules, options.rulesOverrides),
+              ),
+            flags.json,
+          );
+          return;
+        }
+        if (flags.role || flags.parent !== undefined || flags.rules || flags.readOnly) {
+          stderr.write(
+            "--role, --parent, --rules and --read-only apply to rules and semantic modes\n",
+          );
+          program.exitCode = 2;
+          return;
+        }
         try {
           const result = await (options.run ?? executeRun)(
             task,
@@ -255,6 +413,93 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           program.exitCode = 1;
         }
       },
+    );
+  const task = program
+    .command("task")
+    .description("Inspect and close rules-mode tasks; revise a writer in its own pane");
+  const withStore =
+    (
+      action: (deps: ReturnType<typeof openDispatchDeps>) => CommandResult | Promise<CommandResult>,
+    ) =>
+    async () => {
+      const deps = openDispatchDeps(env, options.rulesOverrides);
+      try {
+        return await action(deps);
+      } finally {
+        deps.close();
+      }
+    };
+  task
+    .command("status")
+    .argument("[id]", "Task id (omit to list recent tasks)")
+    .option("--limit <n>", "How many tasks the list shows", "20")
+    .option("--json", "Emit JSON", false)
+    .action((id: string | undefined, flags: { limit: string; json?: boolean }) =>
+      guarded(
+        withStore((deps) =>
+          executeTaskStatus(deps.store, id, Math.max(1, Number.parseInt(flags.limit, 10) || 20)),
+        ),
+        flags.json,
+      ),
+    );
+  task
+    .command("revise")
+    .argument("<id>", "Writer task id")
+    .argument("<text>", "Revision to send to the task's original agent and pane")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, text: string, flags: { json?: boolean }) =>
+      guarded(
+        withStore((deps) => executeTaskRevise(deps, id, text)),
+        flags.json,
+      ),
+    );
+  task
+    .command("complete")
+    .argument("<id>", "Task id")
+    .requiredOption("--evidence <text>", "What shows the work is finished")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { evidence: string; json?: boolean }) =>
+      guarded(
+        withStore((deps) =>
+          executeTaskClose(deps.store, id, { status: "complete", evidence: flags.evidence }),
+        ),
+        flags.json,
+      ),
+    );
+  task
+    .command("release")
+    .argument("<id>", "Task id")
+    .option("--stopped", "Confirm the writer has stopped", false)
+    .requiredOption("--evidence <text>", "What shows the writer stopped")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { stopped?: boolean; evidence: string; json?: boolean }) =>
+      guarded(
+        withStore((deps) =>
+          executeTaskClose(deps.store, id, {
+            status: "released",
+            evidence: flags.evidence,
+            stopped: Boolean(flags.stopped),
+          }),
+        ),
+        flags.json,
+      ),
+    );
+  task
+    .command("recover")
+    .argument("<attempt>", "Attempt id left sending or unknown")
+    .option("--delivered", "The pane shows the prompt arrived", false)
+    .option("--not-delivered", "The pane shows the prompt never arrived", false)
+    .requiredOption("--evidence <text>", "What you saw in the pane")
+    .option("--json", "Emit JSON", false)
+    .action(
+      (
+        attempt: string,
+        flags: { delivered?: boolean; notDelivered?: boolean; evidence: string; json?: boolean },
+      ) =>
+        guarded(
+          withStore((deps) => executeTaskRecover(deps.store, attempt, flags)),
+          flags.json,
+        ),
     );
   program
     .command("status")
@@ -380,6 +625,8 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
 
 export async function runCli(argv: string[], options: CliOptions = {}): Promise<number> {
   const program = createProgram(options);
+  // `hmr` is the same CLI under a shorter, non-conflicting name.
+  if (argv[1] && path.basename(argv[1]).replace(/\.js$/, "") === "hmr") program.name("hmr");
   try {
     await program.parseAsync(argv);
   } catch (error) {

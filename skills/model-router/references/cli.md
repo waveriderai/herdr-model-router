@@ -1,8 +1,16 @@
 # CLI reference
 
-Commands:
+Commands (rules mode, the default; reads only the rules file and `.model-router/policy.json` until a real launch):
 
-- `router run "<task>" [--dry-run] [--usage] [--session <id>] [--worktree] [--json]` (default reads local-session quota caches; `--usage` also runs official CLI/API and browser collectors. Personal accounts stay eligible without known quota; shared accounts still need known usage. `--worktree` launches in a new Git worktree and branch from a clean checkout's `HEAD`; only use it when the user asks for isolation.)
+- `router roles [--rules <path>] [--json]` (also `list`)
+- `router plan --role <role> [--parent provider:model@effort] [--rules <path>] [--read-only] [--json]` (also `preview`)
+- `router run "<task>" --role <role> [--parent ...] [--rules <path>] [--read-only] [--dry-run] [--json]`
+- `router run "<task>" --routing-mode semantic [--dry-run]` (TypeSafe picks a role from the rules file; API-billed; an explicit `--role` skips it)
+- `router task status [id]`, `router task revise <id> "<text>"`, `router task complete <id> --evidence "..."`, `router task release <id> --stopped --evidence "..."`, `router task recover <attempt> --delivered|--not-delivered --evidence "..."`
+
+Quota mode (opt-in with `--routing-mode quota`):
+
+- `router run --routing-mode quota "<task>" [--dry-run] [--usage] [--session <id>] [--worktree] [--json]` (default reads local-session quota caches; `--usage` also runs official CLI/API and browser collectors. Personal accounts stay eligible without known quota; shared accounts still need known usage. `--worktree` launches in a new Git worktree and branch from a clean checkout's `HEAD`; only use it when the user asks for isolation.)
 - `router status [--usage]` (`--usage` shows each account's quota via the full collector chain; without it, accounts only)
 - `router session [id] [--list] [--limit <n>] [--json]` (latest launched session by default; dry runs are not recorded)
 - `router accounts`
@@ -12,4 +20,4 @@ JSON output is for plugins. Human output is the decision card.
 
 Cursor launch mapping verified in this repo: `agent --model cursor-grok-4.6-medium`.
 
-`router run --session <id>` classifies the next task's phase, then reuses the previous eligible route in the same phase (same model and effort) instead of re-ranking. A phase change or an ineligible previous route re-ranks. The card reports reuse, phase change, or ineligibility. Launched agents receive `Router session: <id>` and instructions to route the next phase after asking the user. Continuing an isolated (`--worktree`) session reuses its recorded worktree; if that worktree is missing or no longer matches, the command fails instead of launching in the current directory. Report the error to the user; do not retry elsewhere.
+`router run --routing-mode quota --session <id>` classifies the next task's phase, then reuses the previous eligible route in the same phase (same model and effort) instead of re-ranking. A phase change or an ineligible previous route re-ranks. The card reports reuse, phase change, or ineligibility. Launched agents receive `Router session: <id>` and instructions to route the next phase after asking the user. Continuing an isolated (`--worktree`) session reuses its recorded worktree; if that worktree is missing or no longer matches, the command fails instead of launching in the current directory. Report the error to the user; do not retry elsewhere.

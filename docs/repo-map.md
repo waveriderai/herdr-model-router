@@ -1,19 +1,27 @@
-# Repo Map: agent-router
+# Repo Map: herdr-model-router
 
-npm workspaces monorepo (TypeScript, Node 20+, vitest). ~7.3k LOC in `packages/router/src`.
+npm workspaces monorepo (TypeScript, Node 22.12+, vitest). ~7.3k LOC in `packages/router/src`.
 
 ## Packages
 
 | Path                        | Role                                                                                                              |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `packages/router`           | Core CLI `router`: picks agent + model + effort, launches it in a Herdr pane                                      |
+| `packages/router`           | Core CLI `router` / `hmr`: rules mode (`src/rules/`) and upstream quota mode; launches lanes in Herdr panes       |
 | `packages/coordinator`      | Cloudflare Worker (`wrangler.toml`, D1 `migrations/0001_leases.sql`): shared-account lease coordination with auth |
 | `packages/hermes-heartbeat` | Client lib: request wrapper + fingerprinting, heartbeats to coordinator                                           |
 | `skills/model-router`       | Agent skill wrapping the CLI (SKILL.md, CLI reference, prompt tests)                                              |
 | `herdr-plugin/`             | Shell glue for Herdr: route, resume, sessions, status, usage-refresh                                              |
 | `docs/`                     | configuration, operations, privacy, provider-support, validation checklists, superpowers specs/plans              |
 
-## `router run` flow
+## Rules mode (`router run --role`, `roles`, `plan`, `task`)
+
+`commands/rules-commands.ts` → `rules/rules-source.ts` (find the rules file) →
+`rules/mdc-parser.ts` → `rules/policy.ts` → `rules/plan.ts` (pure) → `rules/native-argv.ts`.
+A real launch continues in `commands/rules-run.ts` → `rules/dispatch.ts` (capability probe,
+lanes, attempts) → `store/dispatch-repository.ts` (tasks, lanes, attempts, writer ownership).
+`semantic/role-classifier.ts` is the opt-in TypeSafe role picker.
+
+## `router run --routing-mode quota` flow
 
 ```mermaid
 flowchart LR

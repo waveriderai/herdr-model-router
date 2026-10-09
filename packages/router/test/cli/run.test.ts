@@ -495,18 +495,21 @@ describe("router run", () => {
     }));
     const home = mkdtempSync(path.join(os.tmpdir(), "router-no-usage-"));
     const silent = { write: () => true };
-    await runCli(["node", "router", "run", "task", "--dry-run"], {
+    await runCli(["node", "router", "run", "--routing-mode", "quota", "task", "--dry-run"], {
       stdout: silent,
       stderr: silent,
       env: { MODEL_ROUTER_HOME: home },
       createRunDeps,
     });
-    await runCli(["node", "router", "run", "task", "--dry-run", "--usage"], {
-      stdout: silent,
-      stderr: silent,
-      env: { MODEL_ROUTER_HOME: home },
-      createRunDeps,
-    });
+    await runCli(
+      ["node", "router", "run", "--routing-mode", "quota", "task", "--dry-run", "--usage"],
+      {
+        stdout: silent,
+        stderr: silent,
+        env: { MODEL_ROUTER_HOME: home },
+        createRunDeps,
+      },
+    );
     expect(createRunDeps.mock.calls[0][1]).toMatchObject({ usageMode: "local" });
     expect(createRunDeps.mock.calls[1][1]).toMatchObject({ usageMode: "full" });
   });

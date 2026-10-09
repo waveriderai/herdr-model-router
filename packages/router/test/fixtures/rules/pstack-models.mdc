@@ -1,0 +1,18 @@
+---
+description: Synthetic per-role model choices for tests
+alwaysApply: true
+---
+# One line per role. Comma-separated names on the left share one lane list.
+# `parent`, `auto` and `inherit-parent` run on the parent descriptor passed with --parent.
+
+feature, refactoring: codex:gpt-6.1-sol@high
+bug-fix:   claude:claude-opus-5-5@xhigh   # trailing comment
+legacy writer: grok-4.7-xhigh-fast
+explorer: grok:grok-4.7@medium
+
+judgment and prose: inherit-parent
+hardest tasks: auto
+synthesizer: parent
+reviewers: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@xhigh, claude:claude-opus-5-5@high
+arena runners: inherit-parent, inherit-parent, grok-4.7-xhigh-fast
+cursor reader: cursor:composer-2

@@ -1,0 +1,7 @@
+──────────────
+❯
+──────────────
+  ⏸ plan
+  mode on
+  (shift+tab
+  to cycle)

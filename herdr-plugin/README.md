@@ -1,18 +1,18 @@
-# Agent Router — Herdr plugin
+# Herdr Model Router — Herdr plugin
 
-Runs [Agent Router](../README.md) from inside Herdr: route a task, check account
+Runs [Herdr Model Router](../README.md) from inside Herdr: route a task to a role, check account
 status and quota, browse router sessions, and resume an earlier session.
 
 ## Install
 
 ```bash
-herdr plugin install nidhi-singh02/agent-router
+herdr plugin install waveriderai/herdr-model-router
 ```
 
-The manifest lives at the repository root, so the plugin id is
-`nidhi-singh02.agent-router` and no subdirectory is needed.
+The manifest lives at the repository root, so no subdirectory is needed. The plugin id is
+the `id` field of `herdr-plugin.toml`; the commands below use it.
 
-Install runs `npm ci` and builds the router workspace, which needs **Node.js 20+**
+Install runs `npm ci` and builds the router workspace, which needs **Node.js 22.12+**
 and a C/C++ toolchain (`better-sqlite3` compiles natively). If you already have
 `router` on your `PATH`, the plugin uses that binary instead of the checkout's
 build.
@@ -21,34 +21,34 @@ Local development:
 
 ```bash
 npm ci && npm run build          # plugin link does not run build commands
-herdr plugin link /path/to/model-router
-herdr plugin action list --plugin nidhi-singh02.agent-router
+herdr plugin link /path/to/herdr-model-router
+herdr plugin action list --plugin waveriderai.herdr-model-router
 ```
 
 ## Configure
 
-The plugin does not own configuration. Agent Router reads its own config and
-credentials as documented in the [main README](../README.md): a `TYPESAFE_API_KEY`
-and at least one agent CLI you are logged in to.
+The plugin does not own configuration. The router reads your `pstack-models.mdc` rules and
+project policy as documented in the [main README](../README.md), and each lane uses the agent
+CLI you are logged in to. `resume-latest` uses quota mode, which also needs a TypeSafe key.
 
 ## Actions
 
-| Action          | What it does                                                       |
-| --------------- | ------------------------------------------------------------------ |
-| `route`         | Prompt for a task, route it, launch the chosen agent in a new pane |
-| `status`        | Show configured accounts, optionally with live quota               |
-| `sessions`      | List recent router sessions and open one in detail                 |
-| `resume-latest` | Route the next phase of an earlier session                         |
-| `usage-refresh` | Refresh local-session quota snapshots (headless)                   |
+| Action          | What it does                                                |
+| --------------- | ----------------------------------------------------------- |
+| `route`         | Prompt for a role and a task, launch every lane of the role |
+| `status`        | Show configured accounts, optionally with live quota        |
+| `sessions`      | List recent router sessions and open one in detail          |
+| `resume-latest` | Route the next phase of an earlier quota-mode session       |
+| `usage-refresh` | Refresh local-session quota snapshots (headless)            |
 
-`max` and `ultra` reasoning are unlocked only by the word "ultra" in the task you give
-`route`. A next-phase task typed into `resume-latest` inherits that choice but cannot
-unlock it.
+`route` uses the efforts your rules name. In quota mode (`resume-latest`), `max` and `ultra`
+reasoning are unlocked only by the word "ultra" in the task that started the session; a
+next-phase task inherits that choice but cannot unlock it.
 
 Invoke one directly:
 
 ```bash
-herdr plugin action invoke route --plugin nidhi-singh02.agent-router
+herdr plugin action invoke route --plugin waveriderai.herdr-model-router
 ```
 
 ## Keybindings
@@ -59,13 +59,13 @@ Add to `~/.config/herdr/config.toml`:
 [[keys.command]]
 key = "prefix+r"
 type = "plugin_action"
-command = "nidhi-singh02.agent-router.route"
+command = "waveriderai.herdr-model-router.route"
 description = "route a task"
 
 [[keys.command]]
 key = "prefix+R"
 type = "plugin_action"
-command = "nidhi-singh02.agent-router.status"
+command = "waveriderai.herdr-model-router.status"
 description = "router status"
 ```
 

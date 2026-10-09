@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Shared helpers for the Agent Router Herdr plugin.
+# Shared helpers for the Herdr Model Router Herdr plugin.
 
 set -euo pipefail
 
 PLUGIN_ROOT="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-PLUGIN_ID="${HERDR_PLUGIN_ID:-nidhi-singh02.agent-router}"
+PLUGIN_ID="${HERDR_PLUGIN_ID:-waveriderai.herdr-model-router}"
 HERDR="${HERDR_BIN_PATH:-herdr}"
 
 # Resolve the router CLI: an explicit override, a global install, or the build

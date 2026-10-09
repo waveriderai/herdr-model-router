@@ -1,16 +1,16 @@
-# Herdr plugin manifest for Agent Router.
+# Herdr plugin manifest for Herdr Model Router.
 #
-# Install:  herdr plugin install nidhi-singh02/agent-router
-# Develop:  herdr plugin link /path/to/model-router
+# Install:  herdr plugin install waveriderai/herdr-model-router
+# Develop:  herdr plugin link /path/to/herdr-model-router
 
-id = "nidhi-singh02.agent-router"
-name = "Agent Router"
+id = "waveriderai.herdr-model-router"
+name = "Herdr Model Router"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Quota-aware routing that picks an agent, model, and effort, then launches it in a Herdr pane"
+description = "Route a task to the models your role rules name and launch them in Herdr panes"
 platforms = ["linux", "macos"]
 
-# Requires Node.js 20+ and a C/C++ toolchain (better-sqlite3 builds natively).
+# Requires Node.js 22.12+ and a C/C++ toolchain (better-sqlite3 builds natively).
 [[build]]
 command = ["npm", "ci"]
 
@@ -50,7 +50,7 @@ command = ["bash", "herdr-plugin/sessions.sh"]
 [[actions]]
 id = "route"
 title = "Router: route a task"
-description = "Prompt for a task, then route and launch an agent in a new pane"
+description = "Prompt for a role and a task, then launch every lane of the role"
 contexts = ["global"]
 command = ["bash", "herdr-plugin/open-pane.sh", "route"]
 
@@ -71,7 +71,7 @@ command = ["bash", "herdr-plugin/open-pane.sh", "sessions"]
 [[actions]]
 id = "resume-latest"
 title = "Router: resume latest session"
-description = "Route the next phase of the most recent router session"
+description = "Route the next phase of the most recent quota-mode session"
 contexts = ["global"]
 command = ["bash", "herdr-plugin/open-pane.sh", "resume"]
 

@@ -822,21 +822,37 @@ describe("router run --worktree from the CLI", () => {
     const silent = { write: () => true };
     const runDeps = { accounts: [], models: [], usage: {}, client: fakeTypeSafe({}), env: {} };
     const home = tempDir();
-    await runCli(["node", "router", "run", "Do it", "--worktree", "--dry-run"], {
-      stdout: silent,
-      stderr: silent,
-      env: { MODEL_ROUTER_HOME: home },
-      run: runSpy,
-      runDeps,
-    });
-    await runCli(["node", "router", "run", "Next", "--session", "sess_x", "--worktree"], {
-      stdout: silent,
-      stderr: silent,
-      env: { MODEL_ROUTER_HOME: home },
-      run: runSpy,
-      runDeps,
-    });
-    await runCli(["node", "router", "run", "Plain"], {
+    await runCli(
+      ["node", "router", "run", "--routing-mode", "quota", "Do it", "--worktree", "--dry-run"],
+      {
+        stdout: silent,
+        stderr: silent,
+        env: { MODEL_ROUTER_HOME: home },
+        run: runSpy,
+        runDeps,
+      },
+    );
+    await runCli(
+      [
+        "node",
+        "router",
+        "run",
+        "--routing-mode",
+        "quota",
+        "Next",
+        "--session",
+        "sess_x",
+        "--worktree",
+      ],
+      {
+        stdout: silent,
+        stderr: silent,
+        env: { MODEL_ROUTER_HOME: home },
+        run: runSpy,
+        runDeps,
+      },
+    );
+    await runCli(["node", "router", "run", "--routing-mode", "quota", "Plain"], {
       stdout: silent,
       stderr: silent,
       env: { MODEL_ROUTER_HOME: home },
@@ -856,17 +872,20 @@ describe("router run --worktree from the CLI", () => {
   it("creates the worktree end to end through runCli", async () => {
     const ctx = setup();
     let out = "";
-    const code = await runCli(["node", "router", "run", "Implement it", "--worktree", "--json"], {
-      stdout: {
-        write(chunk: string) {
-          out += chunk;
-          return true;
+    const code = await runCli(
+      ["node", "router", "run", "--routing-mode", "quota", "Implement it", "--worktree", "--json"],
+      {
+        stdout: {
+          write(chunk: string) {
+            out += chunk;
+            return true;
+          },
         },
+        stderr: { write: () => true },
+        env: { MODEL_ROUTER_HOME: ctx.home },
+        runDeps: ctx.deps,
       },
-      stderr: { write: () => true },
-      env: { MODEL_ROUTER_HOME: ctx.home },
-      runDeps: ctx.deps,
-    });
+    );
     expect(code).toBe(0);
     const json = JSON.parse(out) as RunJson;
     expect(json.workspace?.created).toBe(true);

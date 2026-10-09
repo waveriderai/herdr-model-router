@@ -25,7 +25,25 @@ describe("model-router skill", () => {
     expect(skill).toMatch(/Router session:/);
     expect(skill).toMatch(/## End of a phase/);
     expect(skill).toMatch(/router session <id>/);
-    expect(skill).toMatch(/router run --session <id> "<next-phase task>" --dry-run/);
+    expect(skill).toMatch(
+      /router run --routing-mode quota --session <id> "<next-phase task>" --dry-run/,
+    );
+  });
+
+  it("routes rules mode by explicit role and never resends an unknown prompt", () => {
+    const skill = readFileSync(path.join(skillDir, "SKILL.md"), "utf8");
+    expect(skill).toMatch(/router run "<task>" --role <role> --dry-run/);
+    expect(skill).toMatch(/never guess one/);
+    expect(skill).toMatch(/do not resend/);
+    const prompts = readFileSync(path.join(skillDir, "test/prompts.md"), "utf8");
+    const resume = prompts.slice(
+      prompts.indexOf("## Resume"),
+      prompts.indexOf("## Phase complete"),
+    );
+    expect(resume).toMatch(/router task status <id>/);
+    expect(resume).toMatch(/router task revise <id>/);
+    expect(resume).toMatch(/never start a new `router run` for an ongoing writer/);
+    expect(resume).toMatch(/router task recover <attempt>/);
     expect(skill).toMatch(/ask whether to route the next phase/i);
     expect(skill).toMatch(/Do not route again for the phase you are still in/);
   });

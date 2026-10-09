@@ -35,6 +35,8 @@ function herdr(input: {
       call.until?.includes("working") ? (input.confirm ?? OK) : (input.waitFor ?? OK),
     ),
     closePane: vi.fn(async () => OK),
+    runInPane: vi.fn(async () => OK),
+    renameAgent: vi.fn(async () => OK),
   } satisfies HerdrClient;
 }
 

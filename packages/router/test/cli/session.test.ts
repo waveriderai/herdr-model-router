@@ -276,19 +276,32 @@ describe("phase handoffs between router sessions", () => {
   it("passes --session from the CLI to the run", async () => {
     const run = vi.fn(async () => ({ output: "ok", json: {}, code: 0 }));
     const silent = { write: () => true };
-    await runCli(["node", "router", "run", "Implement it", "--session", "sess_prev", "--dry-run"], {
-      stdout: silent,
-      stderr: silent,
-      env: { MODEL_ROUTER_HOME: tempHome() },
-      run,
-      runDeps: {
-        accounts: [],
-        models: [],
-        usage: {},
-        client: fakeTypeSafe({}),
-        env: {},
+    await runCli(
+      [
+        "node",
+        "router",
+        "run",
+        "--routing-mode",
+        "quota",
+        "Implement it",
+        "--session",
+        "sess_prev",
+        "--dry-run",
+      ],
+      {
+        stdout: silent,
+        stderr: silent,
+        env: { MODEL_ROUTER_HOME: tempHome() },
+        run,
+        runDeps: {
+          accounts: [],
+          models: [],
+          usage: {},
+          client: fakeTypeSafe({}),
+          env: {},
+        },
       },
-    });
+    );
     expect(run).toHaveBeenCalledWith(
       "Implement it",
       { dryRun: true, previousSessionId: "sess_prev", noEnrich: false },
