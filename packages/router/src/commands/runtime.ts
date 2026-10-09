@@ -1,3 +1,4 @@
+import type Database from "better-sqlite3";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { loadModelCatalog } from "../catalog/model-catalog.js";
@@ -22,6 +23,13 @@ import { accountFingerprint } from "@agent-router/hermes-heartbeat";
 import { createBrowserDashboardCollector } from "../collectors/browser/dashboard-collector.js";
 import { runCommand } from "../collectors/command-runner.js";
 import { openDatabase } from "../store/database.js";
+import { WorkflowRepository, WriterAuthorityError } from "../store/workflow-repository.js";
+import {
+  DispatchRepository,
+  OwnershipConflictError,
+  UnresolvedAttemptError,
+} from "../store/dispatch-repository.js";
+import { worktreeIdentity } from "../rules/rules-source.js";
 import { SessionRepository } from "../store/session-repository.js";
 import { UsageRepository } from "../store/usage-repository.js";
 import { ReservationRepository } from "../store/reservation-repository.js";
@@ -155,6 +163,123 @@ function defaultActivityClient(
   };
 }
 
+/**
+ * Quota mode's writer authority over the router database: an early refusal for a launch
+ * directory, and the atomic acquisition that holds the worktree for the writer's lifetime.
+ * Both follow the same binding, open-workflow, and ownership rules as rules-mode writers and
+ * workflows, through the same writer-task ownership row.
+ */
+export function createWriterGates(
+  db: Database.Database,
+  herdrPane: Pick<HerdrPaneClient, "getAgent"> | undefined,
+): Pick<RunDeps, "writerGate" | "writerAuthority"> {
+  const workflows = new WorkflowRepository(db);
+  const store = new DispatchRepository(db);
+  const worktreeOf = (cwd: string) => {
+    try {
+      return worktreeIdentity(cwd);
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    writerGate: (cwd, continuing) => {
+      const worktreeId = worktreeOf(cwd);
+      return worktreeId
+        ? workflows.legacyWriterRefusal(worktreeId, continuing)?.message
+        : undefined;
+    },
+    writerAuthority: {
+      worktreeOf,
+      async acquire({ target, continuing, role, descriptor }) {
+        let cwd: string;
+        if ("paneId" in target) {
+          // The caller's directory says nothing about where a continued pane writes.
+          const owned = workflows.writerPaneRefusal(target.paneId, continuing);
+          if (owned) return { ok: false, error: owned.message };
+          const live = await herdrPane?.getAgent(target.paneId).catch(() => undefined);
+          if (!live?.cwd) {
+            return {
+              ok: false,
+              error: `Cannot read the working directory of pane ${target.paneId}, so its worktree's writer authority is unknown; nothing was sent.`,
+            };
+          }
+          cwd = live.cwd;
+        } else {
+          cwd = target.cwd;
+        }
+        const worktreeId = worktreeOf(cwd);
+        if (!worktreeId) {
+          return { ok: false, error: `Directory ${cwd} cannot be resolved; nothing was sent.` };
+        }
+        if (continuing && store.ownershipOfTask(continuing)?.worktreeId === worktreeId) {
+          const lane = store.lanes(continuing)[0];
+          if (lane)
+            return { ok: true, taskId: continuing, laneId: lane.id, worktreeId, continued: true };
+        }
+        try {
+          const { task, lanes } = store.createTask({
+            role,
+            kind: "single",
+            access: "write",
+            worktreeId,
+            cwd,
+            rulesPath: "quota-mode",
+            lanes: [
+              {
+                index: 1,
+                descriptor: `quota:${descriptor.provider}/${descriptor.model}@${descriptor.effort}`,
+                provider: descriptor.provider,
+                model: descriptor.model,
+                effort: descriptor.effort,
+                argv: [],
+              },
+            ],
+          });
+          return { ok: true, taskId: task.id, laneId: lanes[0]!.id, worktreeId, continued: false };
+        } catch (error) {
+          if (error instanceof WriterAuthorityError || error instanceof OwnershipConflictError) {
+            return { ok: false, error: error.message };
+          }
+          throw error;
+        }
+      },
+      recordHandoff(taskId, laneId, handoff) {
+        store.updateLane(laneId, {
+          ...(handoff.paneId ? { paneId: handoff.paneId } : {}),
+          ...(handoff.agentName ? { agentName: handoff.agentName } : {}),
+          state: handoff.outcome === "not-sent" ? "failed" : "prompted",
+          ...(handoff.outcome === "sent" ? {} : { error: handoff.evidence }),
+        });
+        if (handoff.outcome !== "not-sent") {
+          // The handoff itself, as an attempt: `task status` shows it and `task recover`
+          // records what the pane shows. An unknown attempt also keeps `task complete` closed.
+          try {
+            const attempt = store.beginAttempt({
+              laneId,
+              purpose: "initial",
+              promptSha256: handoff.promptSha256,
+            });
+            store.finishAttempt(
+              attempt.id,
+              handoff.outcome === "sent" ? "sent" : "unknown",
+              handoff.evidence,
+            );
+          } catch (error) {
+            // An earlier handoff of this chain is still unresolved: its evidence stays on
+            // record, this one on the lane; the worktree stays held either way.
+            if (!(error instanceof UnresolvedAttemptError)) throw error;
+          }
+        }
+        store.finishDispatch(taskId, handoff.outcome === "sent" ? "dispatched" : "failed");
+      },
+      rollback(taskId, evidence) {
+        store.releaseUnsent(taskId, evidence);
+      },
+    },
+  };
+}
+
 export async function createDefaultRunDeps(
   env: NodeJS.Dict<string>,
   overrides: RuntimeOverrides = {},
@@ -239,6 +364,7 @@ export async function createDefaultRunDeps(
     runCommand: overrides.runCommand,
     enrichmentEnabled: config.enrichment?.enabled ?? true,
     cwd: process.cwd(),
+    ...createWriterGates(db, herdrPane),
     // Router state, not the user's checkout, so a worktree is never nested inside the repo.
     worktreeRoot: path.join(config.home, "worktrees"),
   };

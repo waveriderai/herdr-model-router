@@ -156,6 +156,37 @@ A pane going idle is not completion. A task ends only with `task complete --evid
 writer that stopped, `task release --stopped --evidence`. When an attempt is `unknown`, inspect
 the pane and record it with `task recover <attempt> --delivered|--not-delivered --evidence`.
 
+## Coordinator workflow
+
+For work split between one writer and independent reviewers, a coordinator (you, or an agent
+running the `model-router` skill) drives `hmr workflow`:
+
+```sh
+hmr workflow plan --brief brief.json          # preview; reads files only
+hmr workflow start --brief brief.json         # one writer, one prompt
+hmr workflow result <id> --attempt <a> --file result.json
+hmr workflow verify <id> --attempt <a>        # read-only verifier lanes, writer stopped
+hmr workflow result <id> --attempt <a> --lane <lane> --file lane.json
+hmr workflow revise <id> --attempt <a> --file changes.txt   # same writer session
+hmr workflow accept <id> --attempt <a> --evidence "..."
+hmr workflow delivery <id> --evidence "PR #12, CI green"    # or --not-applicable
+hmr workflow release <id> --evidence "..."
+```
+
+Briefs and results are versioned JSON (`hmr.brief/v1`, `hmr.result/v1`; see
+[examples/workflow](examples/workflow)). A result names its workflow, attempt, and the exact
+worktree revision (HEAD plus a fingerprint of every tracked and non-ignored untracked file); a
+the router refuses a stale attempt or a changed worktree. Verification, acceptance, and release need the
+writer's exact session in its pane, positively idle or done. Acceptance needs every verifier
+lane to pass. The router releases nothing before the coordinator records delivery. See
+[Coordinator workflow](docs/rules.md#coordinator-workflow).
+
+Each worktree has one writer authority, either the router's own lease (`standalone`, the default) or
+the optional private `agent-collab` CLI (`hmr workflow bind --backend agent-collab`). Every HMR
+writer entrance follows that binding. A process that writes to the worktree without going
+through HMR or the bound authority is outside what HMR can control. Quota-mode `run` takes the same
+authority and holds it until its writer task is closed with `task complete`.
+
 ## Provider status
 
 Live checks for this release, each through the router in a real Herdr pane in a fresh

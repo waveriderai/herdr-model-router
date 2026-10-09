@@ -19,6 +19,11 @@ npm workspaces monorepo (TypeScript, Node 22.12+, vitest). ~7.3k LOC in `package
 `rules/mdc-parser.ts` → `rules/policy.ts` → `rules/plan.ts` (pure) → `rules/native-argv.ts`.
 A real launch continues in `commands/rules-run.ts` → `rules/dispatch.ts` (capability probe,
 lanes, attempts) → `store/dispatch-repository.ts` (tasks, lanes, attempts, writer ownership).
+Coordinator workflows: `commands/workflow-commands.ts` → `workflow/service.ts` (state gates for
+both backends) → `workflow/contracts.ts` (brief/result schemas), `workflow/revision.ts` (Git
+fingerprint), `workflow/identity.ts` (bound session checks), `workflow/artifacts.ts` (private
+files), `workflow/agent-collab.ts` (optional CLI adapter), `store/workflow-repository.ts`
+(bindings, workflows, attempts, verifications, intents).
 `semantic/role-classifier.ts` is the opt-in TypeSafe role picker.
 
 ## `router run --routing-mode quota` flow

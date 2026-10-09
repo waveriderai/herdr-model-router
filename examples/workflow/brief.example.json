@@ -1,0 +1,13 @@
+{
+  "version": "hmr.brief/v1",
+  "title": "Fix the off-by-one in the date parser",
+  "goal": "parseRange() drops the last day of a range. Fix it and add a regression test.",
+  "scope": {
+    "allowed": ["src/date/parse-range.ts", "test/date/parse-range.test.ts"],
+    "excluded": ["src/date/legacy"]
+  },
+  "writerRole": "bug-fix",
+  "verifierRoles": ["reviewers"],
+  "acceptance": ["parseRange includes the end date", "npm test passes"],
+  "constraints": ["Do not change the public API of src/date"]
+}

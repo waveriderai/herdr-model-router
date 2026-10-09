@@ -41,8 +41,26 @@ import { executeRulesRun } from "./commands/rules-run.js";
 import {
   createRulesRunDeps,
   openDispatchDeps,
+  homeRefusal,
+  openWorkflowDeps,
   type RulesRuntimeOverrides,
 } from "./commands/rules-runtime.js";
+import {
+  executeWorkflowAccept,
+  executeWorkflowBind,
+  executeWorkflowDelivery,
+  executeWorkflowFingerprint,
+  executeWorkflowPlan,
+  executeWorkflowRecover,
+  executeWorkflowRelease,
+  executeWorkflowResult,
+  executeWorkflowRevise,
+  executeWorkflowStart,
+  executeWorkflowStatus,
+  executeWorkflowVerify,
+} from "./commands/workflow-commands.js";
+import { createGitRead } from "./workflow/revision.js";
+import { isHerdrEnv } from "./launch/readiness.js";
 import {
   executeTaskClose,
   executeTaskRecover,
@@ -293,6 +311,13 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           program.exitCode = 2;
           return;
         }
+        // A real quota launch writes ownership state: never inside the checkout it writes in.
+        const inside = flags.dryRun ? undefined : homeRefusal(env, cwd);
+        if (inside) {
+          stderr.write(`${inside}\n`);
+          program.exitCode = 2;
+          return;
+        }
         try {
           const result = await (options.run ?? executeRun)(
             task,
@@ -421,7 +446,15 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     (
       action: (deps: ReturnType<typeof openDispatchDeps>) => CommandResult | Promise<CommandResult>,
     ) =>
-    async () => {
+    async (): Promise<CommandResult> => {
+      const inside = homeRefusal(env, cwd);
+      if (inside) {
+        return {
+          output: inside,
+          json: { ok: false, code: "private-home", error: inside },
+          code: 2,
+        };
+      }
       const deps = openDispatchDeps(env, options.rulesOverrides);
       try {
         return await action(deps);
@@ -449,7 +482,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .option("--json", "Emit JSON", false)
     .action((id: string, text: string, flags: { json?: boolean }) =>
       guarded(
-        withStore((deps) => executeTaskRevise(deps, id, text)),
+        withStore((deps) => executeTaskRevise(deps, id, text, deps.workflows)),
         flags.json,
       ),
     );
@@ -461,7 +494,12 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .action((id: string, flags: { evidence: string; json?: boolean }) =>
       guarded(
         withStore((deps) =>
-          executeTaskClose(deps.store, id, { status: "complete", evidence: flags.evidence }),
+          executeTaskClose(
+            deps.store,
+            id,
+            { status: "complete", evidence: flags.evidence },
+            deps.workflows,
+          ),
         ),
         flags.json,
       ),
@@ -475,11 +513,12 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .action((id: string, flags: { stopped?: boolean; evidence: string; json?: boolean }) =>
       guarded(
         withStore((deps) =>
-          executeTaskClose(deps.store, id, {
-            status: "released",
-            evidence: flags.evidence,
-            stopped: Boolean(flags.stopped),
-          }),
+          executeTaskClose(
+            deps.store,
+            id,
+            { status: "released", evidence: flags.evidence, stopped: Boolean(flags.stopped) },
+            deps.workflows,
+          ),
         ),
         flags.json,
       ),
@@ -497,7 +536,255 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         flags: { delivered?: boolean; notDelivered?: boolean; evidence: string; json?: boolean },
       ) =>
         guarded(
-          withStore((deps) => executeTaskRecover(deps.store, attempt, flags)),
+          withStore((deps) => executeTaskRecover(deps.store, attempt, flags, deps.workflows)),
+          flags.json,
+        ),
+    );
+  const workflow = program
+    .command("workflow")
+    .description(
+      "Coordinator workflow: one writer, read-only verifiers, explicit result, acceptance, delivery and release",
+    );
+  const withWorkflow =
+    (
+      rulesFlag: string | undefined,
+      action: (deps: ReturnType<typeof openWorkflowDeps>) => CommandResult | Promise<CommandResult>,
+    ) =>
+    async (): Promise<CommandResult> => {
+      // Checked before the router database or any artifact is created.
+      const inside = homeRefusal(env, cwd);
+      if (inside) {
+        return {
+          output: inside,
+          json: { ok: false, code: "private-home", error: inside },
+          code: 2,
+        };
+      }
+      const deps = openWorkflowDeps(env, cwd, rulesFlag, options.rulesOverrides);
+      try {
+        return await action(deps);
+      } finally {
+        deps.close();
+      }
+    };
+  const PARENT_HELP =
+    "provider:model@effort the parent runs; resolves parent aliases in every role";
+  workflow
+    .command("plan")
+    .description("Preview a brief's writer and verifier routes; reads files only")
+    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1)")
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--parent <descriptor>", PARENT_HELP)
+    .option("--json", "Emit JSON", false)
+    .action((flags: { brief: string; rules?: string; parent?: string; json?: boolean }) =>
+      guarded(
+        () =>
+          executeWorkflowPlan(
+            { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
+            flags.brief,
+            flags.parent,
+          ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("fingerprint")
+    .description("Print this worktree's revision (HEAD and content fingerprint); reads only")
+    .option("--json", "Emit JSON", false)
+    .action((flags: { json?: boolean }) =>
+      guarded(() => executeWorkflowFingerprint(cwd, createGitRead(env)), flags.json),
+    );
+  workflow
+    .command("bind")
+    .description("Choose this worktree's writer authority for every HMR writer entrance")
+    .requiredOption("--backend <backend>", "standalone or agent-collab")
+    .option("--json", "Emit JSON", false)
+    .action((flags: { backend: string; json?: boolean }) =>
+      guarded(
+        withWorkflow(undefined, (deps) => executeWorkflowBind(deps, cwd, flags.backend)),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("start")
+    .description("Start the brief's writer through the worktree's bound authority (one prompt)")
+    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1)")
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--parent <descriptor>", `${PARENT_HELP}; kept for this workflow's verify`)
+    .option("--json", "Emit JSON", false)
+    .action((flags: { brief: string; rules?: string; parent?: string; json?: boolean }) =>
+      guarded(
+        // Refused before the router database is opened: outside Herdr nothing can start.
+        isHerdrEnv(env)
+          ? withWorkflow(flags.rules, (deps) =>
+              executeWorkflowStart(deps, {
+                cwd,
+                briefFile: flags.brief,
+                env,
+                ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+              }),
+            )
+          : () => ({
+              output:
+                "HERDR_ENV=1 is required to start a workflow; run inside a Herdr pane, or preview with `workflow plan`.",
+              json: { ok: false, error: "HERDR_ENV=1 is required to start a workflow" },
+              code: 2,
+            }),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("status")
+    .argument("[id]", "Workflow id (omit to list recent workflows)")
+    .option("--limit <n>", "How many workflows the list shows", "20")
+    .option("--json", "Emit JSON", false)
+    .action((id: string | undefined, flags: { limit: string; json?: boolean }) =>
+      guarded(
+        withWorkflow(undefined, (deps) =>
+          executeWorkflowStatus(deps, id, Math.max(1, Number.parseInt(flags.limit, 10) || 20)),
+        ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("result")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--attempt <id>", "The current attempt the result answers")
+    .requiredOption("--file <path>", "Result JSON (hmr.result/v1)")
+    .option("--lane <id>", "Verifier lane id, for a verifier's result")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { attempt: string; file: string; lane?: string; json?: boolean }) =>
+      guarded(
+        withWorkflow(undefined, (deps) =>
+          executeWorkflowResult(deps, {
+            workflowId: id,
+            attempt: flags.attempt,
+            file: flags.file,
+            ...(flags.lane ? { lane: flags.lane } : {}),
+          }),
+        ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("verify")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--attempt <id>", "The current attempt to verify")
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { attempt: string; rules?: string; json?: boolean }) =>
+      guarded(
+        withWorkflow(flags.rules, (deps) =>
+          executeWorkflowVerify(deps, { workflowId: id, attempt: flags.attempt }),
+        ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("revise")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--attempt <id>", "The current attempt being revised (or the pending one)")
+    .option("--file <path>", "The requested changes, as text")
+    .option("--resume", "Send a pending revision whose prompt was never submitted", false)
+    .option("--json", "Emit JSON", false)
+    .action(
+      (id: string, flags: { attempt: string; file?: string; resume?: boolean; json?: boolean }) =>
+        guarded(
+          withWorkflow(undefined, (deps) =>
+            executeWorkflowRevise(deps, {
+              workflowId: id,
+              attempt: flags.attempt,
+              ...(flags.file ? { file: flags.file } : {}),
+              ...(flags.resume ? { resume: true } : {}),
+            }),
+          ),
+          flags.json,
+        ),
+    );
+  workflow
+    .command("accept")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--attempt <id>", "The current attempt being accepted")
+    .requiredOption("--evidence <text>", "Why this revision is accepted")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { attempt: string; evidence: string; json?: boolean }) =>
+      guarded(
+        withWorkflow(undefined, (deps) =>
+          executeWorkflowAccept(deps, {
+            workflowId: id,
+            attempt: flags.attempt,
+            evidence: flags.evidence,
+          }),
+        ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("delivery")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--evidence <text>", "The authorized delivery, or why none applies")
+    .option("--not-applicable", "This task has no delivery step", false)
+    .option(
+      "--commit <rev>",
+      "The delivered commit (default HEAD); its own tree must hold exactly the accepted content",
+    )
+    .option("--json", "Emit JSON", false)
+    .action(
+      (
+        id: string,
+        flags: { evidence: string; notApplicable?: boolean; commit?: string; json?: boolean },
+      ) =>
+        guarded(
+          withWorkflow(undefined, (deps) =>
+            executeWorkflowDelivery(deps, {
+              workflowId: id,
+              evidence: flags.evidence,
+              notApplicable: Boolean(flags.notApplicable),
+              ...(flags.commit ? { commit: flags.commit } : {}),
+            }),
+          ),
+          flags.json,
+        ),
+    );
+  workflow
+    .command("release")
+    .argument("<id>", "Workflow id")
+    .requiredOption("--evidence <text>", "Delivery reference, or why the workflow stops")
+    .option("--abort", "Stop a workflow that was not delivered", false)
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { evidence: string; abort?: boolean; json?: boolean }) =>
+      guarded(
+        withWorkflow(undefined, (deps) =>
+          executeWorkflowRelease(deps, {
+            workflowId: id,
+            evidence: flags.evidence,
+            abort: Boolean(flags.abort),
+          }),
+        ),
+        flags.json,
+      ),
+    );
+  workflow
+    .command("recover")
+    .argument("<id>", "Workflow id")
+    .option("--delivered", "Standalone: the pane shows the prompt arrived", false)
+    .option("--not-delivered", "Standalone: the pane shows the prompt never arrived", false)
+    .option("--evidence <text>", "What you saw in the pane")
+    .option("--json", "Emit JSON", false)
+    .action(
+      (
+        id: string,
+        flags: { delivered?: boolean; notDelivered?: boolean; evidence?: string; json?: boolean },
+      ) =>
+        guarded(
+          withWorkflow(undefined, (deps) =>
+            executeWorkflowRecover(deps, {
+              workflowId: id,
+              ...(flags.delivered ? { delivered: true } : {}),
+              ...(flags.notDelivered ? { notDelivered: true } : {}),
+              ...(flags.evidence ? { evidence: flags.evidence } : {}),
+            }),
+          ),
           flags.json,
         ),
     );

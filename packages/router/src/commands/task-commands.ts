@@ -1,5 +1,6 @@
 import { reviseTask, type DispatchDeps } from "../rules/dispatch.js";
 import { UnresolvedAttemptError, type DispatchRepository } from "../store/dispatch-repository.js";
+import type { WorkflowRepository } from "../store/workflow-repository.js";
 import type { CommandResult } from "./rules-commands.js";
 
 const NOT_COMPLETION =
@@ -12,6 +13,24 @@ function fail(error: string, code = 2, extra: Record<string, unknown> = {}): Com
 function requireEvidence(evidence: string | undefined): string | undefined {
   const trimmed = evidence?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * A task that belongs to a workflow (its writer, or a verifier lane) is changed only through
+ * `workflow` commands; otherwise `task complete` could free a worktree mid-review.
+ */
+export function workflowTaskRefusal(
+  workflows: Pick<WorkflowRepository, "forTask"> | undefined,
+  taskId: string,
+): CommandResult | undefined {
+  const owner = workflows?.forTask(taskId);
+  return owner
+    ? fail(
+        `Task ${taskId} belongs to workflow ${owner.id} (${owner.state}); use \`workflow status|recover|release ${owner.id}\` instead.`,
+        2,
+        { code: "workflow-task", workflowId: owner.id },
+      )
+    : undefined;
 }
 
 /** Everything recorded for one task: lanes, attempts, ownership. Read from the store only. */
@@ -65,7 +84,10 @@ export function executeTaskClose(
   store: DispatchRepository,
   id: string,
   input: { status: "complete" | "released"; evidence?: string; stopped?: boolean },
+  workflows?: Pick<WorkflowRepository, "forTask">,
 ): CommandResult {
+  const owned = workflowTaskRefusal(workflows, id);
+  if (owned) return owned;
   const evidence = requireEvidence(input.evidence);
   if (!evidence)
     return fail(
@@ -96,7 +118,12 @@ export function executeTaskRecover(
   store: DispatchRepository,
   attemptId: string,
   input: { delivered?: boolean; notDelivered?: boolean; evidence?: string },
+  workflows?: Pick<WorkflowRepository, "forTask">,
 ): CommandResult {
+  const lane = store.getAttempt(attemptId);
+  const taskId = lane ? store.getLane(lane.laneId)?.taskId : undefined;
+  const owned = taskId ? workflowTaskRefusal(workflows, taskId) : undefined;
+  if (owned) return owned;
   const evidence = requireEvidence(input.evidence);
   if (Boolean(input.delivered) === Boolean(input.notDelivered)) {
     return fail("Pass exactly one of --delivered or --not-delivered.");
@@ -118,7 +145,10 @@ export async function executeTaskRevise(
   deps: DispatchDeps,
   id: string,
   text: string,
+  workflows?: Pick<WorkflowRepository, "forTask">,
 ): Promise<CommandResult> {
+  const owned = workflowTaskRefusal(workflows, id);
+  if (owned) return owned;
   const result = await reviseTask({ taskId: id, text, deps });
   if (!result.ok) return fail(result.error, 2, { code: result.code });
   const { attempt, lane } = result;

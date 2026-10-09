@@ -3,11 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { CommandResult, HerdrClient, HerdrPaneClient } from "../../src/launch/herdr-client.js";
-import { dispatchPlan, reviseTask, type DispatchDeps } from "../../src/rules/dispatch.js";
+import { dispatchPlan, reviseTask } from "../../src/rules/dispatch.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
 import { planRoute, type RoutePlan } from "../../src/rules/plan.js";
-import { launchFilesIn, openDispatchDeps } from "../../src/commands/rules-runtime.js";
+import { openDispatchDeps } from "../../src/commands/rules-runtime.js";
+import {
+  deps,
+  failed,
+  fakeHerdr,
+  KIND_BY_EXECUTABLE,
+  ok,
+  READY_SCREEN,
+  screen,
+} from "../helpers/fake-herdr.js";
 import {
   executeTaskClose,
   executeTaskRecover,
@@ -34,186 +42,6 @@ function plan(role: string, extra: Partial<Parameters<typeof planRoute>[0]> = {}
   });
   if (!result.ok) throw new Error(result.error);
   return result;
-}
-
-const ok = (stdout = ""): CommandResult => ({ ok: true, code: 0, stdout, stderr: "" });
-const failed = (stdout: string, stderr = ""): CommandResult => ({
-  ok: false,
-  code: 1,
-  stdout,
-  stderr,
-});
-
-const HELP: Record<string, string> = {
-  claude: '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "plan")',
-  codex:
-    "-m, --model <MODEL>\n-c, --config <k=v>\n-s, --sandbox <MODE> [possible values: read-only, workspace-write]",
-  grok: "-m, --model <MODEL>\n--reasoning-effort <E>\n--permission-mode <MODE> [possible values: default, plan]",
-  "cursor-agent": '--model <model>\n--mode <mode> (choices: "plan", "ask")',
-};
-
-const KIND_BY_EXECUTABLE: Record<string, string> = {
-  claude: "claude",
-  codex: "codex",
-  grok: "grok",
-  "cursor-agent": "cursor",
-};
-
-const SCREENS = path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/screens");
-const screen = (name: string) => readFileSync(path.join(SCREENS, `${name}.txt`), "utf8");
-/** What each CLI shows at its ordinary prompt; the readiness gate must see it to prompt. */
-const READY_SCREEN: Record<string, string> = {
-  claude: screen("claude-ready"),
-  codex: screen("codex-ready"),
-  grok: screen("grok-ready"),
-  cursor: screen("cursor-ready"),
-};
-
-interface FakePane {
-  /** Detected agent kind, or undefined while nothing is detected. */
-  kind?: string;
-  /** What `herdr pane read` returns for this pane; undefined is an unreadable pane. */
-  screen?: string;
-  status: "idle" | "working" | "blocked" | "unknown";
-  ready: boolean;
-  name?: string;
-  gone?: boolean;
-}
-
-interface FakeHerdr extends HerdrClient {
-  calls: string[][];
-  prompts: { target: string; text: string }[];
-  scripts: string[];
-  panes: Map<string, FakePane>;
-  pane: Pick<HerdrPaneClient, "getAgent" | "readPane">;
-  reads: string[];
-}
-
-/**
- * A Herdr stand-in. `pane run` reads the launch script the router wrote and "starts" the
- * executable it names; `detect` can override what Herdr then reports for the pane.
- */
-function fakeHerdr(
-  script: {
-    detect?: (paneId: string, executable: string) => FakePane;
-    prompt?: (target: string, count: number) => CommandResult;
-    onRename?: (paneId: string, name: string) => void;
-    onGetAgent?: (target: string) => void;
-  } = {},
-): FakeHerdr {
-  const calls: string[][] = [];
-  const prompts: { target: string; text: string }[] = [];
-  const scripts: string[] = [];
-  const reads: string[] = [];
-  const panes = new Map<string, FakePane>();
-  let count = 0;
-  const find = (target: string) =>
-    [...panes.entries()].find(
-      ([id, pane]) => !pane.gone && (id === target || pane.name === target),
-    );
-  return {
-    calls,
-    prompts,
-    scripts,
-    panes,
-    reads,
-    async splitCurrent(options) {
-      calls.push(["pane", "split", options?.cwd ?? ""]);
-      count += 1;
-      panes.set(`w1:p${count}`, { status: "unknown", ready: false });
-      return ok(JSON.stringify({ result: { pane: { pane_id: `w1:p${count}` } } }));
-    },
-    async startAgent() {
-      throw new Error("rules mode must not use herdr agent start");
-    },
-    async runInPane(paneId, command) {
-      calls.push(["pane", "run", paneId, command]);
-      const scriptPath = /^\/bin\/sh '(.+)'$/.exec(command)?.[1];
-      if (!scriptPath) return failed("", "unexpected command");
-      const text = readFileSync(scriptPath, "utf8");
-      scripts.push(text);
-      const last = text.trim().split("\n").at(-1)!.trim();
-      const executable = path.basename(/^'([^']+)'/.exec(last)![1]!);
-      const pane = panes.get(paneId)!;
-      const kind = KIND_BY_EXECUTABLE[executable]!;
-      Object.assign(
-        pane,
-        { kind, status: "idle", ready: true, screen: READY_SCREEN[kind] },
-        script.detect?.(paneId, executable) ?? {},
-      );
-      return ok();
-    },
-    async renameAgent(target, name) {
-      calls.push(["agent", "rename", target, name]);
-      script.onRename?.(target, name);
-      const pane = panes.get(target);
-      if (!pane?.kind) return failed("", "no agent");
-      pane.name = name;
-      return ok();
-    },
-    async waitFor(input) {
-      calls.push(["agent", "wait", input.target, ...(input.until ?? [])]);
-      return ok(JSON.stringify({ result: { agent: { agent_status: "idle" } } }));
-    },
-    async prompt(input) {
-      prompts.push({ target: input.target, text: input.text });
-      calls.push(["agent", "prompt", input.target]);
-      return (
-        script.prompt?.(input.target, prompts.length) ??
-        ok(JSON.stringify({ result: { agent: { agent_status: "working" } } }))
-      );
-    },
-    async closePane(paneId) {
-      calls.push(["pane", "close", paneId]);
-      const pane = panes.get(paneId);
-      if (pane) pane.gone = true;
-      return ok();
-    },
-    pane: {
-      async getAgent(target) {
-        script.onGetAgent?.(target);
-        const found = find(target);
-        if (!found?.[1].kind) return undefined;
-        const [paneId, pane] = found;
-        return {
-          agent: pane.kind!,
-          status: pane.status,
-          paneId,
-          interactiveReady: pane.ready,
-          ...(pane.name ? { name: pane.name } : {}),
-        };
-      },
-      async readPane(paneId) {
-        reads.push(paneId);
-        const pane = panes.get(paneId);
-        return pane && !pane.gone ? pane.screen : undefined;
-      },
-    },
-  };
-}
-
-function deps(herdr: FakeHerdr, overrides: Partial<DispatchDeps> = {}) {
-  const home = mkdtempSync(path.join(os.tmpdir(), "hmr-dispatch-"));
-  const db = openDatabase({ home });
-  const probed: string[] = [];
-  const value: DispatchDeps = {
-    store: new DispatchRepository(db),
-    herdr,
-    pane: herdr.pane,
-    probeHelp: async (executable) => {
-      probed.push(executable);
-      const help = HELP[path.basename(executable)];
-      return help ? ok(help) : { ok: false, code: 1, stdout: "", stderr: "spawn ENOENT" };
-    },
-    resolveExecutable: (name) => (name in HELP ? `/opt/fake bin/${name}` : undefined),
-    launchFiles: launchFilesIn(home),
-    launchEnvNames: ["HERDR_PANE_ID", "HOME", "PATH"],
-    sleep: async () => {},
-    pollMs: 10,
-    timeoutMs: 50,
-    ...overrides,
-  };
-  return { deps: value, probed, home, db };
 }
 
 describe("panel dispatch (AE4)", () => {

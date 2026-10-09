@@ -10,6 +10,8 @@ export default tseslint.config(
       ".gstack/**",
       ".kilo/**",
       ".worktrees/**",
+      // Private review evidence; never part of the public source.
+      ".audit/**",
       "coverage/**",
     ],
   },

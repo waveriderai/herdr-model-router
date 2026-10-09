@@ -17,6 +17,21 @@
 - Launch scripts under `<router home>/launch/` contain only the working directory, executable
   path, and native argv, are mode 0600, and are deleted after the launch is observed.
 
+## Coordinator workflow
+
+- `workflow plan` and `workflow fingerprint` read files and Git only; they write no state.
+- Briefs, results, acceptance and release evidence, and the prompts handed to agent-collab are
+  kept as files under `<router home>/workflows/<id>/` (directory `0700`, files `0600`). A router
+  home inside the target checkout, directly or through a symlink, is refused before anything
+  is created, so none of this can land in the checkout. A recorded file is never overwritten.
+  SQLite stores only their SHA-256, states, and evidence text.
+- The router keeps the agent-collab owner capability in that private directory only, removes it
+  on release, and never written to router JSON, SQLite, prompts, or logs. The agent-collab CLI
+  accepts it only as its `--owner` argument, so it is visible in the local process table to
+  the same user while that call runs.
+- The agent-collab subprocess receives the same allowlisted environment as Herdr calls, without
+  provider API keys. agent-collab keeps its own copy of the brief in its own state directory.
+
 ## Quota mode and shared components
 
 - TypeSafe state must not include credentials, cookies, account labels, or raw heartbeats. Recognizable credentials are rejected locally before the first TypeSafe call; arbitrary sensitive narrative text still remains the caller's responsibility.

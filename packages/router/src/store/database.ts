@@ -8,14 +8,35 @@ export interface OpenDatabaseOptions {
   home: string;
 }
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 const MIGRATIONS: Record<number, string> = {
   1: "001_initial.sql",
   2: "002_capacity_reservations.sql",
   3: "003_live_effort.sql",
   4: "004_dispatch.sql",
+  5: "005_workflow.sql",
 };
+
+/**
+ * Columns a migration adds to an existing table. Added only when missing, so applying a
+ * migration again stays harmless, as with the `IF NOT EXISTS` statements in the SQL files.
+ */
+const ADDED_COLUMNS: Record<number, { table: string; column: string; type: string }[]> = {
+  5: [
+    { table: "dispatch_lanes", column: "session_id", type: "TEXT" },
+    { table: "dispatch_lanes", column: "session_cwd", type: "TEXT" },
+  ],
+};
+
+function addColumns(db: Database.Database, version: number): void {
+  for (const { table, column, type } of ADDED_COLUMNS[version] ?? []) {
+    const existing = db.prepare(`pragma table_info(${table})`).all() as { name: string }[];
+    if (!existing.some((entry) => entry.name === column)) {
+      db.exec(`alter table ${table} add column ${column} ${type}`);
+    }
+  }
+}
 
 export function databasePath(home: string): string {
   return path.join(home, "state.sqlite");
@@ -52,6 +73,7 @@ export function migrate(db: Database.Database): void {
     if (version >= CURRENT_SCHEMA_VERSION) return;
     for (let next = version + 1; next <= CURRENT_SCHEMA_VERSION; next += 1) {
       db.exec(migrationSql(next));
+      addColumns(db, next);
       db.prepare("insert or ignore into schema_migrations (version, applied_at) values (?, ?)").run(
         next,
         new Date().toISOString(),

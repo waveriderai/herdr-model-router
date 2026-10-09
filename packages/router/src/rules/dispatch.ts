@@ -5,6 +5,7 @@ import { herdrError, parseHerdrPaneId } from "../launch/herdr-launcher.js";
 import {
   NotOwnerError,
   OwnershipConflictError,
+  WorkflowTaskError,
   TaskClosedError,
   UnresolvedAttemptError,
   type AttemptState,
@@ -13,6 +14,7 @@ import {
   type DispatchRepository,
   type DispatchTask,
 } from "../store/dispatch-repository.js";
+import { WriterAuthorityError } from "../store/workflow-repository.js";
 import type { Provider } from "./descriptor.js";
 import { launchScript, paneCommand } from "./launch-script.js";
 import {
@@ -30,6 +32,12 @@ import {
   type NativeLaunch,
 } from "./native-argv.js";
 import type { RoutePlan } from "./plan.js";
+import {
+  canonicalCwd,
+  compareIdentity,
+  identityFromLive,
+  type BoundIdentity,
+} from "../workflow/identity.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_MS = 500;
@@ -79,7 +87,7 @@ export type DispatchResult =
   | { ok: true; task: DispatchTask; lanes: LaneOutcome[] }
   | {
       ok: false;
-      code: "capability-missing" | "ownership-conflict" | "launch-unsupported";
+      code: "capability-missing" | "ownership-conflict" | "launch-unsupported" | "writer-authority";
       error: string;
       owner?: unknown;
     };
@@ -174,6 +182,10 @@ export async function sendOnce(input: {
   agentName: string;
   text: string;
   purpose: DispatchAttempt["purpose"];
+  /** Runs after the `sending` attempt is durable and before the prompt goes out. */
+  onBegin?: (attempt: DispatchAttempt) => void;
+  /** The workflow sending it, when the lane is a workflow's writer. */
+  workflowId?: string;
 }): Promise<DispatchAttempt> {
   const { deps } = input;
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -181,7 +193,9 @@ export async function sendOnce(input: {
     laneId: input.lane.id,
     purpose: input.purpose,
     promptSha256: promptSha256(input.text),
+    ...(input.workflowId ? { workflowId: input.workflowId } : {}),
   });
+  input.onBegin?.(attempt);
   let state: Exclude<AttemptState, "sending">;
   let evidence: string;
   let result: CommandResult;
@@ -272,7 +286,7 @@ export async function readReadiness(
  * no ready prompt before the timeout fails as unready.
  */
 async function observeAgent(
-  deps: DispatchDeps,
+  deps: Pick<DispatchDeps, "pane" | "sleep" | "timeoutMs" | "pollMs">,
   paneId: string,
   expected: ReadinessKind,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -318,9 +332,135 @@ async function observeAgent(
 }
 
 function guardMessage(error: unknown): string | undefined {
-  return error instanceof TaskClosedError || error instanceof NotOwnerError
+  return error instanceof TaskClosedError ||
+    error instanceof NotOwnerError ||
+    error instanceof WorkflowTaskError
     ? error.message
     : undefined;
+}
+
+export type NativeStart =
+  | { ok: true; paneId: string; agentName: string }
+  /**
+   * `pane` is absent when no pane was created. `closed: false` means Herdr did not confirm
+   * the close: the pane may still run the CLI, so the caller keeps it on record.
+   */
+  | { ok: false; error: string; pane?: { id: string; closed: boolean } };
+
+/** Closes a pane this launch created and reports whether Herdr confirmed it. */
+export async function closeCreatedPane(
+  herdr: Pick<HerdrClient, "closePane">,
+  paneId: string,
+): Promise<boolean> {
+  try {
+    return (await herdr.closePane(paneId)).ok;
+  } catch {
+    return false;
+  }
+}
+
+export function orphanNote(paneId: string, closed: boolean): string {
+  return closed
+    ? ""
+    : ` Closing pane ${paneId} was not confirmed; it may still run the CLI (no prompt was sent).`;
+}
+
+/**
+ * Starts one native CLI in a new pane, with no task: split the pane, run the CLI from the
+ * pane's own shell through `env -i`, wait until Herdr and the screen both show the CLI ready
+ * with no startup dialog, then name the agent. Any failure after the pane exists closes that
+ * pane and reports whether the close was confirmed. Shared by rules-mode dispatch and both
+ * workflow backends; it never sends a prompt.
+ */
+export async function startNativeAgent(input: {
+  deps: Pick<
+    DispatchDeps,
+    "herdr" | "pane" | "launchFiles" | "launchEnvNames" | "sleep" | "timeoutMs" | "pollMs"
+  >;
+  laneId: string;
+  cwd: string;
+  launch: ResolvedLaunch;
+  onPaneCreated?: (paneId: string) => void;
+}): Promise<NativeStart> {
+  const { deps, launch } = input;
+  const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
+  const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
+  if (!split.ok || !paneId) {
+    return {
+      ok: false,
+      error: split.ok
+        ? "herdr pane split did not return a pane id"
+        : herdrError(split, "herdr pane split failed"),
+    };
+  }
+  input.onPaneCreated?.(paneId);
+  const closeWith = async (error: string): Promise<NativeStart> => {
+    const closed = await closeCreatedPane(deps.herdr, paneId);
+    return { ok: false, error: error + orphanNote(paneId, closed), pane: { id: paneId, closed } };
+  };
+  // The CLI starts from the pane's own shell through `env -i`, so whatever that shell's rc
+  // files export (API keys included) never reaches it, while the pane's own Herdr context does.
+  let scriptPath: string | undefined;
+  let observed: Awaited<ReturnType<typeof observeAgent>>;
+  try {
+    scriptPath = deps.launchFiles.write(
+      input.laneId,
+      launchScript({
+        executable: launch.executable,
+        args: launch.argv.slice(1),
+        cwd: input.cwd,
+        envNames: deps.launchEnvNames,
+      }),
+    );
+    const ran = await deps.herdr.runInPane(paneId, paneCommand(scriptPath));
+    observed = ran.ok
+      ? await observeAgent(deps, paneId, launch.kind)
+      : { ok: false, error: herdrError(ran, "herdr pane run failed") };
+  } catch (error) {
+    observed = { ok: false, error: `launch failed: ${String(error)}` };
+  } finally {
+    if (scriptPath) deps.launchFiles.remove(scriptPath);
+  }
+  if (!observed.ok) return closeWith(observed.error);
+  const agentName = laneAgentName(launch.kind, input.laneId);
+  const renamed = await deps.herdr.renameAgent(paneId, agentName);
+  if (!renamed.ok) {
+    return closeWith(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
+  }
+  return { ok: true, paneId, agentName };
+}
+
+/**
+ * Reads the identity Herdr reports for a just-named writer and checks it is complete and in
+ * the planned directory. The writer's first prompt and every revision need this exact session.
+ */
+export async function bindWriterIdentity(
+  deps: Pick<DispatchDeps, "pane">,
+  input: { paneId: string; agentName: string; cwd: string },
+): Promise<{ ok: true; identity: BoundIdentity } | { ok: false; error: string }> {
+  let live;
+  try {
+    live = await deps.pane.getAgent(input.paneId);
+  } catch {
+    live = undefined;
+  }
+  if (!live) {
+    return {
+      ok: false,
+      error: `Herdr did not report the agent in pane ${input.paneId}; no prompt was sent.`,
+    };
+  }
+  const identity = identityFromLive(live, input.agentName);
+  if (!identity.ok) return identity;
+  const matched = compareIdentity(live, identity.identity);
+  if (!matched.ok) return { ok: false, error: `${matched.error} No prompt was sent.` };
+  if (identity.identity.cwd !== canonicalCwd(input.cwd)) {
+    return {
+      ok: false,
+      error: `The writer runs in ${identity.identity.cwd}, not ${canonicalCwd(input.cwd)}; no prompt was sent.`,
+    };
+  }
+  return identity;
 }
 
 /** Launches every lane in order. A failed lane is recorded and the next lane still runs. */
@@ -329,6 +469,21 @@ export async function dispatchPlan(input: {
   prompt: string;
   worktreeId: string;
   deps: DispatchDeps;
+  /** The workflow a writer task belongs to (see DispatchRepository.createTask). */
+  workflowId?: string;
+  /** Called once the task (and, for a writer, its ownership) is recorded. */
+  onTaskCreated?: (task: DispatchTask) => void;
+  /** A last gate after the agent is ready, named and bound; refusing closes the pane. */
+  beforeSend?: (lane: {
+    laneId: string;
+    paneId: string;
+    agentName: string;
+    identity?: BoundIdentity;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Runs once a lane's `sending` attempt is durable, before its prompt goes out. */
+  onAttemptBegun?: (lane: { laneId: string }, attempt: DispatchAttempt) => void;
+  /** The text each lane receives; default: the prompt plus the lane's role line. */
+  laneText?: (lane: { index: number }, task: DispatchTask) => string;
 }): Promise<DispatchResult> {
   const { plan, deps } = input;
   const preflight = await preflightLaunches(plan, deps);
@@ -342,6 +497,7 @@ export async function dispatchPlan(input: {
       worktreeId: input.worktreeId,
       cwd: plan.cwd,
       rulesPath: plan.rulesSource.path,
+      ...(input.workflowId ? { workflowId: input.workflowId } : {}),
       lanes: plan.lanes.map((lane, position) => ({
         index: lane.index,
         descriptor: lane.descriptor,
@@ -355,9 +511,13 @@ export async function dispatchPlan(input: {
     if (error instanceof OwnershipConflictError) {
       return { ok: false, code: "ownership-conflict", error: error.message, owner: error.owner };
     }
+    if (error instanceof WriterAuthorityError) {
+      return { ok: false, code: "writer-authority", error: error.message };
+    }
     throw error;
   }
   const { task } = created;
+  input.onTaskCreated?.(task);
   const outcomes: LaneOutcome[] = [];
   for (const [position, lane] of created.lanes.entries()) {
     const launch = preflight.launches[position]!;
@@ -374,71 +534,75 @@ export async function dispatchPlan(input: {
       outcome.error = redactCollectorText(error);
       deps.store.updateLane(lane.id, { state: "failed", error: outcome.error });
     };
-    const closeCreatedPane = async (paneId: string) => {
-      await deps.herdr.closePane(paneId);
+    const forgetPane = () => {
       delete outcome.paneId;
       deps.store.updateLane(lane.id, { paneId: undefined });
     };
-    const split = await deps.herdr.splitCurrent({ cwd: plan.cwd });
-    const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
-    if (!split.ok || !paneId) {
-      fail(
-        split.ok
-          ? "herdr pane split did not return a pane id"
-          : herdrError(split, "herdr pane split failed"),
-      );
+    const started = await startNativeAgent({
+      deps,
+      laneId: lane.id,
+      cwd: plan.cwd,
+      launch,
+      onPaneCreated: (paneId) => {
+        outcome.paneId = paneId;
+        outcome.state = "pane-created";
+        deps.store.updateLane(lane.id, { paneId, state: "pane-created" });
+      },
+    });
+    if (!started.ok) {
+      // A confirmed close forgets the pane; an unconfirmed one stays on record as an orphan.
+      if (outcome.paneId && started.pane?.closed !== false) forgetPane();
+      fail(started.error);
       continue;
     }
-    outcome.paneId = paneId;
-    outcome.state = "pane-created";
-    deps.store.updateLane(lane.id, { paneId, state: "pane-created" });
-
-    // The CLI starts from the pane's own shell through `env -i`, so whatever that shell's rc
-    // files export (API keys included) never reaches it, while the pane's own Herdr context does.
-    let scriptPath: string | undefined;
-    let observed: Awaited<ReturnType<typeof observeAgent>>;
-    try {
-      scriptPath = deps.launchFiles.write(
-        lane.id,
-        launchScript({
-          executable: launch.executable,
-          args: launch.argv.slice(1),
-          cwd: plan.cwd,
-          envNames: deps.launchEnvNames,
-        }),
-      );
-      const ran = await deps.herdr.runInPane(paneId, paneCommand(scriptPath));
-      observed = ran.ok
-        ? await observeAgent(deps, paneId, launch.kind)
-        : { ok: false, error: herdrError(ran, "herdr pane run failed") };
-    } catch (error) {
-      observed = { ok: false, error: `launch failed: ${String(error)}` };
-    } finally {
-      if (scriptPath) deps.launchFiles.remove(scriptPath);
-    }
-    if (!observed.ok) {
-      await closeCreatedPane(paneId);
-      fail(observed.error);
-      continue;
-    }
-    const agentName = laneAgentName(launch.kind, lane.id);
-    const renamed = await deps.herdr.renameAgent(paneId, agentName);
-    if (!renamed.ok) {
-      await closeCreatedPane(paneId);
-      fail(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
-      continue;
-    }
+    const { paneId, agentName } = started;
     outcome.agentName = agentName;
     outcome.state = "agent-started";
     deps.store.updateLane(lane.id, { agentName, state: "agent-started" });
+    const refuseLane = async (error: string) => {
+      const closed = await closeCreatedPane(deps.herdr, paneId);
+      if (closed) forgetPane();
+      fail(error + orphanNote(paneId, closed));
+    };
+    let identity: BoundIdentity | undefined;
+    if (plan.access === "write") {
+      const bound = await bindWriterIdentity(deps, { paneId, agentName, cwd: plan.cwd });
+      if (!bound.ok) {
+        await refuseLane(bound.error);
+        continue;
+      }
+      identity = bound.identity;
+      deps.store.updateLane(lane.id, { sessionId: identity.sessionId, sessionCwd: identity.cwd });
+    }
+    if (input.beforeSend) {
+      const allowed = await input.beforeSend({
+        laneId: lane.id,
+        paneId,
+        agentName,
+        ...(identity ? { identity } : {}),
+      });
+      if (!allowed.ok) {
+        await refuseLane(allowed.error);
+        continue;
+      }
+    }
     let sent: DispatchAttempt;
     try {
       sent = await sendOnce({
         deps,
         lane: deps.store.getLane(lane.id)!,
         agentName,
-        text: laneText(plan, task, lane, input.prompt),
+        text: input.laneText
+          ? input.laneText(lane, task)
+          : laneText(plan, task, lane, input.prompt),
         purpose: "initial",
+        ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+        ...(input.onAttemptBegun
+          ? {
+              onBegin: (begun: DispatchAttempt) =>
+                input.onAttemptBegun!({ laneId: lane.id }, begun),
+            }
+          : {}),
       });
     } catch (error) {
       const message = guardMessage(error);
@@ -458,8 +622,12 @@ export async function dispatchPlan(input: {
     ["sent", "working", "blocked"].includes(outcome.attempt?.state ?? ""),
   ).length;
   const anyAttempt = outcomes.some((outcome) => outcome.attempt);
-  if (plan.access === "write" && !anyAttempt) {
-    deps.store.releaseUnsent(task.id, "no prompt was sent; ownership released automatically");
+  // A pane whose close was not confirmed may still run the writer: the worktree stays held.
+  const orphaned = outcomes.some((outcome) => outcome.state === "failed" && outcome.paneId);
+  if (plan.access === "write" && !anyAttempt && !orphaned) {
+    deps.store.releaseUnsent(task.id, "no prompt was sent; ownership released automatically", {
+      ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+    });
   } else {
     // Never reopens a task that was completed or released while this dispatch ran.
     deps.store.finishDispatch(
@@ -482,6 +650,10 @@ export async function reviseTask(input: {
   taskId: string;
   text: string;
   deps: DispatchDeps;
+  /** Runs after the revision's `sending` attempt is durable, before it is submitted. */
+  onBegin?: (attempt: DispatchAttempt) => void;
+  /** The workflow revising its own writer; any other caller is refused for a workflow's task. */
+  workflowId?: string;
 }): Promise<ReviseResult> {
   const { deps } = input;
   const task = deps.store.getTask(input.taskId);
@@ -491,6 +663,14 @@ export async function reviseTask(input: {
       ok: false,
       code: "not-writer",
       error: `Task ${task.id} is read-only; only writer tasks take revisions.`,
+    };
+  }
+  const workflow = deps.store.ownerWorkflow(task.id);
+  if (workflow && workflow.id !== input.workflowId) {
+    return {
+      ok: false,
+      code: "workflow-task",
+      error: new WorkflowTaskError(task.id, workflow.id).message,
     };
   }
   const owner = deps.store.ownershipOfTask(task.id);
@@ -509,15 +689,38 @@ export async function reviseTask(input: {
       error: `Task ${task.id} never started an agent; there is no session to revise.`,
     };
   }
-  const live = await deps.pane.getAgent(lane.agentName);
-  const expectedKind = HERDR_KIND[lane.provider as Provider];
-  if (!live || live.paneId !== lane.paneId || live.agent !== expectedKind) {
+  // Continuity needs the session bound at the first prompt. A lane recorded before identity
+  // was kept has none, and the router never adopts whatever session the pane runs now.
+  if (!lane.sessionId || !lane.sessionCwd) {
     return {
       ok: false,
-      code: "agent-gone",
+      code: "identity-missing",
       error:
-        `Agent ${lane.agentName} is no longer running in pane ${lane.paneId}. The router does not relaunch a writer for a revision; ` +
-        `release the task with \`task release ${task.id} --stopped --evidence ...\` and start a new one.`,
+        `Task ${task.id} has no recorded native session, so the router cannot confirm the writer in pane ${lane.paneId} is the same one. ` +
+        `Nothing was sent. Release it with \`task release ${task.id} --stopped --evidence ...\` and start a new writer task.`,
+    };
+  }
+  const expectedKind = HERDR_KIND[lane.provider as Provider];
+  let live;
+  try {
+    live = await deps.pane.getAgent(lane.paneId);
+  } catch {
+    live = undefined;
+  }
+  const matched = compareIdentity(live, {
+    agentName: lane.agentName,
+    kind: expectedKind,
+    paneId: lane.paneId,
+    sessionId: lane.sessionId,
+    cwd: lane.sessionCwd,
+  });
+  if (!matched.ok) {
+    return {
+      ok: false,
+      code: matched.code === "agent-missing" ? "agent-gone" : matched.code,
+      error:
+        `${matched.error} The router does not relaunch or rebind a writer for a revision; nothing was sent. ` +
+        `Release the task with \`task release ${task.id} --stopped --evidence ...\` and start a new one.`,
     };
   }
   const unresolved = deps.store
@@ -546,6 +749,8 @@ export async function reviseTask(input: {
       agentName: lane.agentName,
       text: input.text,
       purpose: "revision",
+      ...(input.onBegin ? { onBegin: input.onBegin } : {}),
+      ...(input.workflowId ? { workflowId: input.workflowId } : {}),
     });
     return { ok: true, task, lane: deps.store.getLane(lane.id)!, attempt };
   } catch (error) {

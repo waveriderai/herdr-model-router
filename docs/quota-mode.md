@@ -175,9 +175,23 @@ router session                   # the latest launch; router session --list for 
 
 `--dry-run` prints the decision card and the command it would start, without opening a pane
 or sending anything. A real run splits a new pane next to the current one, starts the agent,
-waits for it to finish starting up, sends the task, and confirms the agent began working. You
-can run the router any number of times, in the same tab or different ones; each launch gets
-its own agent name such as `router-codex-3c356c`.
+waits for it to finish starting up, sends the task, and confirms the agent began working. Each
+launch gets its own agent name such as `router-codex-3c356c`.
+
+A real run is a writer in its worktree, so it takes that worktree's single writer authority
+first, the same one rules-mode writers and coordinator workflows use, and keeps it after the
+launch returns. The output names the writer task (`Writer task task_... holds this worktree`).
+Until you end it with `router task complete <task> --evidence ...` (or `router task release
+<task> --stopped --evidence ...` once the agent stopped), another `run`, a rules-mode writer,
+or a `workflow start` in that worktree is refused. `--session` continuing the same chain in the
+same worktree keeps the task, and in-place continuation is checked against the target pane's
+own directory. The task is given back only when nothing can have reached an agent: the pane
+or agent never started, or Herdr refused the handoff with its structured `agent_blocked` code
+before sending input, and any pane the launch opened was confirmed closed. A timeout, a stall,
+or an unreadable reply may have delivered the handoff, so the task keeps the worktree, records
+the handoff as an `unknown` attempt with its pane, and nothing is resent: inspect the pane, then
+`router task release <task> --stopped --evidence ...` once the agent there has stopped. To run several
+agents at once, give each its own worktree (`--worktree`).
 
 ### The decision card
 

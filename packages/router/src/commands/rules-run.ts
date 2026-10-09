@@ -30,6 +30,8 @@ export interface RulesRunDeps extends RulesLocation {
   createSemanticClient?: () => TypeSafePort | undefined;
   /** Only called for a real launch, after the plan and every gate passed. */
   openDispatch?: () => DispatchDeps & { close?: () => void };
+  /** A refusal when the router home is inside the target checkout; checked before any state. */
+  privateHomeRefusal?: () => string | undefined;
   /** Providers with a configured shared account; rules mode refuses to launch on them. */
   sharedProviders?: () => Provider[];
 }
@@ -105,6 +107,8 @@ export async function executeRulesRun(
     );
   }
   if (!deps.openDispatch) return refused("launching is not available in this build");
+  const insideCheckout = deps.privateHomeRefusal?.();
+  if (insideCheckout) return refused(insideCheckout, { code: "private-home" });
   const dispatch = deps.openDispatch();
   try {
     const result = await dispatchPlan({
