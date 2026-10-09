@@ -25,6 +25,10 @@ and released under a single tag.
   read from that pane's shell, so provider API keys and cloud credentials exported by shell rc
   files never reach them. Herdr must detect the expected agent kind before the router names or
   prompts it.
+- A readiness check before every prompt and revision: the lane pane's screen must show the
+  CLI's ordinary input prompt, and workspace-trust, login, update, permission and confirmation
+  dialogs are refused without input. OpenCode is not launched until it has verified
+  ready-prompt evidence.
 - `hmr` as a second name for the CLI; `NOTICE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
   `AGENTS.md`, issue and pull request templates, and a GitHub `verify` workflow.
 

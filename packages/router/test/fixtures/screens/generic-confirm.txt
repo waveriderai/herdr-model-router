@@ -1,0 +1,6 @@
+ This will modify settings in your home directory.
+ Do you want to proceed? (y/n)
+ ╭─────────────────╮
+ │ ❯               │
+ ╰─ Grok 4.7 ──────╯
+ Ctrl+.:shortcuts

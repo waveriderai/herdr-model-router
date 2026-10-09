@@ -85,10 +85,36 @@ permissions.
       Every value is single-quoted; allowlisted variables are copied with `${NAME+"NAME=$NAME"}`
       from the pane's own shell, so the CLI gets that pane's `HERDR_*` context and none of the
       API keys or cloud credentials the shell's rc files export.
-   3. `herdr pane run <pane> "/bin/sh '<script>'"`, then poll `herdr agent get <pane>` until
-      Herdr reports the expected kind, `idle`, and interactive-ready. Another kind, or no ready
-      agent before the timeout, closes the pane and fails the lane. The script is deleted.
+   3. `herdr pane run <pane> "/bin/sh '<script>'"`, then poll `herdr agent get <pane>` and
+      `herdr pane read <pane> --source visible` (only this lane's own pane) until Herdr reports
+      the expected kind, `idle`, and interactive-ready **and** the screen passes the readiness
+      check below. Another kind, a startup dialog, or no ready prompt before the timeout closes
+      the pane and fails the lane. The script is deleted.
    4. `herdr agent rename <pane> <name>`, then send the prompt once.
+
+### Readiness check
+
+Herdr's `idle` is not enough: CLIs show first-run dialogs that look idle, and a typed task
+would be read as that dialog's hotkeys. Before every prompt, initial or revision, the router
+reads the lane's visible screen (ANSI stripped; matched with whitespace removed so narrow,
+wrapped panes still match) and:
+
+1. refuses any workspace-trust, login, update, permission or confirmation dialog, or numbered
+   selection menu, even if a composer is also visible;
+2. requires positive evidence of that CLI's ordinary input prompt: Claude Code's `❯` line
+   between rules with its mode or shortcuts footer, grok's `│ ❯ │` box, Cursor's `→` line with
+   its mode footer, Codex's `›` line with its composer footer;
+3. treats an unreadable or empty screen as not ready.
+
+Nothing is ever typed into a dialog. A refused launch closes only the router's own pane and
+records the lane as failed with no attempt; other panel lanes continue. A refused revision
+sends nothing, creates no attempt, and leaves the writer's pane as it is. OpenCode has no
+verified ready-prompt evidence, so the router does not launch it. The patterns come from the
+CLI versions listed in [Provider support](provider-support.md); a CLI that changes its screen
+fails closed until they are updated.
+
+Open each CLI yourself once in a new directory and finish its trust, login, and update steps
+before routing to it.
 
 The allowlist is `HOME`, `PATH`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `TERM_PROGRAM`,
 `TERM_PROGRAM_VERSION`, `COLORTERM`, `LANG`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `TMPDIR`,
@@ -128,8 +154,8 @@ router task complete <task-id> --evidence "<what shows it is done>"
 router task release <task-id> --stopped --evidence "<what shows the writer stopped>"
 ```
 
-A revision checks that the original agent of the same kind still runs in the recorded pane; if
-not, it refuses and never relaunches. The task's open status and current worktree ownership
+A revision checks that the original agent of the same kind still runs in the recorded pane and
+passes the readiness check; if not, it refuses, sends nothing, and never relaunches. The task's open status and current worktree ownership
 are checked again in the same database transaction that reserves the attempt, so a task that
 was completed, released, or replaced while the revision waited on Herdr sends nothing.
 `complete` is refused while a launch is still dispatching; a stopped router's task is closed

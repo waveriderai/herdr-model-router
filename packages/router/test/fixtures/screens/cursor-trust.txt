@@ -1,0 +1,6 @@
+  Cursor Agent
+  Workspace Trust Required
+  Do you trust the contents of this directory?
+
+  ▶ Trust this workspace [a]
+    Quit [q]

@@ -16,6 +16,13 @@ import {
 import type { Provider } from "./descriptor.js";
 import { launchScript, paneCommand } from "./launch-script.js";
 import {
+  extractPaneText,
+  hasReadinessEvidence,
+  screenVerdict,
+  type ReadinessKind,
+  type ScreenVerdict,
+} from "./readiness.js";
+import {
   HERDR_KIND,
   missingCapabilities,
   nativeLaunch,
@@ -26,6 +33,7 @@ import type { RoutePlan } from "./plan.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_MS = 500;
+const SCREEN_LINES = 80;
 
 /** Where the per-lane launch scripts live (private to the user) and how they are removed. */
 export interface LaunchFiles {
@@ -36,7 +44,8 @@ export interface LaunchFiles {
 export interface DispatchDeps {
   store: DispatchRepository;
   herdr: HerdrClient;
-  pane: Pick<HerdrPaneClient, "getAgent">;
+  /** Agent lookup and screen reads, used only on panes this task owns. */
+  pane: Pick<HerdrPaneClient, "getAgent" | "readPane">;
   /** Runs `<absolute executable> --help` without a shell. */
   probeHelp: (executable: string) => Promise<CommandResult>;
   /** Absolute path of an executable on the router's PATH, or undefined. Reads only. */
@@ -93,6 +102,13 @@ export async function preflightLaunches(
     const built = nativeLaunch(lane, plan.access);
     if (!built.ok)
       return { ok: false, code: "launch-unsupported", error: `lane ${lane.index}: ${built.error}` };
+    if (!hasReadinessEvidence(built.launch.kind)) {
+      return {
+        ok: false,
+        code: "launch-unsupported",
+        error: `lane ${lane.index}: the router cannot yet confirm that ${lane.provider} is at its ordinary prompt, so it will not launch or prompt it`,
+      };
+    }
     const name = PROVIDER_EXECUTABLE[lane.provider];
     if (!help.has(lane.provider)) {
       const executable = deps.resolveExecutable(name);
@@ -234,10 +250,31 @@ const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resol
  * router created. Any other detected kind is a mismatch; no ready agent before the timeout
  * is unready. Both fail closed.
  */
+/** Reads the visible screen of a pane this task owns and judges it. Never sends input. */
+export async function readReadiness(
+  deps: Pick<DispatchDeps, "pane">,
+  paneId: string,
+  kind: ReadinessKind,
+): Promise<ScreenVerdict> {
+  let raw: string | undefined;
+  try {
+    raw = await deps.pane.readPane(paneId, { source: "visible", lines: SCREEN_LINES });
+  } catch {
+    raw = undefined;
+  }
+  return screenVerdict(kind, extractPaneText(raw));
+}
+
+/**
+ * Waits until Herdr reports the expected native agent kind, idle and ready, AND the pane's
+ * own screen shows that CLI's ordinary input prompt with no startup dialog. Another kind or
+ * a dialog fails at once (a dialog never clears without input, and the router sends none);
+ * no ready prompt before the timeout fails as unready.
+ */
 async function observeAgent(
   deps: DispatchDeps,
   paneId: string,
-  expected: string,
+  expected: ReadinessKind,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
@@ -255,8 +292,20 @@ async function observeAgent(
           error: `pane ${paneId} runs ${info.agent}, not ${expected}; refusing to name or prompt it`,
         };
       }
-      if (info.status === "idle" && info.interactiveReady !== false) return { ok: true };
-      last = `${info.agent} is ${info.status}${info.interactiveReady === false ? " (not ready)" : ""}`;
+      const verdict = await readReadiness(deps, paneId, expected);
+      if (verdict.state === "dialog") {
+        return {
+          ok: false,
+          error: `${verdict.reason}. No prompt was sent and the pane was closed`,
+        };
+      }
+      if (verdict.state === "ready" && info.status === "idle" && info.interactiveReady !== false) {
+        return { ok: true };
+      }
+      last =
+        verdict.state === "not-ready"
+          ? `${info.agent} is ${info.status}; ${verdict.reason}`
+          : `${info.agent} is ${info.status}${info.interactiveReady === false ? " (not ready)" : ""}`;
     }
     if (waited >= timeoutMs) {
       return {
@@ -469,6 +518,25 @@ export async function reviseTask(input: {
       error:
         `Agent ${lane.agentName} is no longer running in pane ${lane.paneId}. The router does not relaunch a writer for a revision; ` +
         `release the task with \`task release ${task.id} --stopped --evidence ...\` and start a new one.`,
+    };
+  }
+  const unresolved = deps.store
+    .attempts(lane.id)
+    .find((attempt) => attempt.state === "sending" || attempt.state === "unknown");
+  if (unresolved) {
+    return {
+      ok: false,
+      code: "unresolved-attempt",
+      error: new UnresolvedAttemptError(unresolved).message,
+    };
+  }
+  // The writer must be at its ordinary prompt: a dialog would take the revision as hotkeys.
+  const screen = await readReadiness(deps, lane.paneId, expectedKind as ReadinessKind);
+  if (screen.state !== "ready") {
+    return {
+      ok: false,
+      code: "not-ready",
+      error: `${screen.reason}. Nothing was sent; the writer in pane ${lane.paneId} was left as it is.`,
     };
   }
   try {

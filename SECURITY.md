@@ -13,9 +13,10 @@ class of problem and a synthetic reproduction.
 
 We aim to acknowledge reports within a week.
 
-## What the router is meant to guarantee
+## Rules-mode guarantees
 
-Reports that break any of these are in scope:
+These guarantees apply to rules mode. The optional legacy quota mode retains the upstream
+workflow; see [Quota mode](docs/quota-mode.md). Reports that break these guarantees are in scope:
 
 - Rules-mode previews (`roles`, `plan`, `run --dry-run`) make no network call, start no process,
   read no credential store, and create no router state.
@@ -26,6 +27,9 @@ Reports that break any of these are in scope:
 - Model, role, and prompt values are never evaluated by a shell: Herdr IPC gets separate argv
   elements, and the one launch script quotes every value.
 - A launch prompts only an agent whose Herdr-detected kind matches the lane's provider.
+- No input is ever sent to a CLI startup, trust, login, update, permission or confirmation
+  dialog: every prompt (initial or revision) first requires the lane pane's screen to show
+  that CLI's ordinary input prompt.
 - A closed, released, or replaced writer task never receives another prompt.
 - Read-only lanes run only with the provider CLI's enforced read-only mode; the router never
   passes a permission-bypass or auto-approve flag.

@@ -1,0 +1,5 @@
+ 37K / 256K │ [Dashboard]
+ ╭─────────────────╮
+ │ ❯               │
+ ╰─ Grok 4.7 (high─╯
+ Ctrl+.:shortcuts

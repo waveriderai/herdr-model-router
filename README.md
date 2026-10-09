@@ -141,11 +141,37 @@ Each lane starts in a new pane: the router types one fixed command into the pane
 `exec`s the absolute CLI through `/usr/bin/env -i` with a short variable allowlist. Whatever your
 shell rc exports, including provider API keys and cloud credentials, does not reach the CLI;
 the pane's own Herdr context does. Herdr must then report the expected agent kind, idle and
-ready, before the router names and prompts it; anything else closes the pane.
+ready, **and** the pane's own screen must show that CLI's ordinary input prompt with no
+startup dialog, before the router names and prompts it; anything else closes the pane. The same
+screen check runs before every `task revise`; a writer that is not at its prompt is left alone
+and nothing is sent.
+
+**Before routing to a CLI in a new directory, open that CLI yourself there once** and finish
+any first-run step it shows: workspace or folder trust, login, update prompts, permission
+questions. The router never answers these dialogs (a typed task would land in their hotkeys);
+it refuses the lane and tells you which dialog it saw.
 
 A pane going idle is not completion. A task ends only with `task complete --evidence` or, for a
 writer that stopped, `task release --stopped --evidence`. When an attempt is `unknown`, inspect
 the pane and record it with `task recover <attempt> --delivered|--not-delivered --evidence`.
+
+## Provider status
+
+Live checks for this release, each through the router in a real Herdr pane in a fresh
+directory:
+
+| Provider   | Model checked                 | Result                                                                               |
+| ---------- | ----------------------------- | ------------------------------------------------------------------------------------ |
+| `grok`     | `grok-4.7` at `high`          | Responded with the expected smoke text                                               |
+| `codex`    | `gpt-6.1-sol` at `high`       | Unverified: the CLI showed its interactive update menu; the router did not prompt it |
+| `claude`   | `claude-sonnet-5-5` at `high` | Unverified: first-run workspace trust dialog                                         |
+| `cursor`   | `grok-4.7-high`               | Unverified: first-run workspace trust dialog                                         |
+| `opencode` | —                             | Not supported for launch: no verified ready-prompt evidence                          |
+
+In the same run the launched `grok` and `cursor-agent` processes, and a fake executable in a
+real pane, were checked for API-key and cloud-credential variables: none were present.
+Credential values were never read. This is not a promise that every provider or model works;
+see [Provider support](docs/provider-support.md).
 
 ## Other modes
 

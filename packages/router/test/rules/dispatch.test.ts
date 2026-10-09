@@ -59,9 +59,21 @@ const KIND_BY_EXECUTABLE: Record<string, string> = {
   "cursor-agent": "cursor",
 };
 
+const SCREENS = path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/screens");
+const screen = (name: string) => readFileSync(path.join(SCREENS, `${name}.txt`), "utf8");
+/** What each CLI shows at its ordinary prompt; the readiness gate must see it to prompt. */
+const READY_SCREEN: Record<string, string> = {
+  claude: screen("claude-ready"),
+  codex: screen("codex-ready"),
+  grok: screen("grok-ready"),
+  cursor: screen("cursor-ready"),
+};
+
 interface FakePane {
   /** Detected agent kind, or undefined while nothing is detected. */
   kind?: string;
+  /** What `herdr pane read` returns for this pane; undefined is an unreadable pane. */
+  screen?: string;
   status: "idle" | "working" | "blocked" | "unknown";
   ready: boolean;
   name?: string;
@@ -73,7 +85,8 @@ interface FakeHerdr extends HerdrClient {
   prompts: { target: string; text: string }[];
   scripts: string[];
   panes: Map<string, FakePane>;
-  pane: Pick<HerdrPaneClient, "getAgent">;
+  pane: Pick<HerdrPaneClient, "getAgent" | "readPane">;
+  reads: string[];
 }
 
 /**
@@ -91,6 +104,7 @@ function fakeHerdr(
   const calls: string[][] = [];
   const prompts: { target: string; text: string }[] = [];
   const scripts: string[] = [];
+  const reads: string[] = [];
   const panes = new Map<string, FakePane>();
   let count = 0;
   const find = (target: string) =>
@@ -102,6 +116,7 @@ function fakeHerdr(
     prompts,
     scripts,
     panes,
+    reads,
     async splitCurrent(options) {
       calls.push(["pane", "split", options?.cwd ?? ""]);
       count += 1;
@@ -120,13 +135,11 @@ function fakeHerdr(
       const last = text.trim().split("\n").at(-1)!.trim();
       const executable = path.basename(/^'([^']+)'/.exec(last)![1]!);
       const pane = panes.get(paneId)!;
+      const kind = KIND_BY_EXECUTABLE[executable]!;
       Object.assign(
         pane,
-        script.detect?.(paneId, executable) ?? {
-          kind: KIND_BY_EXECUTABLE[executable],
-          status: "idle",
-          ready: true,
-        },
+        { kind, status: "idle", ready: true, screen: READY_SCREEN[kind] },
+        script.detect?.(paneId, executable) ?? {},
       );
       return ok();
     },
@@ -170,6 +183,11 @@ function fakeHerdr(
           ...(pane.name ? { name: pane.name } : {}),
         };
       },
+      async readPane(paneId) {
+        reads.push(paneId);
+        const pane = panes.get(paneId);
+        return pane && !pane.gone ? pane.screen : undefined;
+      },
     },
   };
 }
@@ -202,9 +220,7 @@ describe("panel dispatch (AE4)", () => {
   it("attempts every lane in order, records a failed lane, and reports a partial outcome", async () => {
     const herdr = fakeHerdr({
       detect: (_pane, executable) =>
-        executable === "codex"
-          ? { kind: "codex", status: "blocked", ready: false }
-          : { kind: KIND_BY_EXECUTABLE[executable], status: "idle", ready: true },
+        executable === "codex" ? { status: "blocked", ready: false, screen: undefined } : {},
     });
     const { deps: d, probed } = deps(herdr);
     const result = await dispatchPlan({
@@ -229,7 +245,7 @@ describe("panel dispatch (AE4)", () => {
       [3, "claude:claude-opus-5-5@high", "prompted", "working"],
     ]);
     expect(result.lanes[1]?.error).toBe(
-      "codex did not become ready in pane w1:p2 (codex is blocked (not ready)); no prompt was sent",
+      "codex did not become ready in pane w1:p2 (codex is blocked; the pane could not be read or showed no text); no prompt was sent",
     );
     expect(new Set(result.lanes.map((lane) => lane.laneId)).size).toBe(3);
     // Each pane runs exactly the resolved absolute binary with single-quoted native argv.
@@ -261,7 +277,7 @@ describe("panel dispatch (AE4)", () => {
 
   it("fails closed when the pane runs a different agent than the lane's provider", async () => {
     // As on a machine where the `agent` command is another vendor's CLI.
-    const herdr = fakeHerdr({ detect: () => ({ kind: "grok", status: "idle", ready: true }) });
+    const herdr = fakeHerdr({ detect: () => ({ kind: "grok", screen: READY_SCREEN.grok }) });
     const { deps: d } = deps(herdr);
     const result = await dispatchPlan({
       plan: plan("cursor reader"),
@@ -520,7 +536,9 @@ describe("writer ownership and at-most-once prompts (AE3)", () => {
   });
 
   it("releases ownership on its own only when no prompt was ever sent", async () => {
-    const herdr = fakeHerdr({ detect: () => ({ status: "unknown", ready: false }) });
+    const herdr = fakeHerdr({
+      detect: () => ({ kind: undefined, status: "unknown", ready: false }),
+    });
     const { deps: d } = deps(herdr);
     const result = await dispatchPlan({
       plan: plan("feature"),
@@ -749,5 +767,229 @@ describe("launch environment", () => {
         CODEX_HOME: "/home/dev/.codex",
       });
     }
+  });
+});
+
+function planFrom(
+  text: string,
+  role: string,
+  extra: Partial<Parameters<typeof planRoute>[0]> = {},
+) {
+  const rulesFrom = parseRules(text);
+  if (!rulesFrom.ok) throw new Error(rulesFrom.error);
+  const result = planRoute({
+    rules: rulesFrom.rules,
+    rulesSource: { path: "synthetic.mdc", origin: "flag" },
+    role,
+    cwd: "/work/fresh",
+    ...extra,
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result;
+}
+
+const SMOKE =
+  "smoke: grok:grok-4.7@high, codex:gpt-6.1-sol@high, claude:claude-sonnet-5-5@high, cursor:composer-2\n";
+
+describe("startup dialogs are never prompted (V1)", () => {
+  it.each([
+    ["wide", { codex: "codex-update", claude: "claude-trust", cursor: "cursor-trust" }],
+    [
+      "narrow",
+      { codex: "codex-update-narrow", claude: "claude-trust-narrow", cursor: "cursor-trust" },
+    ],
+  ] as const)(
+    "closes only the panes stuck in a dialog and still prompts the ready lane (%s panes)",
+    async (_width, dialogs) => {
+      const herdr = fakeHerdr({
+        detect: (_pane, executable) => {
+          const kind = KIND_BY_EXECUTABLE[executable] as keyof typeof dialogs | "grok";
+          return kind === "grok" ? {} : { screen: screen(dialogs[kind]) };
+        },
+      });
+      const { deps: d } = deps(herdr);
+      const result = await dispatchPlan({
+        plan: planFrom(SMOKE, "smoke"),
+        prompt: "Respond with exactly ROUTER_SMOKE_OK.",
+        worktreeId: "/work/fresh",
+        deps: d,
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(
+        result.lanes.map((lane) => [lane.descriptor, lane.state, lane.attempt?.state ?? null]),
+      ).toEqual([
+        ["grok:grok-4.7@high", "prompted", "working"],
+        ["codex:gpt-6.1-sol@high", "failed", null],
+        ["claude:claude-sonnet-5-5@high", "failed", null],
+        ["cursor:composer-2", "failed", null],
+      ]);
+      expect(result.lanes.slice(1).map((lane) => lane.error)).toEqual([
+        "codex is showing an update dialog. The router never answers it: open the codex CLI yourself in this directory, finish that step, then route again. No prompt was sent and the pane was closed",
+        "claude is showing a workspace trust dialog. The router never answers it: open the claude CLI yourself in this directory, finish that step, then route again. No prompt was sent and the pane was closed",
+        "cursor is showing a workspace trust dialog. The router never answers it: open the cursor CLI yourself in this directory, finish that step, then route again. No prompt was sent and the pane was closed",
+      ]);
+      // Exactly one prompt, to the grok lane. The dialog panes got no input at all: no prompt,
+      // no rename, no keys; their own panes were closed.
+      expect(herdr.prompts.map((prompt) => prompt.target)).toEqual([result.lanes[0]!.agentName]);
+      expect(herdr.calls.filter((call) => call[1] === "rename").map((call) => call[2])).toEqual([
+        "w1:p1",
+      ]);
+      expect(herdr.calls.filter((call) => call[1] === "close").map((call) => call[2])).toEqual([
+        "w1:p2",
+        "w1:p3",
+        "w1:p4",
+      ]);
+      expect(new Set(herdr.reads)).toEqual(new Set(["w1:p1", "w1:p2", "w1:p3", "w1:p4"]));
+      for (const lane of result.lanes.slice(1)) {
+        expect(d.store.attempts(lane.laneId)).toEqual([]);
+        expect(d.store.getLane(lane.laneId)?.state).toBe("failed");
+      }
+      expect(result.task.status).toBe("partial");
+    },
+  );
+
+  it.each([
+    ["claude login", "bug-fix", { screen: screen("claude-login") }, "login"],
+    ["grok login", "explorer", { screen: screen("grok-login") }, "login"],
+    [
+      "generic confirmation",
+      "explorer",
+      { screen: screen("generic-confirm") },
+      "permission or confirmation",
+    ],
+    ["unreadable pane", "explorer", { screen: undefined }, "could not be read"],
+    ["empty pane", "bug-fix", { screen: "\n \n" }, "could not be read"],
+    [
+      "composer of another CLI",
+      "bug-fix",
+      { screen: READY_SCREEN.cursor },
+      "no ordinary claude input prompt",
+    ],
+  ] as const)(
+    "refuses a writer launch at a %s with zero attempts",
+    async (_label, role, pane, reason) => {
+      const herdr = fakeHerdr({ detect: () => pane });
+      const { deps: d } = deps(herdr);
+      const result = await dispatchPlan({
+        plan: plan(role),
+        prompt: "Do it",
+        worktreeId: "/w/dlg",
+        deps: d,
+      });
+      if (!result.ok) throw new Error(result.error);
+      expect(result.lanes[0]).toMatchObject({ state: "failed" });
+      expect(result.lanes[0]?.error).toContain(reason);
+      expect(result.lanes[0]?.error).toMatch(/no prompt was sent/i);
+      expect(herdr.prompts).toEqual([]);
+      expect(herdr.calls.some((call) => call[1] === "rename")).toBe(false);
+      expect(d.store.attempts(result.lanes[0]!.laneId)).toEqual([]);
+      expect(result.task.status).toBe("failed");
+      expect(d.store.ownerOf("/w/dlg")).toBeUndefined();
+    },
+  );
+
+  it("routes a genuine composer, also in a physically narrow pane", async () => {
+    const herdr = fakeHerdr({ detect: () => ({ screen: screen("claude-ready-narrow") }) });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("bug-fix"),
+      prompt: "Fix it",
+      worktreeId: "/w/ok",
+      deps: d,
+    });
+    expect(result.ok && result.lanes[0]?.attempt?.state).toBe("working");
+    expect(herdr.prompts).toHaveLength(1);
+  });
+
+  it("refuses providers without verified ready-prompt evidence before creating anything", async () => {
+    const herdr = fakeHerdr();
+    const { deps: d } = deps(herdr);
+    expect(
+      await dispatchPlan({
+        plan: planFrom("oc: opencode:anthropic/claude-x\n", "oc"),
+        prompt: "x",
+        worktreeId: "/w/oc",
+        deps: d,
+      }),
+    ).toEqual({
+      ok: false,
+      code: "launch-unsupported",
+      error:
+        "lane 1: the router cannot yet confirm that opencode is at its ordinary prompt, so it will not launch or prompt it",
+    });
+    expect(herdr.calls).toEqual([]);
+    expect(d.store.listTasks(5)).toEqual([]);
+  });
+});
+
+describe("revisions also pass the readiness gate", () => {
+  async function writer() {
+    const herdr = fakeHerdr();
+    const { deps: d } = deps(herdr);
+    const first = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Build",
+      worktreeId: "/w/rev",
+      deps: d,
+    });
+    if (!first.ok) throw new Error(first.error);
+    const lane = first.lanes[0]!;
+    return { herdr, d, first, lane, pane: herdr.panes.get(lane.paneId!)! };
+  }
+
+  it.each([
+    ["an update dialog", () => screen("codex-update"), "update dialog"],
+    [
+      "a confirmation",
+      () => "Do you want to proceed? (y/n)\n› \n  ? for shortcuts  100% context left\n",
+      "permission or confirmation",
+    ],
+    ["an unreadable screen", () => undefined, "could not be read"],
+    ["no composer", () => "Thinking…\n", "no ordinary codex input prompt"],
+  ])(
+    "sends nothing, keeps the writer, and records no attempt at %s",
+    async (_label, make, reason) => {
+      const { herdr, d, first, lane, pane } = await writer();
+      pane.screen = make();
+      const callsBefore = herdr.calls.length;
+      const revised = await reviseTask({ taskId: first.task.id, text: "a", deps: d });
+      expect(revised).toMatchObject({ ok: false, code: "not-ready" });
+      expect(revised.ok ? "" : revised.error).toContain(reason);
+      expect(revised.ok ? "" : revised.error).toContain(
+        `Nothing was sent; the writer in pane ${lane.paneId} was left as it is.`,
+      );
+      // No prompt, keys, close, split, run, or rename: the writer is neither answered nor relaunched.
+      expect(herdr.calls.slice(callsBefore)).toEqual([]);
+      expect(d.store.attempts(lane.laneId).map((attempt) => attempt.purpose)).toEqual(["initial"]);
+      expect(d.store.ownerOf("/w/rev")?.taskId).toBe(first.task.id);
+      // Once the operator is back at the ordinary prompt, the same revision goes through.
+      pane.screen = READY_SCREEN.codex;
+      expect(await reviseTask({ taskId: first.task.id, text: "a", deps: d })).toMatchObject({
+        ok: true,
+        attempt: { purpose: "revision", seq: 2 },
+      });
+    },
+  );
+
+  it("keeps an unknown attempt blocking before reading the pane", async () => {
+    const herdr = fakeHerdr({
+      prompt: (_target, count) =>
+        count === 1 ? failed("", "timeout") : ok('{"agent_status":"working"}'),
+    });
+    const { deps: d } = deps(herdr);
+    const first = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Build",
+      worktreeId: "/w/unk",
+      deps: d,
+    });
+    if (!first.ok) throw new Error(first.error);
+    const readsBefore = herdr.reads.length;
+    expect(await reviseTask({ taskId: first.task.id, text: "x", deps: d })).toMatchObject({
+      ok: false,
+      code: "unresolved-attempt",
+    });
+    expect(herdr.reads.length).toBe(readsBefore);
+    expect(herdr.prompts).toHaveLength(1);
   });
 });

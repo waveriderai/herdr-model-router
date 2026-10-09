@@ -121,7 +121,13 @@ describe("native CLI launch environment (process level)", () => {
           return ok();
         },
       };
-      const pane: Pick<HerdrPaneClient, "getAgent"> = {
+      const pane: Pick<HerdrPaneClient, "getAgent" | "readPane"> = {
+        async readPane(paneId) {
+          // The pane's screen once claude is at its ordinary prompt.
+          return paneId === "w9:p1" && existsSync(record)
+            ? "────────────────────\n❯ \n────────────────────\n  ⏸ plan mode on (shift+tab to cycle)\n"
+            : undefined;
+        },
         async getAgent(target) {
           return existsSync(record)
             ? {

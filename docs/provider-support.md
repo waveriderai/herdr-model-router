@@ -15,10 +15,31 @@ no live launch):
 | `opencode` | not installed here                              | `opencode --model <provider/model>`; read-only lanes refused                   |
 
 The router starts the absolute executable it resolved on `PATH` inside the new pane (through
-`env -i`, see [Rules mode](rules.md#launch)) and then requires Herdr to detect the matching
-agent kind. On some machines a bare `agent` is another vendor's CLI, which is why Cursor is
-always `cursor-agent`. Live pane launches for each provider are not yet verified in this
-release.
+`env -i`, see [Rules mode](rules.md#launch)), requires Herdr to detect the matching agent kind,
+and requires the pane's screen to show that CLI's ordinary prompt with no startup dialog
+([readiness check](rules.md#readiness-check)). On some machines a bare `agent` is another
+vendor's CLI, which is why Cursor is always `cursor-agent`.
+
+### Live checks
+
+One read-only panel was run through the router in real Herdr panes, in a fresh directory, with
+the prompt "Respond with exactly ROUTER_SMOKE_OK":
+
+| Provider | Model                         | Result                                                                                             |
+| -------- | ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `grok`   | `grok-4.7` at `high`          | Verified: the pane showed `ROUTER_SMOKE_OK`                                                        |
+| `codex`  | `gpt-6.1-sol` at `high`       | Unverified: interactive update menu at start; Herdr never reported it ready and no prompt was sent |
+| `claude` | `claude-sonnet-5-5` at `high` | Unverified: first-run workspace trust dialog                                                       |
+| `cursor` | `grok-4.7-high`               | Unverified: first-run workspace trust dialog                                                       |
+
+That run predates the readiness check. The router now refuses all three dialogs before
+prompting. Claude, Cursor and Codex become checkable once an operator has opened each CLI
+in the directory and finished its trust or update step.
+
+The same run checked the environment of the real `grok` and `cursor-agent` processes, and of
+a fake executable launched by the final router in a real pane, for API-key and cloud-credential
+variable names and synthetic canary values. None were present, and credential values were never
+read. Persistent CLI logins (config files, OS keychain) are operator-owned and were not changed.
 
 ## Quota mode
 

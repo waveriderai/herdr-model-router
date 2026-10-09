@@ -300,7 +300,23 @@ Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗�
 
 - U1–U5：完成。預設離線角色規則、選配語意分類、原生 CLI 派工、ownership／attempt 與公開協作文件均已實作。
 - 審查修正：五項已驗證的 correctness／security findings 已修正，包含 SQLite transaction ownership guard、真實 provider process 的環境隔離及所有 alias pins 的檢查。
-- 驗證：`npm run verify` 通過，71 個測試檔案／619 個測試，包含 typecheck、lint、format 與 build。移除 ownership guard 或 `env -i` 時，相對應的回歸測試會失敗。
+- 驗證：`npm run verify` 通過，72 個測試檔案／655 個測試，包含 typecheck、lint、format 與 build。移除 ownership guard 或 `env -i` 時，相對應的回歸測試會失敗。
 - 公開內容：tracked snapshot 掃描沒有新增憑證或私人設定；唯一 scanner 命中是與 upstream baseline 完全相同的合成測試 fixture。
-- U6：公開 fork 已建立於 [waveriderai/herdr-model-router](https://github.com/waveriderai/herdr-model-router)，Issues、Discussions 與 private vulnerability reporting 已啟用。獨立真實 Herdr 驗證與 PR CI 尚待完成。
+- U6：公開 fork 已建立於 [waveriderai/herdr-model-router](https://github.com/waveriderai/herdr-model-router)，Issues、Discussions 與 private vulnerability reporting 已啟用。獨立真實 Herdr 驗證已完成；公開 PR 與該 head 的 CI 尚待完成。
 - 下一步：記錄各 provider 的實際支援／未驗證結果，建立同 repo 公開 PR，確認該 head 的 CI 後執行 tier gate。本 repo 的程式路徑屬未映射 scope，若 gate 判為 tier 3，保留可審查的公開 PR 並等待該 head 的 Kai GO。
+
+### U7. Refuse startup dialogs before prompt submission
+
+- Trigger：獨立真實測試發現 Herdr idle／interactive_ready 仍可能代表首次工作區信任畫面。任務文字可能被當成選單熱鍵，無意間變更信任狀態。這是新取得的 runtime 證據，需在公開新版程式前補上 gate。
+- Scope：在初次送出及 writer revision 前檢查當前 pane 的 startup／trust／update 對話框；已知互動畫面、無法讀取或不足以辨識的畫面均不得送 prompt。不自行回答、授予信任、跳過更新、改 auth／permissions 或重送 unknown attempt。
+- Evidence：Grok 真實模型回應已確認；Codex 被更新選單阻擋；Claude 與 Cursor 被信任對話框阻擋。原五項修正與離線 preview／ownership 的獨立檢查均通過。
+- Implementation：同一 Opus writer session 做一個聚焦修正回合，新增對話框拒絕的 regression tests，更新 first-run 文件與精確 provider 支援表。
+- Acceptance：startup dialog 情境必須零 prompt，包含窄 pane 的折行；正常 editor 畫面仍能派工。既有 unknown／sent lane 不重送，既有 Cursor 測試信任狀態不自行修改。完成後跑一次正常 verify，並在 writer 停手後做獨立 focused 驗證，再交付公開 PR／CI／tier gate。
+
+### U7 acceptance result
+
+- U7 已完成。fresh Sonnet 的 51 個獨立情境通過；移除 readiness gate 的負向對照會讓 39 個情境失敗。
+- 真實四 lane panel：Grok 只收到一次 prompt 並回應；Codex 更新畫面、Claude 信任畫面、Cursor 信任／無法辨識的畫面均為零 prompt、零 attempt，未自行回答對話框。
+- provider 支援仍按個別證據呈現：Grok 推論已驗證；其餘三家需操作員先處理首次信任或更新，尚未完成同一路由的模型回應驗證。
+- 非阻擋限制：過窄 pane 可能等到 timeout 才拒絕；可見對話內容引用對話框字樣可能保守拒絕 revision。CLI UI 改版須重新核對 composer patterns。
+- 交付剩餘事項：公開 PR、exact-head CI、tier gate；若屬 tier 3，停在 not merged，等待該 head 的 Kai GO。
