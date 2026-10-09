@@ -445,15 +445,50 @@ describe("skill evidence is a claim the coordinator evaluates (R8, R10)", () => 
     ).toMatchObject({ satisfied: true });
   });
 
+  it("needs no waiver when the first attempt's mode is not this attempt's mode", () => {
+    // The probe: snapshot mode, no mode on this attempt, an honest not-used, no waiver.
+    const notUsed = {
+      ...applied,
+      status: "not-used" as const,
+      reason: "not requested for this revision",
+    };
+    expect(
+      evaluateSkillEvidence({ snapshot, modes: [], skills: [notUsed], waived: [] }),
+    ).toMatchObject({ satisfied: true, problems: [], waivedClaims: [] });
+    // Omitting the inactive mode's claim is not a problem either.
+    expect(evaluateSkillEvidence({ snapshot, modes: [], skills: [], waived: [] })).toMatchObject({
+      satisfied: true,
+    });
+    // Re-armed, the same claim fails.
+    expect(
+      evaluateSkillEvidence({ snapshot, modes: ["poteto-mode"], skills: [notUsed], waived: [] })
+        .satisfied,
+    ).toBe(false);
+  });
+
   it("needs an explicit waiver for a required skill reported not-used, and records it", () => {
+    const ordinary = {
+      ...snapshot,
+      skills: snapshot.skills.map((skill) => ({ ...skill, mode: false })),
+    };
     const notUsed = { ...applied, status: "not-used" as const, reason: "nothing to apply" };
-    const plain = evaluateSkillEvidence({ snapshot, modes: [], skills: [notUsed], waived: [] });
+    const plain = evaluateSkillEvidence({
+      snapshot: ordinary,
+      modes: [],
+      skills: [notUsed],
+      waived: [],
+    });
     expect(plain.satisfied).toBe(false);
     expect(plain.problems.join("; ")).toContain(
       "not-used (nothing to apply) although it is required",
     );
     expect(
-      evaluateSkillEvidence({ snapshot, modes: [], skills: [notUsed], waived: ["poteto-mode"] }),
+      evaluateSkillEvidence({
+        snapshot: ordinary,
+        modes: [],
+        skills: [notUsed],
+        waived: ["poteto-mode"],
+      }),
     ).toMatchObject({
       satisfied: true,
       waivedClaims: [{ name: "poteto-mode", status: "not-used", reason: "nothing to apply" }],

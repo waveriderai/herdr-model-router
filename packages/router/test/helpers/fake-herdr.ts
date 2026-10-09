@@ -57,6 +57,45 @@ export interface FakePane {
   session?: string;
   /** Working directory Herdr reports; the split cwd by default. */
   cwd?: string;
+  /** Where the reported session came from (`herdr pane report-agent-session --source`). */
+  sessionSource?: string;
+  /** Text typed into the CLI's input box and not yet submitted. */
+  input?: string;
+  /**
+   * How many screen reads after typing still show the input box as it was before: the CLI
+   * repaints asynchronously. 0 (default) shows typed text at once.
+   */
+  echoLag?: number;
+  /** How the CLI draws typed input (its SGR styling); plain text by default. */
+  inputStyle?: (text: string) => string;
+  /** Output the CLI printed above its input box, oldest first. */
+  history?: string;
+  /** What this Codex prints for its native `/status` command; undefined prints nothing. */
+  statusCard?: string;
+  /**
+   * A `/status` card Codex paints over several reads instead: each read after Enter shows the
+   * next frame, and the last frame stays. Takes the place of `statusCard`.
+   */
+  statusFrames?: string[];
+  /** Which `statusFrames` frame the next read shows; set when `/status` is entered. */
+  statusFrame?: number;
+  /** Lines submitted with Enter that were not a slash command the fake knows. */
+  submitted?: string[];
+}
+
+/** The screen Herdr shows for a pane: its history, then its screen with the typed input. */
+function renderPane(pane: FakePane): string | undefined {
+  if (pane.screen === undefined) return undefined;
+  const style = pane.inputStyle ?? ((text: string) => text);
+  const typed = pane.input
+    ? pane.screen.replace(/^› .*$/m, () => `› ${style(pane.input!)}`)
+    : pane.screen;
+  const frames = pane.statusFrames;
+  const painting =
+    frames && pane.statusFrame !== undefined
+      ? frames[Math.min(pane.statusFrame, frames.length - 1)]!
+      : "";
+  return `${pane.history ?? ""}${painting}${typed}`;
 }
 
 export interface FakeHerdr extends HerdrClient {
@@ -64,7 +103,7 @@ export interface FakeHerdr extends HerdrClient {
   prompts: { target: string; text: string }[];
   scripts: string[];
   panes: Map<string, FakePane>;
-  pane: Pick<HerdrPaneClient, "getAgent" | "readPane">;
+  pane: Pick<HerdrPaneClient, "getAgent" | "readPane" | "sendText" | "sendKeys">;
   reads: string[];
 }
 
@@ -81,6 +120,14 @@ export function fakeHerdr(
     close?: (paneId: string) => boolean;
     onRename?: (paneId: string, name: string) => void;
     onGetAgent?: (target: string) => void;
+    /**
+     * Overrides what `herdr pane report-agent-session` does. By default Herdr stores the
+     * reported id on the pane only for the provider's supported session channel.
+     */
+    report?: (
+      paneId: string,
+      input: { source: string; agent: string; sessionId: string },
+    ) => CommandResult | undefined;
   } = {},
 ): FakeHerdr {
   const calls: string[][] = [];
@@ -159,6 +206,24 @@ export function fakeHerdr(
         ok(JSON.stringify({ result: { agent: { agent_status: "working" } } }))
       );
     },
+    async reportAgentSession(input) {
+      calls.push([
+        "pane",
+        "report-agent-session",
+        input.paneId,
+        input.source,
+        input.agent,
+        input.sessionId,
+      ]);
+      const overridden = script.report?.(input.paneId, input);
+      if (overridden) return overridden;
+      const pane = panes.get(input.paneId);
+      if (!pane || pane.gone) return failed("", "pane_not_found");
+      if (input.source !== `herdr:${input.agent}`) return ok();
+      pane.session = input.sessionId;
+      pane.sessionSource = input.source;
+      return ok();
+    },
     async closePane(paneId) {
       calls.push(["pane", "close", paneId]);
       if (script.close?.(paneId) === false) return failed("", "pane close failed");
@@ -185,7 +250,42 @@ export function fakeHerdr(
       async readPane(paneId) {
         reads.push(paneId);
         const pane = panes.get(paneId);
-        return pane && !pane.gone ? pane.screen : undefined;
+        if (!pane || pane.gone) return undefined;
+        if (pane.input && (pane.echoLag ?? 0) > 0) {
+          pane.echoLag! -= 1;
+          // The box as it was: Codex draws its placeholder dim.
+          const before = pane.screen?.replace(/^› (.*)$/m, "› \u001b[2m$1\u001b[0m");
+          return renderPane({ ...pane, input: "", ...(before ? { screen: before } : {}) });
+        }
+        const rendered = renderPane(pane);
+        if (pane.statusFrame !== undefined) pane.statusFrame += 1;
+        return rendered;
+      },
+      async sendText(paneId, text) {
+        calls.push(["pane", "send-text", paneId, text]);
+        const pane = panes.get(paneId);
+        if (!pane || pane.gone) return failed("", "pane_not_found");
+        pane.input = `${pane.input ?? ""}${text}`;
+        return ok();
+      },
+      async sendKeys(paneId, keys) {
+        calls.push(["pane", "send-keys", paneId, ...keys]);
+        const pane = panes.get(paneId);
+        if (!pane || pane.gone) return failed("", "pane_not_found");
+        for (const key of keys) {
+          if (key !== "enter") continue;
+          const line = pane.input ?? "";
+          pane.input = "";
+          // Codex runs `/status` locally: it prints the card and starts no model turn.
+          if (pane.kind === "codex" && line === "/status") {
+            if (pane.statusFrames) pane.statusFrame = 0;
+            else pane.history = `${pane.history ?? ""}${pane.statusCard ?? ""}`;
+          } else if (line !== "") {
+            pane.submitted = [...(pane.submitted ?? []), line];
+            pane.status = "working";
+          }
+        }
+        return ok();
       },
     },
   };

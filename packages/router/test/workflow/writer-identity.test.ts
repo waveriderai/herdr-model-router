@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { dispatchPlan, reviseTask } from "../../src/rules/dispatch.js";
 import { worktreeIdentity } from "../../src/rules/rules-source.js";
-import { fakeHerdr } from "../helpers/fake-herdr.js";
+import { fakeHerdr, screen } from "../helpers/fake-herdr.js";
 import { harness, type Harness } from "../helpers/workflow-harness.js";
 
 /** A rules-mode writer task (no workflow) started in the harness repository. */
@@ -75,7 +75,10 @@ describe("rules-mode writer continuity is bound to its native session (R8, R17)"
   });
 
   it("does not start a writer whose Herdr record lacks a session, but still runs read-only lanes", async () => {
-    const herdr = fakeHerdr({ detect: () => ({ session: undefined }) });
+    // Codex lanes bind their session from their own /status; Claude has no such fallback.
+    const herdr = fakeHerdr({
+      detect: () => ({ session: undefined, statusCard: screen("codex-status") }),
+    });
     const h = harness({ herdr });
     const writer = h.deps.planRole({ role: "writer", cwd: h.repo, readOnly: false });
     if (!writer.ok) throw new Error(writer.error);
@@ -100,5 +103,23 @@ describe("rules-mode writer continuity is bound to its native session (R8, R17)"
       "prompted",
       "prompted",
     ]);
+    // The Codex verifier lane shares the startup probe: its session came from its /status.
+    const codexPane = reviewed.ok ? reviewed.lanes[0]!.paneId! : "";
+    expect(h.herdr.panes.get(codexPane)).toMatchObject({ sessionSource: "herdr:codex" });
+  });
+
+  it("closes a Codex verifier lane whose /status shows no session, and runs the others", async () => {
+    const herdr = fakeHerdr({ detect: () => ({ session: undefined }) });
+    const h = harness({ herdr });
+    const panel = h.deps.planRole({ role: "checkers", cwd: h.repo, readOnly: true });
+    if (!panel.ok) throw new Error(panel.error);
+    const reviewed = await dispatchPlan({
+      plan: panel.plan,
+      prompt: "Review",
+      worktreeId: worktreeIdentity(h.repo),
+      deps: h.dispatch,
+    });
+    expect(reviewed.ok && reviewed.lanes.map((lane) => lane.state)).toEqual(["failed", "prompted"]);
+    expect(h.herdr.prompts).toHaveLength(1);
   });
 });

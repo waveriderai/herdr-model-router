@@ -251,15 +251,31 @@ stateDiagram-v2
 
 ## Verification Contract
 
+### U8. Native Codex startup identity
+
+- Goal：Codex 尚未觸發 SessionStart hook 時，仍能在第一次任務派送前取得真實身分。
+- Requirements：R5、R12、R15、R16。
+- Evidence：目前 CLI 在 ready 狀態沒有 Herdr session，native `/status` 已顯示 UUID；第一個不使用工具的診斷回應後，SessionStart hook 回報相同 UUID。不能用生成的 UUID、推測最近 session 或先派送 writer 任務來處理。
+- Decision：只有 Codex 已 ready、kind／cwd／agent identity 符合且 session 缺失時，可執行原生唯讀 `/status` 啟動查詢，從該 pane 的 UI 擷取唯一 UUID，透過 Herdr 的 session report API 登記並讀回驗證。這不是模型交辦；original task 仍只送一次。已有 session 時完全略過查詢。Hook 後續回報必須與綁定身分相同。
+- Scope：native launch adapter、必要的 Herdr client port、synthetic startup tests、operators docs；不改 provider login、模型、permissions 或 native hook 的安全 guard，不讀 transcript／credential files，不保留 status 的帳戶或用量內容。
+- Verification：離線 tests 證明查詢只在正確邊界執行、無原始任務重送，缺少／多個／不符的 UUID 都拒絕；原生 Codex coordinator 與 writer 的後續 hook UUID 和綁定一致，工具 context 為實際新 pane。
+- Native regression：首次查詢安全拒絕，因共享 input parser 把 `48;2;65;69;76` 的 RGB 參數 `2` 當成 SGR dim，導致實際 `/status` 被視為空白。修正須跳過 extended color 子參數，保留真正 dim placeholder 的辨識；不能略過 echo gate 或把任何文字都當成可送出。
+
 公開檢查使用 `npm run verify`；私有 AGC 使用 staged source 的 `python3 -m unittest discover -s tests -p 'test_*.py'`，不接真實資料或憑證。先做針對新契約的行為測試，最後在必要 gate 跑完整 suite，不因技能疊加重跑相同證據。
 
 獨立審查必須涵蓋 route provenance、exact cwd／session、race／unknown recovery、skills與authority分離、legacypins／locks及公開內容衛生。原生驗收與stub測試分開報告；provider因dialog未完成不能標成live pass。
 
 ## Definition of Done
 
-U1–U7 的結果與驗證證據寫入本計畫的交付紀錄。三 provider 的新rules-route可工作，既有legacy流程不受破壞，requested skills可按任務傳遞且缺失不會誤判。使用者只輸入任務時由MDC coordinator完成解讀及角色分派。公開PR只含reviewed source／docs／tests，所有 gate通過並依授權交付；私有工具有可回復備份，已完成lease與pane cleanup，無遺留實驗程式。
+U1–U8 的結果與驗證證據寫入本計畫的交付紀錄。三 provider 的新rules-route可工作，既有legacy流程不受破壞，requested skills可按任務傳遞且缺失不會誤判。使用者只輸入任務時由MDC coordinator完成解讀及角色分派。公開PR只含reviewed source／docs／tests，所有 gate通過並依授權交付；私有工具有可回復備份，已完成lease與pane cleanup，無遺留實驗程式。
 
 ## Delivery Evidence
+
+U8 與原生修正已完成 898 個測試的完整 gate；Codex 延遲刷新與 UUID 換行都有針對性 red／green tests，從真實 UI 擷取 UUID 後經 Herdr 的 `herdr:codex` 支援來源登記並讀回。獨立 Sonnet 已審查，Codex 新 coordinator 的工具 cwd／pane／thread 均與實際綁定一致。Grok 的兩 attempt 原生 writer／reviewer、poteto 第一交辦套用與第二交辦未 re-arm、local delivery 及 lease release 已驗收；預設 Codex coordinator 正在執行 Claude bug-fix 與 Codex code-generation 的序列流程，尚未宣稱全部完成。
+
+使用者已在本次任務明確授權處理必要 CLI 提示、安裝 Grok／Herdr 整合，並持續到經審查與 CI 通過後合併及 DevPro 本機啟用，不再逐步確認。此授權涵蓋本任務必要修正後的最終 head；品質 gate、精確 head 比對、既有訂閱與單 writer 規則保留。Grok integration 已安裝，新的 bootstrap 已取得真實 session ID 並派出 writer，沒有偽造 session 或放寬身分 gate。
+
+原生驗收確認需要補正 R7：原始 brief 的 mode 必須列入 required，但不能因此在未 re-arm 的 revision 保持強制套用。新增設計澄清：snapshot 中原始 mode 的 required 義務只在該 attempt 的 modes 包含它時生效；一般 required skills 維持每次交辦的義務，revision 明確新增的 mode 仍需套用。inactive mode 只提供來源指標，不能透過 prompt 標籤或驗收 gate 自動重新啟用。Codex 的純函式 probe 已重現缺陷，修正回到同一 Opus writer，private AGC 不需要改動。
 
 U1–U5、U7 已完成第一輪實作，尚未驗收交付。DevPro 的同一個 `claude-opus-5-5` session 實際執行 ce-work return-to-caller，`npm run verify` 通過 91 個 test files、824 個 tests。私有 staged AGC 通過 146／148 個 tests，另外兩項缺少 staging 的 entrypoint／真實專案設定；既有設定只會以唯讀方式驗證，不複製設定或憑證。
 

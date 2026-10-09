@@ -20,6 +20,10 @@ and released under a single tag.
   its verifiers (`workflow revise --mode`), `hmr.result/v2` skill claims, and an acceptance
   gate over the writer's and every verifier lane's claims that fails closed on a missing or
   altered record (`workflow accept --waive-skill` for an evaluated skip, recorded per lane).
+  A first attempt's mode is not required on a revision that does not request it again.
+- A fresh Codex lane, writer, verifier or coordinator, is bound to the session its own native
+  `/status` shows (no model turn), reported to Herdr as `herdr:codex` and read back
+  before any task is sent; a missing, ambiguous or mismatched id closes the pane.
 - `hmr start "<task>"`: starts the rules file's `coordinator` role as a native CLI and gives it
   the model-router skill, the roles, the skills catalog, the exact quoted commands (rules
   file, its own descriptor as parent, skills roots, router home), and the task once;

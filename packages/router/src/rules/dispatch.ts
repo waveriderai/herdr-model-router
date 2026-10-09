@@ -32,6 +32,7 @@ import {
   type NativeLaunch,
 } from "./native-argv.js";
 import type { RoutePlan } from "./plan.js";
+import { ensureCodexSession } from "./codex-identity.js";
 import {
   canonicalCwd,
   compareIdentity,
@@ -53,7 +54,7 @@ export interface DispatchDeps {
   store: DispatchRepository;
   herdr: HerdrClient;
   /** Agent lookup and screen reads, used only on panes this task owns. */
-  pane: Pick<HerdrPaneClient, "getAgent" | "readPane">;
+  pane: Pick<HerdrPaneClient, "getAgent" | "readPane" | "sendText" | "sendKeys">;
   /** Runs `<absolute executable> --help` without a shell. */
   probeHelp: (executable: string) => Promise<CommandResult>;
   /** Absolute path of an executable on the router's PATH, or undefined. Reads only. */
@@ -385,7 +386,8 @@ export function orphanNote(paneId: string, closed: boolean): string {
 /**
  * Starts one native CLI in a new pane, with no task: split the pane, run the CLI from the
  * pane's own shell through `env -i`, wait until Herdr and the screen both show the CLI ready
- * with no startup dialog, then name the agent. Any failure after the pane exists closes that
+ * with no startup dialog, then name the agent. A Codex that has not reported its session yet
+ * gets it bound from its own `/status` (no model turn). Any failure after the pane exists closes that
  * pane and reports whether the close was confirmed. Shared by rules-mode dispatch and both
  * workflow backends; it never sends a prompt.
  */
@@ -463,6 +465,20 @@ export async function startNativeAgent(input: {
   const renamed = await deps.herdr.renameAgent(paneId, agentName);
   if (!renamed.ok) {
     return closeWith(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
+  }
+  if (launch.kind === "codex") {
+    // Codex's hook reports its session only with the first model turn; see codex-identity.
+    const session = await ensureCodexSession(
+      {
+        herdr: deps.herdr,
+        pane: deps.pane,
+        sleep: deps.sleep ?? sleepFor,
+        timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        pollMs: deps.pollMs ?? DEFAULT_POLL_MS,
+      },
+      { paneId, agentName, cwd: input.cwd },
+    );
+    if (!session.ok) return closeWith(session.error);
   }
   return { ok: true, paneId, agentName };
 }

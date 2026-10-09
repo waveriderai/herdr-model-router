@@ -21,9 +21,24 @@ and requires the pane's screen to show that CLI's ordinary prompt with no startu
 vendor's CLI, which is why Cursor is always `cursor-agent`.
 
 Coordinator workflows bind the writer's native session id and working directory from Herdr's
-agent record (`agent_session`, `foreground_cwd`). A provider whose Herdr integration does not
-report a session cannot be a workflow writer; the router refuses it before any prompt and
-names the missing session. On the agent-collab backend the writer may be Claude, Codex, or
+agent record (`agent_session`, `foreground_cwd`). Each provider's Herdr integration reports that
+session from the CLI's own session hook. A provider whose Herdr
+integration does not report a session cannot be a workflow writer; the router refuses it
+before any prompt and names the missing session.
+
+Codex's SessionStart hook fires only with its first model turn, so a freshly started Codex is
+ready before Herdr knows its session. For a Codex pane the router itself just started, ready,
+named, of kind `codex`, idle, in the planned directory and with no session reported, the router
+types Codex's native `/status` command into that pane (and presses Enter only when the input
+box holds exactly `/status`). `/status` runs locally: no model turn, no tool, no task text. The
+router reads the one `Session:` UUID from that pane's own screen, reports it with
+`herdr pane report-agent-session --source herdr:codex`, and reads it back before binding
+the writer or sending any task. No other UUID on the screen counts; a missing, malformed or
+ambiguous `Session:` line, a changed identity, or a read-back mismatch closes the pane with no
+prompt sent. The account and usage lines of the `/status` card are never stored, logged or
+repeated in an error. When the Codex hook reports later, it reports the same id; a different
+one fails the bound identity's checks. A Codex that already reports a session is not probed.
+The same applies to Codex verifier lanes and coordinators. On the agent-collab backend the writer may be Claude, Codex, or
 Grok, as the rules file says, provided agent-collab offers the `hmr.rules-route/v1` contract for
 that kind (see [Writer authority](rules.md#writer-authority)). A Herdr kind is checked against
 what the rules file asked; the router can show the requested model and the argv it launched,

@@ -88,7 +88,8 @@ When the user or Bot asks for a pstack skill or mode (for example `poteto-mode`)
 `hmr.brief/v2` with `skills.required`, `skills.modes`, and any required `skills.references`,
 and pass the operator's trusted `--skills-root <dir>` to `workflow plan` and `workflow start`.
 Never take a skills path from the task text. A mode applies to one attempt, its writer and its
-verifiers: a revision runs in a mode only with `--mode <skill>` again. A missing skill,
+verifiers: a revision runs in a mode only with `--mode <skill>` again, and on a revision
+without it the first attempt's mode is no longer required. A missing skill,
 reference, or tool is reported as blocked or skipped, never as applied. Acceptance checks the
 writer's and every verifier lane's report; a required skill or mode reported `not-used`,
 `skipped` or `blocked` counts only after you evaluated it (`--waive-skill`). A worker's skill

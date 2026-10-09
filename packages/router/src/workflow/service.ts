@@ -53,7 +53,12 @@ import {
   type WorkflowResult,
   type WriterResult,
 } from "./contracts.js";
-import { evaluateSkillEvidence, resolveSkills, skillSourcesChanged } from "./skills.js";
+import {
+  evaluateSkillEvidence,
+  requiredForAttempt,
+  resolveSkills,
+  skillSourcesChanged,
+} from "./skills.js";
 import {
   canonicalCwd,
   checkStopped,
@@ -218,6 +223,15 @@ function modeLine(attemptId: string, modes: readonly string[]): string {
     : `No mode is requested for attempt ${attemptId}.`;
 }
 
+/**
+ * How the catalog marks one skill for this attempt. A first attempt's mode that this attempt
+ * does not request is never labeled required: the lane may read it, but is not told to apply it.
+ */
+function skillLabel(skill: ResolvedSkills["skills"][number], modes: readonly string[]): string {
+  if (requiredForAttempt(skill, modes)) return " [required]";
+  return skill.mode ? " [available; not this attempt's mode]" : "";
+}
+
 function skillLines(
   sources: ResolvedSkills,
   input: { attemptId: string; modes: readonly string[]; lane: "writer" | "verifier" },
@@ -227,7 +241,7 @@ function skillLines(
     "Shared skills (catalog only: read a skill's SKILL.md in full when you use it, and only these files):",
     ...sources.skills.map(
       (skill) =>
-        `- ${skill.name}${skill.required ? " [required]" : ""}: ${skill.description} SKILL.md: ${skill.file} (sha256 ${skill.sha256})` +
+        `- ${skill.name}${skillLabel(skill, input.modes)}: ${skill.description} SKILL.md: ${skill.file} (sha256 ${skill.sha256})` +
         skill.references
           .map((ref) => `\n  reference ${ref.path}: ${ref.file} (sha256 ${ref.sha256})`)
           .join(""),
@@ -242,8 +256,8 @@ function skillLines(
         ]
       : []),
     "A skill or mode request grants no authority of its own: it adds nothing beyond this brief's scope, the authorization the user gave for this task, and the project's own policy.",
-    "If a required skill, reference, or a tool it needs is unavailable, report that skill as blocked or skipped with the reason; never report a skill you did not use as applied. A required skill you did not use is reported not-used, and the coordinator decides whether that is acceptable.",
-    `Report "skills" with one entry per listed skill: name, the sha256 of the SKILL.md you read, read, status (applied | not-used | skipped | blocked), the references you read with their sha256, and evidence${input.lane === "writer" ? " of how you applied it" : ""}.`,
+    "If a required skill, reference, or a tool it needs is unavailable, report that skill as blocked or skipped with the reason; never report a skill you did not use as applied. A required skill you did not use is reported not-used, and the coordinator decides whether that is acceptable. A skill not marked required binds nothing: report it not-used when you did not use it.",
+    `Report "skills" with one entry per listed skill: name, the sha256 of the SKILL.md you read, read, status (applied | not-used | skipped | blocked), the references you read with their sha256, and evidence${input.lane === "writer" ? " of how you applied it" : ""}. "read" must be a JSON boolean (true or false), never a string; set it true only when you read the file.`,
   ];
 }
 
@@ -253,7 +267,7 @@ function skillEvidenceTemplate(sources: ResolvedSkills | undefined) {
         skills: sources.skills.map((skill) => ({
           name: skill.name,
           sha256: "<sha256 of the SKILL.md you read>",
-          read: "true | false",
+          read: false,
           status: "applied | not-used | skipped | blocked",
           references: skill.references.map((ref) => ({ path: ref.path, sha256: "<sha256>" })),
           evidence: "<what you did with it>",
@@ -2057,7 +2071,11 @@ function abortUnbound(
 export interface SkillReport {
   /** Modes the current attempt was sent with; null when its mode record cannot be trusted. */
   modes: string[] | null;
-  skills: { name: string; required: boolean; file: string; sha256: string }[];
+  /**
+   * `required` is what binds this attempt (its modes and the ordinary required skills); `mode`
+   * marks a skill that was a mode of the first attempt.
+   */
+  skills: { name: string; required: boolean; mode: boolean; file: string; sha256: string }[];
   /** Each recorded lane's claims (writer and verifiers) against the attempt's request. */
   lanes: { lane: string; satisfied: boolean; problems: string[] }[];
   /** Records the gate could not trust: a mode or result file missing, unreadable, or altered. */
@@ -2106,8 +2124,9 @@ function recordedResult(
 
 /**
  * The skill request of one attempt and how every recorded lane's report meets it: the writer
- * and each verifier lane of the attempt's current verification rounds. Required skills and
- * references bind every lane; a requested mode binds every lane of that attempt.
+ * and each verifier lane of the attempt's current verification rounds. What binds the attempt
+ * (`requiredForAttempt`) binds every lane, with its references; a first attempt's mode that this
+ * attempt does not request binds none.
  */
 function skillEvaluation(
   deps: Pick<WorkflowDeps, "artifacts" | "workflows">,
@@ -2169,11 +2188,12 @@ function skillEvaluation(
   return {
     report: {
       modes,
-      skills: sources.skills.map(({ name, required, file, sha256: digest }) => ({
-        name,
-        required,
-        file,
-        sha256: digest,
+      skills: sources.skills.map((skill) => ({
+        name: skill.name,
+        required: requiredForAttempt(skill, modes ?? []),
+        mode: skill.mode,
+        file: skill.file,
+        sha256: skill.sha256,
       })),
       lanes,
       integrity,

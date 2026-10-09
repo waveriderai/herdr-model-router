@@ -96,8 +96,12 @@ and add `skills`. See `examples/workflow/bot-brief.example.json`.
   operator also passes the pstack repository as a `--skills-root`. Nothing else is read.
 - `modes` must also be `required`. A mode applies to the first attempt only, to its writer and
   its verifiers; a revision runs in a mode only when you pass `--mode <skill>` to
-  `workflow revise` again. No hook keeps it on. Verifiers stay read-only in a mode: they skip
-  any write-only step and name it in the skill's `reason`.
+  `workflow revise` again (it may also name an optional skill the workflow resolved).
+  No hook keeps it on. Verifiers stay read-only in a mode: they skip any write-only step and
+  name it in the skill's `reason`.
+- An attempt requires its own modes and every required skill that was not a first-attempt
+  mode. On a revision without `--mode`, the first attempt's mode is listed as available, not
+  required; a lane may report it `not-used` or leave it out, and no waiver is needed.
 - A missing root, skill, reference, or a changed source refuses before anything starts (or
   before a revision, verification, or acceptance), and nothing is reported as enabled.
 - The writer and verifiers get each skill's name, description, SKILL.md path and SHA-256, and
@@ -105,7 +109,7 @@ and add `skills`. See `examples/workflow/bot-brief.example.json`.
   `hmr.result/v2`, whose `skills` entries say what they read and whether each skill was
   `applied`, `not-used`, `skipped` or `blocked`, with evidence or a reason.
 - `workflow accept` refuses while the writer's or any verifier lane's report does not match the
-  bound sources and required references, or a required skill or mode is not `applied`. A
+  bound sources and required references, or a skill the attempt requires is not `applied`. A
   `not-used`, `skipped` or `blocked` required skill or mode counts only when you evaluated the
   reason and pass `--waive-skill <skill>`; a waiver must name something a lane did not apply,
   and it is recorded with the lane, status and reason. A missing or altered mode or result

@@ -42,6 +42,12 @@ Schema version 5 adds `worktree_bindings`, `workflows`, `workflow_attempts`,
 `session_id` and `session_cwd` of each writer lane. Existing tasks are kept; a writer task from
 before version 5 has no bound session, so it cannot take revisions or join a workflow.
 
+A fresh Codex has no session in Herdr until its first model turn. The router binds it from
+Codex's own `/status` instead (reported through Herdr's `herdr:codex` session channel; see
+[provider support](provider-support.md)). If that fails, the lane fails with the reason and
+its pane is closed; nothing was prompted. Open Codex yourself in that directory to see what
+`/status` shows, then route again.
+
 The router home must be outside the checkouts it writes for: `workflow`, `task`, and rules-mode
 launches, and real quota-mode runs, refuse a `MODEL_ROUTER_HOME` inside the target checkout (compared by real path, so a
 symlink alias counts) before creating any state.

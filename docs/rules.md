@@ -310,12 +310,17 @@ of the raw file bytes, as `shasum -a 256` prints them.
   references), never the skill bodies, plus the mode requested for that one attempt and a
   statement that no skill or mode adds authority. The attempt's mode applies to its verifiers
   too; they stay read-only, skip any write-only step, and name it in the skill's `reason`. A
-  revision runs in a mode only with `workflow revise --mode <skill>`.
+  revision runs in a mode only with `workflow revise --mode <skill>`, which may also name an
+  optional skill the workflow resolved.
+- What an attempt requires is its own modes plus every required skill that was not a mode of
+  the first attempt. A first attempt's mode is required there only because it is a mode: on a
+  revision without `--mode` for it, the prompts list it as available, not required, and do not
+  tell any lane to apply it, and a `not-used` or missing report for it needs no waiver.
 - Verify, revise, and accept refuse once a bound skill file changed.
 - Results at `hmr.result/v2` report each skill's digest, whether it was read, and `applied`,
   `not-used`, `skipped`, or `blocked`. `workflow accept` refuses until the writer's report and
   every verifier lane's report match the bound digests and required references, and every
-  required skill and requested mode is `applied`. A required skill or mode a lane reported
+  skill the attempt requires is `applied`. A required skill or mode a lane reported
   `not-used`, `skipped` or `blocked` counts only with `--waive-skill <skill>`; each waiver must
   name something a lane did not apply, and is written to `waivers-<attempt>.json` and the
   acceptance evidence with the lane, status and reason. A wrong SKILL.md digest, a missing report or a

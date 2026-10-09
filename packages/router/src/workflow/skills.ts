@@ -299,9 +299,23 @@ export function skillSourcesChanged(snapshot: ResolvedSkills): string[] {
 }
 
 /**
+ * Whether one resolved skill binds an attempt. Every mode of this attempt does, including a
+ * re-armed mode or an optional skill requested as a mode. A required skill that was not one of
+ * the first attempt's modes does on every attempt. A first attempt's mode was required only
+ * because it was a mode: on an attempt that does not request it, it is an available pointer.
+ * Prompts and the acceptance gate both use this, so they never disagree.
+ */
+export function requiredForAttempt(
+  skill: ResolvedSkills["skills"][number],
+  modes: readonly string[],
+): boolean {
+  return modes.includes(skill.name) || (skill.required && !skill.mode);
+}
+
+/**
  * Whether one lane's skill claims meet what its attempt asked. Claims are not proof: this only
- * checks that the lane says it read the exact sources and applied each requested mode. A
- * required skill or mode the lane did not apply (skipped, blocked, or not used) counts only
+ * checks that the lane says it read the exact sources and applied each skill this attempt
+ * requires (see `requiredForAttempt`). A required skill or mode the lane did not apply (skipped, blocked, or not used) counts only
  * when the coordinator explicitly waives that skill after evaluating the reason; a waiver
  * never covers a wrong SKILL.md digest or a missing report. Applied claims must report every
  * bound reference. Waiving a skipped skill records that the whole skill was not applied,
@@ -322,7 +336,7 @@ export function evaluateSkillEvidence(input: {
   const waivedClaims: { name: string; status: string; reason?: string }[] = [];
   for (const skill of input.snapshot.skills) {
     const mode = input.modes.includes(skill.name);
-    if (!skill.required && !mode) continue;
+    if (!requiredForAttempt(skill, input.modes)) continue;
     const claim = input.skills?.find((entry) => entry.name === skill.name);
     if (!claim) {
       problems.push(`${skill.name}: no evidence reported`);
