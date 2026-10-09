@@ -8,5 +8,5 @@ coverage/
 .DS_Store
 *.tgz
 .worktrees/
-.model-router/
+/.model-router/
 graphify-out/

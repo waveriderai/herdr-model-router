@@ -11,6 +11,30 @@ and released under a single tag.
 
 ### Added
 
+- Rules mode, now the default for `router run`: routes an explicit `--role` from a
+  `pstack-models.mdc` role table (`--rules`, the project's `.model-router/` or `.cursor/rules/`,
+  then `~/.cursor/rules/`). New `roles` and `plan` commands and rules-mode `run --dry-run` read
+  files only. Lanes use `provider:model@effort` with exact native model ids; the legacy
+  `grok-4.7-xhigh-fast` selector maps to native `grok:grok-4.7@xhigh`. Panels launch every
+  lane read-only; writer tasks own their worktree, take revisions in the same pane, and close
+  only with evidence (`task status|revise|complete|release|recover`). Prompt attempts are
+  recorded and never resent while their outcome is unknown.
+- Project policy in `.model-router/policy.json`: allowed providers, exact pins, writer roles.
+- Native grok CLI support (Herdr kind `grok`), with read-only modes enforced per provider.
+- Native CLIs start in their pane through `/usr/bin/env -i` with a short variable allowlist
+  read from that pane's shell, so provider API keys and cloud credentials exported by shell rc
+  files never reach them. Herdr must detect the expected agent kind before the router names or
+  prompts it.
+- `hmr` as a second name for the CLI; `NOTICE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+  `AGENTS.md`, issue and pull request templates, and a GitHub `verify` workflow.
+
+### Changed
+
+- `router run` without `--routing-mode` no longer calls TypeSafe. The upstream ranking is
+  `--routing-mode quota`; `--session`, `--worktree`, `--usage`, and `--no-enrich` require it.
+  `--routing-mode semantic` lets TypeSafe pick a role from the rules file for one run.
+- `npm run verify` builds the heartbeat package first, so it passes from a clean checkout.
+
 - Live effort switching for Opus 5.5 and GPT 6 Astra, opt-in with `liveEffort.enabled`.
   `router run --session <id>` continues the next phase in the previous pane when TypeSafe
   picks the same account and model, changing the effort in place instead of opening a new

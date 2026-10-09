@@ -1,5 +1,27 @@
 # Provider support
 
+## Rules mode
+
+Rules mode builds each lane's argv from the descriptor and checks it against the installed
+CLI's `--help` before every launch. Versions checked locally for this release (help text only;
+no live launch):
+
+| Provider   | CLI checked                                     | argv (writer / read-only extra)                                                |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| `claude`   | Claude Code 2.1.295                             | `claude --model <id> [--effort <e>]` / `--permission-mode plan`                |
+| `codex`    | codex-cli 0.161.0                               | `codex --model <id> [-c model_reasoning_effort="<e>"]` / `--sandbox read-only` |
+| `grok`     | grok 1.0.50 (native xAI CLI, Herdr kind `grok`) | `grok --model <id> [--reasoning-effort <e>]` / `--permission-mode plan`        |
+| `cursor`   | Cursor Agent 2026.10.01 (`cursor-agent`)        | `cursor-agent --model <id>` / `--mode plan`                                    |
+| `opencode` | not installed here                              | `opencode --model <provider/model>`; read-only lanes refused                   |
+
+The router starts the absolute executable it resolved on `PATH` inside the new pane (through
+`env -i`, see [Rules mode](rules.md#launch)) and then requires Herdr to detect the matching
+agent kind. On some machines a bare `agent` is another vendor's CLI, which is why Cursor is
+always `cursor-agent`. Live pane launches for each provider are not yet verified in this
+release.
+
+## Quota mode
+
 Availability and quota still come from collectors. The catalog is operator-curated
 launch profiles, not a claim that a model is currently offered.
 

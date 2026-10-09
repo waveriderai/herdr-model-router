@@ -5,7 +5,7 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-echo "Agent Router — recent sessions"
+echo "Herdr Model Router — recent sessions"
 echo
 router session --list --limit "${ROUTER_SESSION_LIMIT:-20}" || true
 

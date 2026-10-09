@@ -67,13 +67,25 @@ describe("cli entrypoint", () => {
   it("passes --no-enrich through to executeRun", async () => {
     const io = capture();
     const run = vi.fn().mockResolvedValue({ code: 0, output: "", json: {} });
-    await runCli(["node", "router", "run", "refactor PR 9", "--dry-run", "--no-enrich"], {
-      stdout: io.stdout,
-      stderr: io.stderr,
-      env: { MODEL_ROUTER_HOME: tempHome() },
-      run,
-      runDeps: {} as never,
-    });
+    await runCli(
+      [
+        "node",
+        "router",
+        "run",
+        "--routing-mode",
+        "quota",
+        "refactor PR 9",
+        "--dry-run",
+        "--no-enrich",
+      ],
+      {
+        stdout: io.stdout,
+        stderr: io.stderr,
+        env: { MODEL_ROUTER_HOME: tempHome() },
+        run,
+        runDeps: {} as never,
+      },
+    );
     expect(run).toHaveBeenCalledWith(
       "refactor PR 9",
       expect.objectContaining({ noEnrich: true }),

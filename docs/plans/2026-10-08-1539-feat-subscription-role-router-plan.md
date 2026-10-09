@@ -161,13 +161,13 @@ stateDiagram-v2
 
 Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗證落實。
 
-| Input | Meaning |
-|---|---|
-| provider:model@effort | 明確 native route |
-| 已知 legacy selector | 明確解析 family/model/effort，差異列入決策 |
-| parent / auto / inherit-parent | 解析本次提供的 parent descriptor |
-| comma-separated role names | 每個名稱指向同一 lane 清單 |
-| comma-separated panel entries | 每一項是一條 lane，不是候選選一 |
+| Input                          | Meaning                                    |
+| ------------------------------ | ------------------------------------------ |
+| provider:model@effort          | 明確 native route                          |
+| 已知 legacy selector           | 明確解析 family/model/effort，差異列入決策 |
+| parent / auto / inherit-parent | 解析本次提供的 parent descriptor           |
+| comma-separated role names     | 每個名稱指向同一 lane 清單                 |
+| comma-separated panel entries  | 每一項是一條 lane，不是候選選一            |
 
 ### Assumptions
 
@@ -276,15 +276,15 @@ Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗�
 
 ## Verification Contract
 
-| Gate | Command or evidence | Units | Required result |
-|---|---|---|---|
-| Install | npm ci | U1–U5 | locked dependencies 可安裝，不讀providercredentials |
-| Repository checks | npm run verify | U1–U5 | typecheck、lint、format、tests、build通過 |
-| Offline behavior | CLI integration fixtures | U1, U2 | zero provider/network/keychain/process/state effects |
-| Dispatch correctness | fake Herdr/native executables | U3, U4 | exact argv、全部panel、單writer、不重送 |
-| Live integration | 四家CLI capability查核與可見 read-only smoke | U3 | 每家支援／未驗證狀態獨立呈現，真正pane／cwd／agent匹配 |
-| Independent review | baseline diff與verifier receipt | U6 | 無未解correctness／security blockers |
-| Public delivery | GitHub visibility、PR head、CI、merge gate | U6 | 保留上游授權，可開issue／PR，必要gate通過 |
+| Gate                 | Command or evidence                          | Units  | Required result                                        |
+| -------------------- | -------------------------------------------- | ------ | ------------------------------------------------------ |
+| Install              | npm ci                                       | U1–U5  | locked dependencies 可安裝，不讀providercredentials    |
+| Repository checks    | npm run verify                               | U1–U5  | typecheck、lint、format、tests、build通過              |
+| Offline behavior     | CLI integration fixtures                     | U1, U2 | zero provider/network/keychain/process/state effects   |
+| Dispatch correctness | fake Herdr/native executables                | U3, U4 | exact argv、全部panel、單writer、不重送                |
+| Live integration     | 四家CLI capability查核與可見 read-only smoke | U3     | 每家支援／未驗證狀態獨立呈現，真正pane／cwd／agent匹配 |
+| Independent review   | baseline diff與verifier receipt              | U6     | 無未解correctness／security blockers                   |
+| Public delivery      | GitHub visibility、PR head、CI、merge gate   | U6     | 保留上游授權，可開issue／PR，必要gate通過              |
 
 ## Definition of Done
 
@@ -295,3 +295,12 @@ Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗�
 - U5: publicREADME／examples／contributors／security／CI／license完成。
 - U6: 獨立review與CI證據存在，repo及PR公開，任何mergeblocker照實保留。
 - 移除未採用的實驗程式與stubs，保留既有無關文件與私有本機狀態。
+
+## Execution status
+
+- U1–U5：完成。預設離線角色規則、選配語意分類、原生 CLI 派工、ownership／attempt 與公開協作文件均已實作。
+- 審查修正：五項已驗證的 correctness／security findings 已修正，包含 SQLite transaction ownership guard、真實 provider process 的環境隔離及所有 alias pins 的檢查。
+- 驗證：`npm run verify` 通過，71 個測試檔案／619 個測試，包含 typecheck、lint、format 與 build。移除 ownership guard 或 `env -i` 時，相對應的回歸測試會失敗。
+- 公開內容：tracked snapshot 掃描沒有新增憑證或私人設定；唯一 scanner 命中是與 upstream baseline 完全相同的合成測試 fixture。
+- U6：公開 fork 已建立於 [waveriderai/herdr-model-router](https://github.com/waveriderai/herdr-model-router)，Issues、Discussions 與 private vulnerability reporting 已啟用。獨立真實 Herdr 驗證與 PR CI 尚待完成。
+- 下一步：記錄各 provider 的實際支援／未驗證結果，建立同 repo 公開 PR，確認該 head 的 CI 後執行 tier gate。本 repo 的程式路徑屬未映射 scope，若 gate 判為 tier 3，保留可審查的公開 PR 並等待該 head 的 Kai GO。

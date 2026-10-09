@@ -8,12 +8,13 @@ export interface OpenDatabaseOptions {
   home: string;
 }
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 const MIGRATIONS: Record<number, string> = {
   1: "001_initial.sql",
   2: "002_capacity_reservations.sql",
   3: "003_live_effort.sql",
+  4: "004_dispatch.sql",
 };
 
 export function databasePath(home: string): string {

@@ -8,3 +8,4 @@ coverage
 .wrangler
 .git
 .env.example
+.audit

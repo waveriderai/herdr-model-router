@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Route the next phase of an earlier router session.
+# Route the next phase of an earlier quota-mode router session.
 
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-echo "Agent Router — resume a session"
+echo "Herdr Model Router — resume a session"
 echo
 
 if ! router session --list --limit 10; then
@@ -34,10 +34,10 @@ if [ -z "$session" ]; then
 fi
 
 echo
-if router run "$task" --session "$session"; then
-  notify "Agent Router" "Resumed session $session" done
+if router run --routing-mode quota "$task" --session "$session"; then
+  notify "Herdr Model Router" "Resumed session $session" done
 else
-  notify "Agent Router" "Resume failed — see the pane for details" request
+  notify "Herdr Model Router" "Resume failed — see the pane for details" request
   hold
   exit 1
 fi

@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "allowedProviders": ["claude", "codex", "grok"],
+  "pins": {
+    "bug-fix": "claude:claude-opus-5-5@xhigh"
+  },
+  "writerRoles": ["feature", "refactoring", "bug-fix"]
+}

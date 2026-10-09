@@ -14,7 +14,7 @@ export interface HerdrClient {
   splitCurrent(options?: { direction?: "right" | "down"; cwd?: string }): Promise<CommandResult>;
   startAgent(input: {
     name: string;
-    kind: "cursor" | "claude" | "codex" | "opencode";
+    kind: "cursor" | "claude" | "codex" | "opencode" | "grok";
     paneId: string;
     agentArgs: string[];
   }): Promise<CommandResult>;
@@ -31,6 +31,10 @@ export interface HerdrClient {
     timeoutMs?: number;
   }): Promise<CommandResult>;
   closePane(paneId: string): Promise<CommandResult>;
+  /** `herdr pane run`: types one command line into the pane's shell and presses Enter. */
+  runInPane(paneId: string, command: string): Promise<CommandResult>;
+  /** `herdr agent rename`: names the agent Herdr detected (target may be its pane id). */
+  renameAgent(target: string, name: string): Promise<CommandResult>;
 }
 
 export function createProcessCommandAdapter(
@@ -125,6 +129,12 @@ export function createHerdrClient(runCommand: RunCommand): HerdrClient {
     closePane(paneId) {
       return runCommand(["herdr", "pane", "close", paneId]);
     },
+    runInPane(paneId, command) {
+      return runCommand(["herdr", "pane", "run", paneId, command]);
+    },
+    renameAgent(target, name) {
+      return runCommand(["herdr", "agent", "rename", target, name]);
+    },
   };
 }
 
@@ -133,6 +143,9 @@ export interface HerdrAgentInfo {
   agent: string;
   status: HerdrAgentState;
   paneId: string;
+  /** Herdr's `interactive_ready`, when reported. */
+  interactiveReady?: boolean;
+  name?: string;
 }
 
 /** Controls an already-running agent pane; used by in-place effort switching. */
@@ -156,6 +169,8 @@ export function parseHerdrAgentInfo(stdout: string): HerdrAgentInfo | undefined 
           agent?: unknown;
           agent_status?: unknown;
           pane_id?: unknown;
+          interactive_ready?: unknown;
+          name?: unknown;
         };
       };
     };
@@ -170,6 +185,10 @@ export function parseHerdrAgentInfo(stdout: string): HerdrAgentInfo | undefined 
       agent: agent.agent,
       status,
       paneId: agent.pane_id,
+      ...(typeof agent.interactive_ready === "boolean"
+        ? { interactiveReady: agent.interactive_ready }
+        : {}),
+      ...(typeof agent.name === "string" ? { name: agent.name } : {}),
     };
   } catch {
     return undefined;

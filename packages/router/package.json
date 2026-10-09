@@ -1,6 +1,8 @@
 {
   "name": "@agent-router/router",
   "version": "0.1.0",
+  "description": "Herdr Model Router CLI (router, hmr)",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
@@ -9,7 +11,8 @@
     }
   },
   "bin": {
-    "router": "./dist/cli.js"
+    "router": "./dist/cli.js",
+    "hmr": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && mkdir -p dist/store/migrations && cp src/store/migrations/*.sql dist/store/migrations/",
