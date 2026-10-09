@@ -60,6 +60,12 @@ import {
   executeWorkflowVerify,
 } from "./commands/workflow-commands.js";
 import { createGitRead } from "./workflow/revision.js";
+import {
+  executeCoordinatorClose,
+  executeCoordinatorStatus,
+  executeStart,
+} from "./commands/start.js";
+import type { CoordinatorRepository } from "./store/coordinator-repository.js";
 import { isHerdrEnv } from "./launch/readiness.js";
 import {
   executeTaskClose,
@@ -569,23 +575,35 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     };
   const PARENT_HELP =
     "provider:model@effort the parent runs; resolves parent aliases in every role";
+  const SKILLS_ROOT_HELP =
+    "A trusted directory of shared skills (repeatable; the first root wins a name)";
+  const collect = (value: string, previous: string[] = []) => [...previous, value];
   workflow
     .command("plan")
     .description("Preview a brief's writer and verifier routes; reads files only")
-    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1)")
+    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1 or v2)")
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--parent <descriptor>", PARENT_HELP)
+    .option("--skills-root <dir>", SKILLS_ROOT_HELP, collect, [])
     .option("--json", "Emit JSON", false)
-    .action((flags: { brief: string; rules?: string; parent?: string; json?: boolean }) =>
-      guarded(
-        () =>
-          executeWorkflowPlan(
-            { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
-            flags.brief,
-            flags.parent,
-          ),
-        flags.json,
-      ),
+    .action(
+      (flags: {
+        brief: string;
+        rules?: string;
+        parent?: string;
+        skillsRoot: string[];
+        json?: boolean;
+      }) =>
+        guarded(
+          () =>
+            executeWorkflowPlan(
+              { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
+              flags.brief,
+              flags.parent,
+              flags.skillsRoot,
+            ),
+          flags.json,
+        ),
     );
   workflow
     .command("fingerprint")
@@ -608,30 +626,39 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
   workflow
     .command("start")
     .description("Start the brief's writer through the worktree's bound authority (one prompt)")
-    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1)")
+    .requiredOption("--brief <file>", "Brief JSON (hmr.brief/v1 or v2)")
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--parent <descriptor>", `${PARENT_HELP}; kept for this workflow's verify`)
+    .option("--skills-root <dir>", SKILLS_ROOT_HELP, collect, [])
     .option("--json", "Emit JSON", false)
-    .action((flags: { brief: string; rules?: string; parent?: string; json?: boolean }) =>
-      guarded(
-        // Refused before the router database is opened: outside Herdr nothing can start.
-        isHerdrEnv(env)
-          ? withWorkflow(flags.rules, (deps) =>
-              executeWorkflowStart(deps, {
-                cwd,
-                briefFile: flags.brief,
-                env,
-                ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+    .action(
+      (flags: {
+        brief: string;
+        rules?: string;
+        parent?: string;
+        skillsRoot: string[];
+        json?: boolean;
+      }) =>
+        guarded(
+          // Refused before the router database is opened: outside Herdr nothing can start.
+          isHerdrEnv(env)
+            ? withWorkflow(flags.rules, (deps) =>
+                executeWorkflowStart(deps, {
+                  cwd,
+                  briefFile: flags.brief,
+                  env,
+                  skillRoots: flags.skillsRoot,
+                  ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+                }),
+              )
+            : () => ({
+                output:
+                  "HERDR_ENV=1 is required to start a workflow; run inside a Herdr pane, or preview with `workflow plan`.",
+                json: { ok: false, error: "HERDR_ENV=1 is required to start a workflow" },
+                code: 2,
               }),
-            )
-          : () => ({
-              output:
-                "HERDR_ENV=1 is required to start a workflow; run inside a Herdr pane, or preview with `workflow plan`.",
-              json: { ok: false, error: "HERDR_ENV=1 is required to start a workflow" },
-              code: 2,
-            }),
-        flags.json,
-      ),
+          flags.json,
+        ),
     );
   workflow
     .command("status")
@@ -650,7 +677,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .command("result")
     .argument("<id>", "Workflow id")
     .requiredOption("--attempt <id>", "The current attempt the result answers")
-    .requiredOption("--file <path>", "Result JSON (hmr.result/v1)")
+    .requiredOption("--file <path>", "Result JSON (hmr.result/v1 or v2)")
     .option("--lane <id>", "Verifier lane id, for a verifier's result")
     .option("--json", "Emit JSON", false)
     .action((id: string, flags: { attempt: string; file: string; lane?: string; json?: boolean }) =>
@@ -686,14 +713,24 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .requiredOption("--attempt <id>", "The current attempt being revised (or the pending one)")
     .option("--file <path>", "The requested changes, as text")
     .option("--resume", "Send a pending revision whose prompt was never submitted", false)
+    .option(
+      "--mode <skill>",
+      "A mode for this revision only (repeatable); a resolved skill of this workflow",
+      collect,
+      [],
+    )
     .option("--json", "Emit JSON", false)
     .action(
-      (id: string, flags: { attempt: string; file?: string; resume?: boolean; json?: boolean }) =>
+      (
+        id: string,
+        flags: { attempt: string; file?: string; resume?: boolean; mode: string[]; json?: boolean },
+      ) =>
         guarded(
           withWorkflow(undefined, (deps) =>
             executeWorkflowRevise(deps, {
               workflowId: id,
               attempt: flags.attempt,
+              modes: flags.mode,
               ...(flags.file ? { file: flags.file } : {}),
               ...(flags.resume ? { resume: true } : {}),
             }),
@@ -706,18 +743,29 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .argument("<id>", "Workflow id")
     .requiredOption("--attempt <id>", "The current attempt being accepted")
     .requiredOption("--evidence <text>", "Why this revision is accepted")
+    .option(
+      "--waive-skill <skill>",
+      "Accept a skipped or blocked skill report you evaluated (repeatable)",
+      collect,
+      [],
+    )
     .option("--json", "Emit JSON", false)
-    .action((id: string, flags: { attempt: string; evidence: string; json?: boolean }) =>
-      guarded(
-        withWorkflow(undefined, (deps) =>
-          executeWorkflowAccept(deps, {
-            workflowId: id,
-            attempt: flags.attempt,
-            evidence: flags.evidence,
-          }),
+    .action(
+      (
+        id: string,
+        flags: { attempt: string; evidence: string; waiveSkill: string[]; json?: boolean },
+      ) =>
+        guarded(
+          withWorkflow(undefined, (deps) =>
+            executeWorkflowAccept(deps, {
+              workflowId: id,
+              attempt: flags.attempt,
+              evidence: flags.evidence,
+              waiveSkills: flags.waiveSkill,
+            }),
+          ),
+          flags.json,
         ),
-        flags.json,
-      ),
     );
   workflow
     .command("delivery")
@@ -787,6 +835,117 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           ),
           flags.json,
         ),
+    );
+  program
+    .command("start")
+    .description(
+      "Give a task to the rules file's coordinator role: start its native CLI, which then drives HMR workflows",
+    )
+    .argument("<task>", "The task, as you would tell the coordinator")
+    .option("--role <name>", "The coordinator role to read from the rules file", "coordinator")
+    .option("--rules <path>", "Rules file to read instead of the project or user default")
+    .option("--parent <descriptor>", PARENT_HELP)
+    .option("--skills-root <dir>", SKILLS_ROOT_HELP, collect, [])
+    .option(
+      "--mode <skill>",
+      "A mode the coordinator puts in its briefs, first attempt only (repeatable)",
+      collect,
+      [],
+    )
+    .option("--dry-run", "Show the coordinator route and what it will see; touch nothing", false)
+    .option("--json", "Emit JSON", false)
+    .action(
+      (
+        task: string,
+        flags: {
+          role: string;
+          rules?: string;
+          parent?: string;
+          skillsRoot: string[];
+          mode: string[];
+          dryRun?: boolean;
+          json?: boolean;
+        },
+      ) => {
+        const rules = createRulesRunDeps(env, cwd, flags.rules, options.rulesOverrides);
+        return guarded(
+          () =>
+            executeStart(
+              task,
+              {
+                role: flags.role,
+                skillRoots: flags.skillsRoot,
+                modes: flags.mode,
+                dryRun: Boolean(flags.dryRun),
+                ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+              },
+              {
+                cwd,
+                home: userHome(env),
+                ...(flags.rules ? { rulesFlag: flags.rules } : {}),
+                env,
+                openRuntime: () => {
+                  const dispatch = openDispatchDeps(env, options.rulesOverrides);
+                  return { dispatch, coordinators: dispatch.coordinators, close: dispatch.close };
+                },
+                privateHomeRefusal: () => homeRefusal(env, cwd),
+                ...(rules.sharedProviders ? { sharedProviders: rules.sharedProviders } : {}),
+              },
+            ),
+          flags.json,
+        );
+      },
+    );
+  const coordinator = program
+    .command("coordinator")
+    .description("Coordinators started with `start`: bootstrap, role assignment, completion");
+  const withCoordinators =
+    (
+      action: (
+        coordinators: CoordinatorRepository,
+        dispatch: ReturnType<typeof openDispatchDeps>,
+      ) => CommandResult | Promise<CommandResult>,
+    ) =>
+    async (): Promise<CommandResult> => {
+      const inside = homeRefusal(env, cwd);
+      if (inside) return { output: inside, json: { ok: false, code: "private-home" }, code: 2 };
+      const dispatch = openDispatchDeps(env, options.rulesOverrides);
+      try {
+        return await action(dispatch.coordinators, dispatch);
+      } finally {
+        dispatch.close();
+      }
+    };
+  coordinator
+    .command("status")
+    .argument("[id]", "Coordinator id (omit to list recent coordinators)")
+    .option("--json", "Emit JSON", false)
+    .action((id: string | undefined, flags: { json?: boolean }) =>
+      guarded(
+        withCoordinators((coordinators) => executeCoordinatorStatus(coordinators, id)),
+        flags.json,
+      ),
+    );
+  coordinator
+    .command("close")
+    .argument("<id>", "Coordinator id")
+    .requiredOption("--evidence <text>", "What you saw or did in its pane")
+    .option("--json", "Emit JSON", false)
+    .action((id: string, flags: { evidence: string; json?: boolean }) =>
+      guarded(
+        withCoordinators((coordinators, dispatch) =>
+          executeCoordinatorClose(
+            {
+              coordinators,
+              pane: dispatch.pane,
+              ...(env.HERDR_PANE_ID ? { callerPane: env.HERDR_PANE_ID } : {}),
+            },
+            id,
+            flags.evidence,
+          ),
+        ),
+        flags.json,
+      ),
     );
   program
     .command("status")

@@ -22,8 +22,11 @@ lanes, attempts) → `store/dispatch-repository.ts` (tasks, lanes, attempts, wri
 Coordinator workflows: `commands/workflow-commands.ts` → `workflow/service.ts` (state gates for
 both backends) → `workflow/contracts.ts` (brief/result schemas), `workflow/revision.ts` (Git
 fingerprint), `workflow/identity.ts` (bound session checks), `workflow/artifacts.ts` (private
-files), `workflow/agent-collab.ts` (optional CLI adapter), `store/workflow-repository.ts`
-(bindings, workflows, attempts, verifications, intents).
+files), `workflow/agent-collab.ts` (optional CLI adapter and `hmr.rules-route/v1`),
+`workflow/skills.ts` (shared skill catalog, resolution, and evidence checks),
+`store/workflow-repository.ts` (bindings, workflows, attempts, verifications, intents).
+`hmr start`: `commands/start.ts` (coordinator bootstrap) → `rules/dispatch.ts` (launch and one
+prompt) → `store/coordinator-repository.ts` (coordinators, their workflows, worker panes).
 `semantic/role-classifier.ts` is the opt-in TypeSafe role picker.
 
 ## `router run --routing-mode quota` flow

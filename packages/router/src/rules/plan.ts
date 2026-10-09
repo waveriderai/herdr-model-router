@@ -31,6 +31,8 @@ export interface RoutePlan {
   access: Access;
   rulesSource: RulesSource;
   policySource?: string;
+  /** SHA-256 of the policy text this plan was made from. */
+  policySha256?: string;
   cwd: string;
   lanes: PlannedLane[];
   notes: string[];
@@ -66,6 +68,7 @@ export interface PlanInput {
   parent?: string;
   policy?: ProjectPolicy;
   policySource?: string;
+  policySha256?: string;
   /** Force a single-lane role to run read-only. */
   readOnly?: boolean;
 }
@@ -188,6 +191,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     access,
     rulesSource: input.rulesSource,
     ...(input.policySource ? { policySource: input.policySource } : {}),
+    ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),
     cwd: input.cwd,
     lanes,
     notes: [],

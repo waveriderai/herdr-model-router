@@ -4,6 +4,7 @@ import {
   codexInPlanMode,
   codexStatusEffort,
   inputLineState,
+  inputLineText,
   lastClaudeOutcome,
   newClaudeOutcome,
 } from "../../src/live-effort/pane-text.js";
@@ -53,6 +54,54 @@ describe("inputLineState", () => {
 
   it("reads a Codex draft", () => {
     expect(inputLineState("codex", "› half-typed\n")).toBe("busy");
+  });
+});
+
+describe("extended-color SGR parameters are data, not attributes", () => {
+  const ESC = "\u001b[";
+  // Codex draws a draft on a true-color background: `48;2;r;g;b`. The 2 selects RGB.
+  const rgbBackground = (text: string) => `${ESC}48;2;65;69;76m${text}${ESC}0m`;
+
+  it("keeps a draft typed on a true-color background", () => {
+    const line = `› ${rgbBackground("/status")}`;
+    expect(inputLineText("codex", line)).toBe("/status");
+    expect(inputLineState("codex", line)).toBe("busy");
+    expect(inputLineText("codex", `${ESC}48;2;65;69;76m› /status${ESC}0m`)).toBe("/status");
+  });
+
+  it("keeps a dim placeholder dim when its colors have channels 0, 2 or 22", () => {
+    const placeholders = [
+      `${ESC}2;38;2;0;22;0mAsk Codex to do anything${ESC}0m`,
+      `${ESC}2m${ESC}38;2;22;0;2mAsk Codex to do anything${ESC}0m`,
+      `${ESC}2;48;2;0;0;0;38;5;22mAsk Codex to do anything${ESC}0m`,
+    ];
+    for (const placeholder of placeholders) {
+      expect(inputLineText("codex", `› ${placeholder}`)).toBe("");
+      expect(inputLineState("codex", `› ${placeholder}`)).toBe("empty");
+    }
+  });
+
+  it("applies standalone 0, 2 and 22 as reset, dim and normal intensity", () => {
+    expect(inputLineText("codex", `› ${ESC}2mhint${ESC}22mtyped`)).toBe("typed");
+    expect(inputLineText("codex", `› ${ESC}0;2mhint${ESC}0mtyped`)).toBe("typed");
+    expect(inputLineText("codex", `› ${ESC}1;2mhint${ESC}mtyped`)).toBe("typed");
+    expect(inputLineText("codex", `› ${ESC}38;2;1;2;3;2mhint${ESC}0m`)).toBe("");
+  });
+
+  it("does not read 256-color index 2 or a colon-form color as dim", () => {
+    expect(inputLineText("codex", `› ${ESC}38;5;2m/status${ESC}0m`)).toBe("/status");
+    // An attribute after a 256-color index is still read.
+    expect(inputLineText("codex", `› ${ESC}38;5;22;2mhint${ESC}0m`)).toBe("");
+    expect(inputLineText("codex", `› ${ESC}2;38;5;0;22m/status${ESC}0m`)).toBe("/status");
+    expect(inputLineText("codex", `› ${ESC}58;5;2m/status${ESC}0m`)).toBe("/status");
+    expect(inputLineText("codex", `› ${ESC}48:2::65:69:76m/status${ESC}0m`)).toBe("/status");
+  });
+
+  it("treats a truncated extended color as ending the line's attributes safely", () => {
+    // An incomplete escape stops reading the line, as before: nothing after it is trusted.
+    expect(inputLineText("codex", `› typed${ESC}48;2;65`)).toBe("typed");
+    // A color cut short of its channels does not turn anything after it dim or normal.
+    expect(inputLineText("codex", `› ${ESC}2m${ESC}38;2mhint${ESC}0m`)).toBe("");
   });
 });
 

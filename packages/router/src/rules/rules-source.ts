@@ -7,6 +7,8 @@ export interface RulesSource {
   path: string;
   /** `flag`: --rules. `project`: inside the project. `user`: ~/.cursor/rules. */
   origin: "flag" | "project" | "user";
+  /** SHA-256 of the exact text this source was parsed from, once it has been read. */
+  sha256?: string;
 }
 
 /**

@@ -66,7 +66,7 @@ describe("agent-collab backend (fake agent-collab process)", () => {
     expect(collab.commands()).toEqual(["acquire", "dispatch"]);
     const calls = collab.state().calls.map((call) => call.argv);
     // The read-only preflight runs first, before any pane exists.
-    expect(calls.slice(0, 2).map((argv) => argv[0])).toEqual(["verify", "project"]);
+    expect(calls.slice(0, 3).map((argv) => argv[0])).toEqual(["capabilities", "verify", "project"]);
     const acquire = calls.find((argv) => argv[0] === "acquire")!;
     const identity = workflow.identity!;
     expect(acquire).toEqual(
@@ -237,13 +237,18 @@ describe("agent-collab backend (fake agent-collab process)", () => {
     expect(h.workflows.list(5)).toEqual([]);
   });
 
-  it("refuses a non-Claude writer on the agent-collab backend before any process starts", async () => {
-    const collab = fakeAgentCollab();
-    const h = collabHarness(collab);
-    expect(
-      await startWorkflow(h.deps, { brief: { ...BRIEF, writerRole: "codex writer" }, cwd: h.repo }),
-    ).toMatchObject({ ok: false, code: "backend-model" });
-    expect(h.herdr.calls).toEqual([]);
-    expect(collab.commands()).toEqual([]);
+  it("refuses an agent-collab without the rules-route contract before any process starts", async () => {
+    for (const mode of ["missing", "no-route"]) {
+      const collab = fakeAgentCollab();
+      collab.setMode({ capabilities: mode });
+      const h = collabHarness(collab);
+      expect(await startWorkflow(h.deps, { brief: BRIEF, cwd: h.repo })).toMatchObject({
+        ok: false,
+        code: "backend-capability",
+      });
+      expect(h.herdr.calls).toEqual([]);
+      expect(collab.commands()).toEqual([]);
+      expect(h.workflows.list(5)).toEqual([]);
+    }
   });
 });

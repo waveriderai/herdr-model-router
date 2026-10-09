@@ -62,7 +62,7 @@ describe("workflow contracts", () => {
   });
 
   it.each([
-    ["a wrong version", { ...BRIEF, version: "hmr.brief/v2" }, "version"],
+    ["a wrong version", { ...BRIEF, version: "hmr.brief/v9" }, "version"],
     ["an unknown field", { ...BRIEF, model: "anything" }, "model"],
     ["no verifier role", { ...BRIEF, verifierRoles: [] }, "verifierRoles"],
     [
@@ -119,6 +119,10 @@ describe("workflow contracts", () => {
     );
     const read = (name: string) => readFileSync(path.join(examples, name), "utf8");
     expect(parseBriefInput(read("brief.example.json"))).toMatchObject({ ok: true });
+    expect(parseBriefInput(read("bot-brief.example.json"))).toMatchObject({
+      ok: true,
+      value: { version: "hmr.brief/v2", skills: { modes: ["poteto-mode"] } },
+    });
     expect(parseResult(read("result.example.json"))).toMatchObject({
       ok: true,
       value: { lane: "writer" },

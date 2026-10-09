@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import os from "node:os";
 import { parseRules, type RuleSet } from "../rules/mdc-parser.js";
 import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
@@ -9,6 +10,10 @@ import {
   readRules,
   type RulesSource,
 } from "../rules/rules-source.js";
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
 
 export interface CommandResult {
   output: string;
@@ -29,6 +34,8 @@ export interface LoadedRules {
   source: RulesSource;
   policy?: ProjectPolicy;
   policySource?: string;
+  /** SHA-256 of the exact policy text that was parsed. */
+  policySha256?: string;
   projectRoot?: string;
 }
 
@@ -46,7 +53,9 @@ export function loadRules(
     ...(location.rulesFlag ? { flag: location.rulesFlag } : {}),
   });
   if (!located.ok) return located;
-  const parsed = parseRules(readRules(located.source));
+  // One read: the digest describes exactly the text the roles were parsed from.
+  const text = readRules(located.source);
+  const parsed = parseRules(text);
   if (!parsed.ok) return { ok: false, error: `${located.source.path}: ${parsed.error}` };
   const projectRoot = findProjectRoot(location.cwd);
   const policy = loadPolicy(projectRoot);
@@ -55,8 +64,10 @@ export function loadRules(
     ok: true,
     loaded: {
       rules: parsed.rules,
-      source: located.source,
-      ...(policy.policy ? { policy: policy.policy, policySource: policy.path } : {}),
+      source: { ...located.source, sha256: sha256(text) },
+      ...(policy.policy
+        ? { policy: policy.policy, policySource: policy.path, policySha256: policy.sha256 }
+        : {}),
       ...(projectRoot ? { projectRoot } : {}),
     },
   };
@@ -127,7 +138,11 @@ export function previewPlan(
     cwd: location.cwd,
     ...(request.parent !== undefined ? { parent: request.parent } : {}),
     ...(loaded.loaded.policy
-      ? { policy: loaded.loaded.policy, policySource: loaded.loaded.policySource }
+      ? {
+          policy: loaded.loaded.policy,
+          policySource: loaded.loaded.policySource,
+          ...(loaded.loaded.policySha256 ? { policySha256: loaded.loaded.policySha256 } : {}),
+        }
       : {}),
     ...(request.readOnly ? { readOnly: true } : {}),
   });

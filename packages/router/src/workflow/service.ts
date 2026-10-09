@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import {
   closeCreatedPane,
@@ -11,6 +12,7 @@ import {
   type DispatchDeps,
   type ResolvedLaunch,
 } from "../rules/dispatch.js";
+import { HERDR_KIND } from "../rules/native-argv.js";
 import type { PlannedLane, RoutePlan } from "../rules/plan.js";
 import type { ReadinessKind } from "../rules/readiness.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
@@ -29,20 +31,34 @@ import {
   type WorkflowRepository,
   type WorkflowState,
 } from "../store/workflow-repository.js";
-import type { AgentCollabPort, CollabCall, CollabStatus } from "./agent-collab.js";
+import {
+  ROUTE_CONTRACT,
+  type AgentCollabPort,
+  type CollabCall,
+  type CollabStatus,
+} from "./agent-collab.js";
 import { ArtifactConflictError, type ArtifactStore } from "./artifacts.js";
 import {
+  BRIEF_VERSION_V2,
   canonicalJson,
   parseResult,
   RESULT_VERSION,
+  RESULT_VERSION_V2,
   sameRevision,
   sha256,
   type BriefInput,
   type BriefRecord,
+  type ResolvedSkills,
   type Revision,
   type WorkflowResult,
   type WriterResult,
 } from "./contracts.js";
+import {
+  evaluateSkillEvidence,
+  requiredForAttempt,
+  resolveSkills,
+  skillSourcesChanged,
+} from "./skills.js";
 import {
   canonicalCwd,
   checkStopped,
@@ -51,6 +67,7 @@ import {
   type BoundIdentity,
 } from "./identity.js";
 import { isAncestor, readCommitContent, readRevision, type GitRead } from "./revision.js";
+import type { CoordinatorRepository } from "../store/coordinator-repository.js";
 
 /** Everything a workflow step may touch. Built only for real (non-preview) commands. */
 export interface WorkflowDeps {
@@ -71,6 +88,8 @@ export interface WorkflowDeps {
   }) => { ok: true; plan: RoutePlan } | { ok: false; error: string };
   /** How long one collab dispatch may wait for the writer to start working. */
   collabDispatchTimeoutMs?: number;
+  /** Coordinator bootstraps: which panes are workers, and which coordinator started what. */
+  coordinators?: CoordinatorRepository;
 }
 
 export type Step<T> =
@@ -177,7 +196,7 @@ function refuseWorkerCaller(deps: WorkflowDeps, workflow: Workflow): Step<null> 
   return workerPanes.has(caller)
     ? fail(
         "worker-caller",
-        `This command runs in pane ${caller}, which is a worker of workflow ${workflow.id}. Only the coordinator records results, accepts, delivers, or releases.`,
+        `This command runs in pane ${caller}, which is a worker of workflow ${workflow.id}. A worker cannot record results, verify, revise, accept, deliver, or release.`,
       )
     : { ok: true, value: null };
 }
@@ -189,14 +208,86 @@ function loadWorkflow(deps: WorkflowDeps, id: string): Step<Workflow> {
     : fail("unknown-workflow", `Unknown workflow ${id}.`);
 }
 
+function skillSourcesOf(brief: BriefRecord): ResolvedSkills | undefined {
+  return brief.version === BRIEF_VERSION_V2 ? brief.skillSources : undefined;
+}
+
+/**
+ * The shared-skill block of a lane prompt: the catalog entry of every resolved skill (never its
+ * body), the references it must read, and the mode requested for this one attempt.
+ */
+/** The one line that tells an attempt's agents its mode; also how the mode record is checked. */
+function modeLine(attemptId: string, modes: readonly string[]): string {
+  return modes.length > 0
+    ? `Mode requested for attempt ${attemptId} only: ${modes.join(", ")}. Apply it to this attempt; it is not a standing mode for later turns.`
+    : `No mode is requested for attempt ${attemptId}.`;
+}
+
+/**
+ * How the catalog marks one skill for this attempt. A first attempt's mode that this attempt
+ * does not request is never labeled required: the lane may read it, but is not told to apply it.
+ */
+function skillLabel(skill: ResolvedSkills["skills"][number], modes: readonly string[]): string {
+  if (requiredForAttempt(skill, modes)) return " [required]";
+  return skill.mode ? " [available; not this attempt's mode]" : "";
+}
+
+function skillLines(
+  sources: ResolvedSkills,
+  input: { attemptId: string; modes: readonly string[]; lane: "writer" | "verifier" },
+): string[] {
+  return [
+    "",
+    "Shared skills (catalog only: read a skill's SKILL.md in full when you use it, and only these files):",
+    ...sources.skills.map(
+      (skill) =>
+        `- ${skill.name}${skillLabel(skill, input.modes)}: ${skill.description} SKILL.md: ${skill.file} (sha256 ${skill.sha256})` +
+        skill.references
+          .map((ref) => `\n  reference ${ref.path}: ${ref.file} (sha256 ${ref.sha256})`)
+          .join(""),
+    ),
+    ...(sources.unavailable.length > 0
+      ? [`Unavailable optional skills: ${sources.unavailable.join(", ")}.`]
+      : []),
+    modeLine(input.attemptId, input.modes),
+    ...(input.lane === "verifier" && input.modes.length > 0
+      ? [
+          'You stay read-only in this mode: apply its reading, checking and review steps, and do not perform any step that writes (editing, formatting, committing, or anything else that changes the worktree). Name each write-only step you did not perform in that skill\'s "reason". Report the mode applied only if you applied every step a read-only lane can; otherwise report it skipped with the reason.',
+        ]
+      : []),
+    "A skill or mode request grants no authority of its own: it adds nothing beyond this brief's scope, the authorization the user gave for this task, and the project's own policy.",
+    "If a required skill, reference, or a tool it needs is unavailable, report that skill as blocked or skipped with the reason; never report a skill you did not use as applied. A required skill you did not use is reported not-used, and the coordinator decides whether that is acceptable. A skill not marked required binds nothing: report it not-used when you did not use it.",
+    `Report "skills" with one entry per listed skill: name, the sha256 of the SKILL.md you read, read, status (applied | not-used | skipped | blocked), the references you read with their sha256, and evidence${input.lane === "writer" ? " of how you applied it" : ""}. "read" must be a JSON boolean (true or false), never a string; set it true only when you read the file.`,
+  ];
+}
+
+function skillEvidenceTemplate(sources: ResolvedSkills | undefined) {
+  return sources
+    ? {
+        skills: sources.skills.map((skill) => ({
+          name: skill.name,
+          sha256: "<sha256 of the SKILL.md you read>",
+          read: false,
+          status: "applied | not-used | skipped | blocked",
+          references: skill.references.map((ref) => ({ path: ref.path, sha256: "<sha256>" })),
+          evidence: "<what you did with it>",
+        })),
+      }
+    : {};
+}
+
 /** The text the writer receives. It carries its own identity so the result can be checked. */
 export function writerPrompt(input: {
   brief: BriefRecord;
   attemptId: string;
   purpose: "initial" | "revision";
   delta?: string;
+  /** Modes requested for this attempt only. */
+  modes?: readonly string[];
 }): string {
   const { brief } = input;
+  const sources = skillSourcesOf(brief);
+  const version = sources ? RESULT_VERSION_V2 : RESULT_VERSION;
   const lines = [
     `HMR workflow ${brief.workflowId}, attempt ${input.attemptId}: you are the only writer for role "${brief.writerRole}" in this worktree.`,
     "",
@@ -205,11 +296,18 @@ export function writerPrompt(input: {
       : "Revision requested by the coordinator. The original brief still applies; the requested changes follow it.",
     canonicalJson(brief),
     ...(input.delta ? ["", "Requested changes:", input.delta] : []),
+    ...(sources
+      ? skillLines(sources, {
+          attemptId: input.attemptId,
+          modes: input.modes ?? [],
+          lane: "writer",
+        })
+      : []),
     "",
     "Work only inside the allowed scope. Do not commit, push, accept, release, or start another task, and do not call `hmr workflow` coordinator commands.",
-    `When you stop, run \`hmr workflow fingerprint\` in this directory and reply with exactly one JSON object (${RESULT_VERSION}):`,
+    `When you stop, run \`hmr workflow fingerprint\` in this directory and reply with exactly one JSON object (${version}):`,
     canonicalJson({
-      version: RESULT_VERSION,
+      version,
       workflowId: brief.workflowId,
       attemptId: input.attemptId,
       lane: "writer",
@@ -221,6 +319,7 @@ export function writerPrompt(input: {
       changedPaths: ["<relative paths>"],
       checks: [{ command: "<command>", result: "pass | fail | not-run" }],
       blockers: [],
+      ...skillEvidenceTemplate(sources),
     }),
     "Revisions for this workflow arrive in this same session.",
   ];
@@ -234,15 +333,22 @@ function verifierPrompt(input: {
   laneId: string;
   role: string;
   revision: Revision;
+  /** The modes of the attempt under verification; they apply to its verifiers too. */
+  modes: readonly string[];
 }): string {
+  const sources = skillSourcesOf(input.brief);
+  const version = sources ? RESULT_VERSION_V2 : RESULT_VERSION;
   return [
     `HMR workflow ${input.workflowId}: read-only verification lane ${input.laneId} for role "${input.role}". Do not modify any file.`,
     `Verify the worktree at revision head ${input.revision.head}, content ${input.revision.content} (check with \`hmr workflow fingerprint\`).`,
     "Brief (JSON):",
     canonicalJson(input.brief),
-    `Reply with exactly one JSON object (${RESULT_VERSION}):`,
+    ...(sources
+      ? skillLines(sources, { attemptId: input.attemptId, modes: input.modes, lane: "verifier" })
+      : []),
+    `Reply with exactly one JSON object (${version}):`,
     canonicalJson({
-      version: RESULT_VERSION,
+      version,
       workflowId: input.workflowId,
       attemptId: input.attemptId,
       lane: "verifier",
@@ -252,8 +358,61 @@ function verifierPrompt(input: {
       changedPaths: [],
       checks: [{ command: "<command>", result: "pass | fail | not-run" }],
       blockers: [],
+      ...skillEvidenceTemplate(sources),
     }),
   ].join("\n");
+}
+
+/**
+ * The modes one attempt was sent with, recorded before its prompt and never changed. The record
+ * is trusted only when the attempt's recorded prompt still has the SHA-256 the database holds
+ * and states exactly these modes: a missing, unreadable or altered record fails closed instead
+ * of reading as "no mode".
+ */
+function attemptModes(
+  deps: Pick<WorkflowDeps, "artifacts" | "workflows">,
+  workflowId: string,
+  attemptId: string,
+): Step<string[]> {
+  const broken = (why: string) =>
+    fail<string[]>(
+      "skill-gate-integrity",
+      `The mode record of attempt ${attemptId} cannot be trusted (${why}); the skill gate fails closed.`,
+    );
+  const attempt = deps.workflows.getAttempt(attemptId);
+  if (!attempt || attempt.workflowId !== workflowId) return broken("unknown attempt");
+  let modes: unknown;
+  let prompt: string;
+  try {
+    modes = (
+      JSON.parse(deps.artifacts.read(workflowId, `modes-${attemptId}.json`)) as {
+        modes?: unknown;
+      }
+    ).modes;
+    prompt = deps.artifacts.read(workflowId, `prompt-${attemptId}.txt`);
+  } catch {
+    return broken("its mode or prompt file is missing or unreadable");
+  }
+  if (!Array.isArray(modes) || !modes.every((mode) => typeof mode === "string")) {
+    return broken("its mode file is malformed");
+  }
+  if (sha256(prompt) !== attempt.promptSha256) return broken("its prompt file was changed");
+  if (!prompt.includes(modeLine(attemptId, modes))) {
+    return broken("its mode file does not match the prompt that was sent");
+  }
+  return { ok: true, value: modes };
+}
+
+/** Refuses when a skill source the brief was bound to changed or disappeared since start. */
+function skillsUnchanged(brief: BriefRecord): Step<null> {
+  const sources = skillSourcesOf(brief);
+  const changed = sources ? skillSourcesChanged(sources) : [];
+  return changed.length === 0
+    ? { ok: true, value: null }
+    : fail(
+        "skill-changed",
+        `Skill sources bound to this workflow changed since it started: ${changed.join(", ")}. Nothing was sent; start a new workflow to use the new sources.`,
+      );
 }
 
 /** Reads the brief recorded for a workflow, checking it is the brief whose SHA-256 was bound. */
@@ -370,22 +529,34 @@ export interface StartInput {
   parent?: string;
   /** Optional caller-chosen workflow id (tests); default a random one. */
   workflowId?: string;
+  /** The operator's trusted skill roots, in precedence order (`--skills-root`). */
+  skillRoots?: readonly string[];
 }
 
 /**
- * Read-only agent-collab preflight, before any pane exists: the CLI's own `verify` and
- * `project` for this worktree, and the writer's exact model against the project policy it
- * will enforce. A mismatch refuses; the rules file is never rewritten and no other model is
- * substituted. The effort was already checked by the rules plan and project policy.
+ * Read-only agent-collab preflight, before any pane exists: the capabilities handshake (the
+ * `hmr.rules-route/v1` contract and this writer's kind), the CLI's own `verify` and `project`
+ * for this worktree, and the project's own model constraint. The rules file decides the writer;
+ * agent-collab takes it as a frozen route and never picks a default model. A project pin can
+ * only refuse: the rules file is never rewritten and no other model is substituted.
  */
 async function collabPreflight(
   collab: AgentCollabPort,
   input: { worktreeId: string; lane: PlannedLane; classification: BriefInput["classification"] },
 ): Promise<Step<null>> {
-  if (input.lane.provider !== "claude") {
+  const capabilities = await collab.capabilities();
+  if (capabilities.kind !== "ok") {
     return fail(
-      "backend-model",
-      `The agent-collab backend takes a Claude writer only; the writer role routes to ${input.lane.descriptor}.`,
+      "backend-capability",
+      `agent-collab capabilities ${capabilities.kind}: ${capabilities.error}. This agent-collab cannot take a ${ROUTE_CONTRACT} writer route; nothing was started.`,
+    );
+  }
+  const kind = HERDR_KIND[input.lane.provider];
+  const kinds = capabilities.value.writer_kinds["rules-route"] ?? [];
+  if (!capabilities.value.route_contracts.includes(ROUTE_CONTRACT) || !kinds.includes(kind)) {
+    return fail(
+      "backend-capability",
+      `agent-collab does not offer ${ROUTE_CONTRACT} for a ${kind} writer (it offers ${capabilities.value.route_contracts.join(", ") || "no route contract"}; kinds ${kinds.join(", ") || "none"}). Nothing was started.`,
     );
   }
   const verified = await collab.verify({ worktree: input.worktreeId });
@@ -403,16 +574,81 @@ async function collabPreflight(
     );
   }
   const policy = project.value.model_policy;
+  // Without a project constraint the rules file's exact route is the result.
+  if (policy.source === "defaults") return { ok: true, value: null };
   const smallFix = input.classification === "bounded-small-fix";
   const required = smallFix ? policy.bounded_small_fix : policy.default;
-  if (input.lane.model !== required) {
+  if (input.lane.provider !== "claude" || input.lane.model !== required) {
     return fail(
       "backend-model-policy",
-      `The rules file routes the writer to ${input.lane.model}, but agent-collab's ${policy.source} policy requires ${required} for ${smallFix ? "an explicitly classified bounded small fix" : "implementation"}. Nothing was started; the rules file is not rewritten and no other model is used.`,
+      `The rules file routes the writer to ${input.lane.descriptor}, but this project's ${policy.source} constraint in agent-collab allows only claude ${required} for ${smallFix ? "an explicitly classified bounded small fix" : "implementation"}. Nothing was started; the rules file is not rewritten and no other model is used.`,
       { policy },
     );
   }
   return { ok: true, value: null };
+}
+
+/**
+ * SHA-256 of the rules file and project policy the writer route came from: the digests of the
+ * exact text the plan was parsed from. Both files are read once more before anything starts;
+ * if either changed since planning, the route no longer describes the file, so nothing starts.
+ */
+export function routeSources(plan: RoutePlan): Step<{ rules: string; policy: string | null }> {
+  const planned = { rules: plan.rulesSource.sha256, policy: plan.policySha256 ?? null };
+  if (!planned.rules || (plan.policySource && !planned.policy)) {
+    return fail(
+      "rules-unreadable",
+      "The plan carries no digest of its rules source; nothing was started.",
+    );
+  }
+  let now: { rules: string; policy: string | null };
+  try {
+    now = {
+      rules: sha256(readFileSync(plan.rulesSource.path, "utf8")),
+      policy: plan.policySource ? sha256(readFileSync(plan.policySource, "utf8")) : null,
+    };
+  } catch (error) {
+    return fail(
+      "rules-unreadable",
+      `The rules file or project policy behind this route could not be read again (${(error as Error).message}); nothing was started.`,
+    );
+  }
+  if (now.rules !== planned.rules || now.policy !== planned.policy) {
+    return fail(
+      "rules-changed",
+      `${now.rules !== planned.rules ? plan.rulesSource.path : plan.policySource} changed after the route was planned; nothing was started. Run the command again to plan from the current file.`,
+    );
+  }
+  return { ok: true, value: { rules: planned.rules, policy: planned.policy } };
+}
+
+/** The frozen route agent-collab receives. HMR planned it; agent-collab only validates it. */
+export function rulesRoute(input: {
+  lane: PlannedLane;
+  role: string;
+  classification: BriefInput["classification"];
+  worktreeId: string;
+  cwd: string;
+  sources: { rules: string; policy: string | null };
+  workflowId: string;
+  briefSha256: string;
+}): Record<string, string | null> {
+  return {
+    version: ROUTE_CONTRACT,
+    provider: input.lane.provider,
+    kind: HERDR_KIND[input.lane.provider],
+    model: input.lane.model,
+    effort: input.lane.effort,
+    descriptor: input.lane.descriptor,
+    role: input.role,
+    classification: input.classification,
+    worktree: input.worktreeId,
+    cwd: input.cwd,
+    rules_sha256: input.sources.rules,
+    policy_sha256: input.sources.policy,
+    workflow_id: input.workflowId,
+    brief_sha256: input.briefSha256,
+  };
 }
 
 /**
@@ -425,6 +661,14 @@ export async function startWorkflow(
   deps: WorkflowDeps,
   input: StartInput,
 ): Promise<Step<{ workflow: Workflow; attempt: WorkflowAttempt }>> {
+  const caller = deps.callerEnv.HERDR_PANE_ID;
+  const worker = caller ? deps.coordinators?.workerAt(caller) : undefined;
+  if (worker) {
+    return fail(
+      "worker-caller",
+      `This command runs in pane ${caller}, a worker of ${worker}. A worker cannot start a workflow.`,
+    );
+  }
   const parent = input.parent ? { parent: input.parent } : {};
   const planned = deps.planRole({
     role: input.brief.writerRole,
@@ -444,9 +688,16 @@ export async function startWorkflow(
     const verifier = deps.planRole({ role, cwd: input.cwd, readOnly: true, ...parent });
     if (!verifier.ok) return fail("plan-refused", `verifier role ${role}: ${verifier.error}`);
   }
+  let skillSources: ResolvedSkills | undefined;
+  if (input.brief.version === BRIEF_VERSION_V2) {
+    const resolved = resolveSkills(input.skillRoots ?? [], input.brief.skills);
+    if (!resolved.ok) return fail(resolved.code, resolved.error);
+    skillSources = resolved.value;
+  }
   const worktreeId = worktreeIdentity(input.cwd);
   const backend = deps.workflows.binding(worktreeId).backend;
   let collab: AgentCollabPort | undefined;
+  let sources: { rules: string; policy: string | null } | undefined;
   if (backend === "agent-collab") {
     const resolved = needCollab(deps);
     if (!resolved.ok) return resolved;
@@ -457,6 +708,9 @@ export async function startWorkflow(
       classification: input.brief.classification,
     });
     if (!checked.ok) return checked;
+    const read = routeSources(plan);
+    if (!read.ok) return read;
+    sources = read.value;
   }
   const baseline = revisionNow(deps, input.cwd);
   if (!baseline.ok) return baseline;
@@ -465,15 +719,19 @@ export async function startWorkflow(
 
   const workflowId = input.workflowId ?? `wf_${randomUUID()}`;
   const attemptId = `wfa_${randomUUID()}`;
-  const brief: BriefRecord = {
-    ...input.brief,
+  const recordFields = {
     workflowId,
     baseline: baseline.value.revision,
     writerDescriptor: plan.lanes[0]!.descriptor,
     ...parent,
   };
+  const brief: BriefRecord =
+    input.brief.version === BRIEF_VERSION_V2
+      ? { ...input.brief, ...recordFields, skillSources: skillSources! }
+      : { ...input.brief, ...recordFields };
   const briefText = canonicalJson(brief);
-  const prompt = writerPrompt({ brief, attemptId, purpose: "initial" });
+  const modes = input.brief.version === BRIEF_VERSION_V2 ? input.brief.skills.modes : [];
+  const prompt = writerPrompt({ brief, attemptId, purpose: "initial", modes });
   let opened: ReturnType<WorkflowRepository["createWorkflow"]>;
   try {
     opened = deps.workflows.createWorkflow({
@@ -493,10 +751,16 @@ export async function startWorkflow(
     return caught(error);
   }
   const { lease } = opened;
+  // A workflow started from an open coordinator's pane is that coordinator's role assignment.
+  const coordinator = caller ? deps.coordinators?.openAtPane(caller) : undefined;
+  if (coordinator && coordinator.worktreeId === worktreeId) {
+    deps.coordinators!.link(coordinator.id, workflowId);
+  }
   try {
     deps.artifacts.write(workflowId, "brief.json", briefText);
+    deps.artifacts.write(workflowId, `modes-${attemptId}.json`, canonicalJson({ modes }));
     deps.artifacts.write(workflowId, `prompt-${attemptId}.txt`, prompt);
-    return collab
+    return collab && sources
       ? await startCollab(
           deps,
           lease,
@@ -506,6 +770,16 @@ export async function startWorkflow(
           prompt,
           collab,
           preflight.launches[0]!,
+          rulesRoute({
+            lane: plan.lanes[0]!,
+            role: plan.role,
+            classification: input.brief.classification,
+            worktreeId,
+            cwd: opened.workflow.cwd,
+            sources,
+            workflowId,
+            briefSha256: opened.workflow.briefSha256,
+          }),
         )
       : await startStandalone(deps, lease, opened.workflow, opened.attempt, plan, prompt);
   } catch (error) {
@@ -614,6 +888,7 @@ async function startCollab(
   prompt: string,
   collab: AgentCollabPort,
   launch: ResolvedLaunch,
+  route: Record<string, string | null>,
 ): Promise<Step<{ workflow: Workflow; attempt: WorkflowAttempt }>> {
   type Started = { workflow: Workflow; attempt: WorkflowAttempt };
   /** Ends the start: final `failed` only when no pane can still run, else held as `unknown`. */
@@ -674,8 +949,16 @@ async function startCollab(
       `The writer runs in ${identity.identity.cwd}, not ${workflow.cwd}.`,
     );
   }
+  if (identity.identity.kind !== route.kind) {
+    return closeAndEnd(
+      "kind-changed",
+      `Pane ${started.paneId} runs ${identity.identity.kind}, not the routed ${route.kind}.`,
+    );
+  }
   deps.workflows.commit(lease, () => deps.workflows.bindIdentity(workflow.id, identity.identity));
   const briefFile = deps.artifacts.path(workflow.id, "brief.json");
+  const routeText = canonicalJson(route);
+  const routeFile = deps.artifacts.write(workflow.id, "route.json", routeText);
   const acquired = await external(
     deps,
     workflow.id,
@@ -686,6 +969,7 @@ async function startCollab(
         pane: started.paneId,
         agent: started.agentName,
         session: identity.identity.sessionId,
+        route: sha256(routeText),
       },
     },
     () =>
@@ -697,6 +981,7 @@ async function startCollab(
         session: identity.identity.sessionId,
         coordinator: `hmr:${workflow.id}`,
         briefFile,
+        routeFile,
       }),
     // The run and attempt, never the owner capability, so recovery can find the run.
     (value) => JSON.stringify({ runId: value.runId, attempt: value.attempt }),
@@ -1049,6 +1334,15 @@ export async function verifyWorkflow(
       if (!gate.ok) return gate;
       const brief = recordedBrief(deps, workflow);
       if (!brief.ok) return brief;
+      const unchanged = skillsUnchanged(brief.value);
+      if (!unchanged.ok) return unchanged;
+      // The attempt's mode reaches its verifiers too; an untrusted mode record sends nothing.
+      let modes: string[] = [];
+      if (skillSourcesOf(brief.value)) {
+        const recorded = attemptModes(deps, workflow.id, input.expectedAttemptId);
+        if (!recorded.ok) return recorded;
+        modes = recorded.value;
+      }
       const revision = gate.value.revision;
       // Set first: a role whose lanes fail to start still leaves the workflow verifying.
       deps.workflows.commit(lease, () => deps.workflows.setState(workflow.id, "verifying"));
@@ -1086,6 +1380,7 @@ export async function verifyWorkflow(
               laneId,
               role,
               revision,
+              modes,
             });
           },
         });
@@ -1156,7 +1451,14 @@ async function writerStoppedAtResult(
  */
 export async function reviseWorkflow(
   deps: WorkflowDeps,
-  input: { workflowId: string; expectedAttemptId: string; delta?: string; resume?: boolean },
+  input: {
+    workflowId: string;
+    expectedAttemptId: string;
+    delta?: string;
+    resume?: boolean;
+    /** Modes requested for this revision only; none unless asked again. */
+    modes?: readonly string[];
+  },
 ): Promise<Step<{ workflow: Workflow; attempt: WorkflowAttempt }>> {
   const loaded = loadWorkflow(deps, input.workflowId);
   if (!loaded.ok) return loaded;
@@ -1186,13 +1488,28 @@ export async function reviseWorkflow(
       if (!ready.ok) return fail(ready.code, `${ready.error} The writer is not relaunched.`);
       const brief = recordedBrief(deps, workflow);
       if (!brief.ok) return brief;
+      const modes = [...(input.modes ?? [])];
+      const sources = skillSourcesOf(brief.value);
+      const unknownMode = modes.find(
+        (mode) => !sources?.skills.some((skill) => skill.name === mode),
+      );
+      if (unknownMode) {
+        return fail(
+          "mode-unavailable",
+          `Mode ${unknownMode} is not one of this workflow's resolved skills (${sources?.skills.map((skill) => skill.name).join(", ") || "none"}); a revision cannot add a new skill source.`,
+        );
+      }
+      const unchanged = skillsUnchanged(brief.value);
+      if (!unchanged.ok) return unchanged;
       const attemptId = `wfa_${randomUUID()}`;
       const prompt = writerPrompt({
         brief: brief.value,
         attemptId,
         purpose: "revision",
         delta,
+        modes,
       });
+      deps.artifacts.write(workflow.id, `modes-${attemptId}.json`, canonicalJson({ modes }));
       deps.artifacts.write(workflow.id, `prompt-${attemptId}.txt`, prompt);
       if (workflow.backend === "standalone") {
         // Recorded before anything is sent, and linked to the dispatch attempt before
@@ -1370,7 +1687,13 @@ async function resumeRevision(
  */
 export async function acceptWorkflow(
   deps: WorkflowDeps,
-  input: { workflowId: string; expectedAttemptId: string; evidence: string },
+  input: {
+    workflowId: string;
+    expectedAttemptId: string;
+    evidence: string;
+    /** Skills whose skipped or blocked report the coordinator evaluated and accepts anyway. */
+    waiveSkills?: readonly string[];
+  },
 ): Promise<Step<{ workflow: Workflow }>> {
   const loaded = loadWorkflow(deps, input.workflowId);
   if (!loaded.ok) return loaded;
@@ -1393,6 +1716,8 @@ export async function acceptWorkflow(
       }
       const brief = recordedBrief(deps, workflow);
       if (!brief.ok) return brief;
+      const unchanged = skillsUnchanged(brief.value);
+      if (!unchanged.ok) return unchanged;
       const rounds = verificationLanes(deps, workflow, input.expectedAttemptId);
       for (const role of brief.value.verifierRoles) {
         const round = rounds.find((entry) => entry.verification.role === role);
@@ -1421,9 +1746,26 @@ export async function acceptWorkflow(
           );
         }
       }
+      const gated = skillGate(deps, workflow, brief.value, input.expectedAttemptId, [
+        ...new Set(input.waiveSkills ?? []),
+      ]);
+      if (!gated.ok) return gated;
+      const waivers = gated.value?.waivers ?? [];
+      if (waivers.length > 0) {
+        deps.artifacts.write(
+          workflow.id,
+          `waivers-${input.expectedAttemptId}.json`,
+          canonicalJson({ attemptId: input.expectedAttemptId, waivers }),
+        );
+      }
+      const waived =
+        waivers.length > 0
+          ? `\n(waived skills, evaluated by the coordinator: ${waivers.map((waiver) => `${waiver.name} ${waiver.status} in ${waiver.lane}${waiver.reason ? ` (${waiver.reason})` : ""}`).join("; ")})`
+          : "";
+      const acceptance = `${input.evidence}${waived}`;
       const evidenceName = `acceptance-${input.expectedAttemptId}.txt`;
       let acceptIntent: string | undefined;
-      const evidenceFile = deps.artifacts.write(workflow.id, evidenceName, input.evidence);
+      const evidenceFile = deps.artifacts.write(workflow.id, evidenceName, acceptance);
       if (workflow.backend === "agent-collab") {
         const collab = needCollab(deps);
         if (!collab.ok) return collab;
@@ -1456,7 +1798,7 @@ export async function acceptWorkflow(
           workflow.id,
           input.expectedAttemptId,
           gate.value.revision,
-          input.evidence,
+          acceptance,
         );
         if (acceptIntent) applied(deps, acceptIntent);
       });
@@ -1726,12 +2068,191 @@ function abortUnbound(
 // status / recover
 // ---------------------------------------------------------------------------------------
 
+export interface SkillReport {
+  /** Modes the current attempt was sent with; null when its mode record cannot be trusted. */
+  modes: string[] | null;
+  /**
+   * `required` is what binds this attempt (its modes and the ordinary required skills); `mode`
+   * marks a skill that was a mode of the first attempt.
+   */
+  skills: { name: string; required: boolean; mode: boolean; file: string; sha256: string }[];
+  /** Each recorded lane's claims (writer and verifiers) against the attempt's request. */
+  lanes: { lane: string; satisfied: boolean; problems: string[] }[];
+  /** Records the gate could not trust: a mode or result file missing, unreadable, or altered. */
+  integrity: string[];
+  /** Every lane together; absent before the writer's result. */
+  evidence?: { satisfied: boolean; problems: string[] };
+  /** A lane's skill report is its claim; the coordinator's review decides. */
+  claimsAreProof: false;
+}
+
 export interface WorkflowReport {
   workflow: Workflow;
   attempts: WorkflowAttempt[];
   verification: ReturnType<typeof verificationLanes>;
   intents: Intent[];
   next: string[];
+  skills?: SkillReport;
+}
+
+interface SkillWaiver {
+  name: string;
+  lane: string;
+  status: string;
+  reason?: string;
+}
+
+/** A recorded result file, trusted only at the SHA-256 the database holds for it. */
+function recordedResult(
+  artifacts: WorkflowDeps["artifacts"],
+  workflowId: string,
+  name: string,
+  digest: string,
+): { ok: true; result: WorkflowResult } | { ok: false; problem: string } {
+  let text: string;
+  try {
+    text = artifacts.read(workflowId, name);
+  } catch {
+    return { ok: false, problem: `${name} is missing or unreadable` };
+  }
+  if (sha256(text) !== digest) return { ok: false, problem: `${name} was changed` };
+  const parsed = parseResult(text);
+  return parsed.ok
+    ? { ok: true, result: parsed.value }
+    : { ok: false, problem: `${name} no longer parses` };
+}
+
+/**
+ * The skill request of one attempt and how every recorded lane's report meets it: the writer
+ * and each verifier lane of the attempt's current verification rounds. What binds the attempt
+ * (`requiredForAttempt`) binds every lane, with its references; a first attempt's mode that this
+ * attempt does not request binds none.
+ */
+function skillEvaluation(
+  deps: Pick<WorkflowDeps, "artifacts" | "workflows">,
+  workflow: Workflow,
+  brief: BriefRecord,
+  attemptId: string,
+  waived: readonly string[],
+): { report: SkillReport; waivers: SkillWaiver[] } | undefined {
+  const sources = skillSourcesOf(brief);
+  if (!sources) return undefined;
+  const integrity: string[] = [];
+  const recorded = attemptModes(deps, workflow.id, attemptId);
+  if (!recorded.ok) integrity.push(recorded.error);
+  const modes = recorded.ok ? recorded.value : null;
+  const lanes: SkillReport["lanes"] = [];
+  const waivers: SkillWaiver[] = [];
+  const evaluate = (lane: string, result: WorkflowResult) => {
+    const evaluated = evaluateSkillEvidence({
+      snapshot: sources,
+      modes: modes ?? [],
+      skills: result.version === RESULT_VERSION_V2 ? result.skills : undefined,
+      waived,
+    });
+    lanes.push({ lane, satisfied: evaluated.satisfied, problems: evaluated.problems });
+    waivers.push(...evaluated.waivedClaims.map((claim) => ({ ...claim, lane })));
+  };
+  const attempt = deps.workflows.getAttempt(attemptId);
+  if (attempt?.result) {
+    const writer = recordedResult(
+      deps.artifacts,
+      workflow.id,
+      `result-${attemptId}.json`,
+      attempt.result.sha256,
+    );
+    if (writer.ok && writer.result.lane === "writer") evaluate("writer", writer.result);
+    else integrity.push(`writer result: ${writer.ok ? "not a writer result" : writer.problem}`);
+  }
+  const latestByRole = new Map<string, ReturnType<WorkflowRepository["verifications"]>[number]>();
+  for (const verification of deps.workflows.verifications(workflow.id, attemptId)) {
+    latestByRole.set(verification.role, verification);
+  }
+  for (const verification of latestByRole.values()) {
+    for (const row of deps.workflows.verifierResults(verification.id)) {
+      const lane = `verifier ${verification.role} lane ${row.laneId}`;
+      const read = recordedResult(
+        deps.artifacts,
+        workflow.id,
+        `verifier-${row.laneId}.json`,
+        row.resultSha256,
+      );
+      if (read.ok && read.result.lane === "verifier") evaluate(lane, read.result);
+      else integrity.push(`${lane}: ${read.ok ? "not a verifier result" : read.problem}`);
+    }
+  }
+  const problems = [
+    ...integrity,
+    ...lanes.flatMap((entry) => entry.problems.map((problem) => `${entry.lane}: ${problem}`)),
+  ];
+  return {
+    report: {
+      modes,
+      skills: sources.skills.map((skill) => ({
+        name: skill.name,
+        required: requiredForAttempt(skill, modes ?? []),
+        mode: skill.mode,
+        file: skill.file,
+        sha256: skill.sha256,
+      })),
+      lanes,
+      integrity,
+      ...(attempt?.result ? { evidence: { satisfied: problems.length === 0, problems } } : {}),
+      claimsAreProof: false,
+    },
+    waivers,
+  };
+}
+
+/**
+ * Acceptance's skill gate. A v1 brief has none. For a v2 brief every lane's claims must meet
+ * the attempt's request; an untrusted record fails closed; each waiver must name a skill some
+ * lane actually did not apply, so a waiver is never invented or left unused.
+ */
+function skillGate(
+  deps: Pick<WorkflowDeps, "artifacts" | "workflows">,
+  workflow: Workflow,
+  brief: BriefRecord,
+  attemptId: string,
+  waived: readonly string[],
+): Step<{ report: SkillReport; waivers: SkillWaiver[] } | undefined> {
+  const sources = skillSourcesOf(brief);
+  if (!sources) {
+    return waived.length > 0
+      ? fail(
+          "waiver-unused",
+          "This workflow's brief requests no skills; there is nothing to waive.",
+        )
+      : { ok: true, value: undefined };
+  }
+  const evaluated = skillEvaluation(deps, workflow, brief, attemptId, waived)!;
+  const { report, waivers } = evaluated;
+  if (report.integrity.length > 0) {
+    return fail(
+      "skill-gate-integrity",
+      `The skill gate cannot trust attempt ${attemptId}'s records: ${report.integrity.join("; ")}. Nothing was accepted.`,
+      report,
+    );
+  }
+  if (!report.evidence) {
+    return fail("skill-evidence", `Attempt ${attemptId} has no writer result to evaluate.`, report);
+  }
+  if (!report.evidence.satisfied) {
+    return fail(
+      "skill-evidence",
+      `The lanes' skill reports do not meet what attempt ${attemptId} asked: ${report.evidence.problems.join("; ")}. A required skill or mode a lane did not apply counts only with --waive-skill after you evaluated its reason.`,
+      report,
+    );
+  }
+  const unused = waived.filter((name) => !waivers.some((waiver) => waiver.name === name));
+  if (unused.length > 0) {
+    return fail(
+      "waiver-unused",
+      `--waive-skill ${unused.join(", ")} matches no skill a lane of attempt ${attemptId} skipped, blocked or did not use; a waiver must name what it excuses.`,
+      report,
+    );
+  }
+  return { ok: true, value: evaluated };
 }
 
 /** The commands that can make progress now. Never includes a resend of an unresolved attempt. */
@@ -1800,20 +2321,39 @@ export function nextActions(
 }
 
 export function workflowReport(
-  deps: Pick<WorkflowDeps, "workflows" | "dispatch">,
+  deps: Pick<WorkflowDeps, "workflows" | "dispatch"> & Partial<Pick<WorkflowDeps, "artifacts">>,
   id: string,
 ): WorkflowReport | undefined {
   const workflow = deps.workflows.get(id);
   if (!workflow) return undefined;
   const attempts = deps.workflows.attempts(id);
   const current = attempts.at(-1);
+  const skills =
+    current && deps.artifacts
+      ? reportSkills({ artifacts: deps.artifacts, workflows: deps.workflows }, workflow, current.id)
+      : undefined;
   return {
     workflow,
     attempts,
     verification: current ? verificationLanes(deps, workflow, current.id) : [],
     intents: deps.workflows.intents(id),
     next: nextActions(workflow, current, deps.workflows.unresolvedIntent(id)),
+    ...(skills ? { skills } : {}),
   };
+}
+
+function reportSkills(
+  deps: Pick<WorkflowDeps, "artifacts" | "workflows">,
+  workflow: Workflow,
+  attemptId: string,
+): SkillReport | undefined {
+  let brief: BriefRecord;
+  try {
+    brief = JSON.parse(deps.artifacts.read(workflow.id, "brief.json")) as BriefRecord;
+  } catch {
+    return undefined;
+  }
+  return skillEvaluation(deps, workflow, brief, attemptId, [])?.report;
 }
 
 export type Reconciled = { resolved: "applied" | "not-applied" | "unclear"; note: string };

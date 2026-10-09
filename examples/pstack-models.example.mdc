@@ -6,6 +6,7 @@ alwaysApply: true
 # A lane is provider:model@effort with the exact native model id, or parent/auto/inherit-parent.
 # More than one lane makes a read-only panel: every lane runs, in order, duplicates included.
 
+coordinator: codex:gpt-6.1-sol@high
 feature, refactoring: codex:gpt-6.1-sol@high
 bug-fix: claude:claude-opus-5-5@xhigh
 explorer: grok:grok-4.7@medium

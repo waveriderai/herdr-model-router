@@ -226,8 +226,9 @@ start -> dispatched -> result (receipt) -> verify -> reviewed -> accept -> deliv
   was not confirmed, the pane may still run the CLI, so the worktree stays held (`unknown`)
   until someone inspects it; a missing writer record never counts as stopped.
 - **Callers.** Coordinator steps refuse a caller whose `HERDR_PANE_ID` is the writer's or a
-  verifier lane's pane. The router trusts processes of the same OS user elsewhere. This is a
-  guard, not a sandbox.
+  verifier lane's pane, and `workflow start`, `start` and `coordinator close` refuse a caller in
+  any open task's or workflow's worker pane. A caller with no `HERDR_PANE_ID` is not checked.
+  The router trusts processes of the same OS user elsewhere. This is a guard, not a sandbox.
 
 ### Writer authority
 
@@ -249,17 +250,25 @@ any handoff, and keeps it after the launch returns: the writer task (printed by 
 the worktree until `task complete` or `task release --stopped`. A launch that fails before any
 handoff gives it back. Continuing the same session chain in the same worktree keeps the task.
 
-With agent-collab, HMR first runs agent-collab's own read-only `verify` and `project` for the
-worktree, before any pane exists. The writer's exact model must be the project policy's
-`default`, or its `bounded_small_fix` when the brief is explicitly classified as a bounded small
-fix; being in the allowed list is not enough. A mismatch refuses: HMR does not rewrite the
-rules file or pick another model. The effort is checked by HMR's own project policy. Then HMR
-starts the native CLI itself (the same `env -i` launch, readiness, and
-dialog refusal), binds the session, and calls `agent-collab acquire`. agent-collab is then the
+With agent-collab, the rules file still decides the writer: Claude, Codex, or Grok, with its
+exact model and effort. Before any pane exists HMR runs agent-collab's read-only
+`capabilities` handshake (it must offer the `hmr.rules-route/v1` contract for that writer's
+kind; an older agent-collab without it refuses), then its own `verify` and `project` for the
+worktree. agent-collab never picks a default model for these writers. A project constraint in
+agent-collab (a pinned model) can only refuse: such a project accepts only a Claude writer on
+its pinned `default`, or its `bounded_small_fix` when the brief is explicitly classified as a
+bounded small fix. HMR does not rewrite the rules file or pick another model. The effort is
+checked by HMR's own project policy. Then HMR starts the native CLI itself (the same `env -i`
+launch, readiness, and dialog refusal), binds the session, and calls `agent-collab acquire`
+with the frozen route: provider, Herdr kind, model, effort, role, classification, worktree,
+exact directory, and the SHA-256 of the rules file, the project policy, and the brief.
+agent-collab validates it, keeps it unchanged for the whole run, and refuses a writer in any
+other directory, even one inside the same worktree. Editing the rules file later affects new
+workflows only; a revision always goes to the same session. agent-collab is then the
 only prompt sender (`agent-collab dispatch`, one call, no retries, waiting only until the writer
 is `working` or `blocked`, never for the task to finish) and owns receipt,
-request-changes, accept, and release; HMR keeps only references. The first version takes a
-Claude writer only. Every external call is written as an intent first, with the attempt and
+request-changes, accept, and release; HMR keeps only references. Runs agent-collab created
+before this contract keep their old meaning. Every external call is written as an intent first, with the attempt and
 the effect it expects; while one is unresolved, every other external call of that workflow is
 refused. A successful reply only marks the intent `observed`: it becomes `done` in the same
 database transaction as HMR's own matching change, so a process that dies between the two
@@ -274,6 +283,103 @@ once with `revise --resume`). An effect the status shows did not happen is recor
 applied; anything else stays unresolved with the reason. An `acquire` whose answer is lost, or
 whose capability was not saved, may hold the worktree for a run HMR cannot address; recover it
 with `agent-collab recover --worktree <path>`.
+
+### Shared skills
+
+A brief at version `hmr.brief/v2` may ask for shared skills by name (`skills.required`,
+`optional`, `modes`, and `references` inside a skill). The router reads skills only from the
+directories the operator passes as `--skills-root` (repeatable, first root wins a name) and
+follows the Agent Skills layout: each skill is a directory with a `SKILL.md` whose frontmatter
+`name` matches the directory and has a `description`. A linked skill directory is followed to
+where it lives, but its target's parent is not trusted by itself. A declared reference must
+resolve, before it is read and again after links are followed, inside an operator root, the
+skill's own real directory, or another cataloged skill's real directory. So a pstack sibling
+(`../principle-prove-it-works/SKILL.md`) works when that sibling is also linked into a root,
+and a file elsewhere in the pstack repository (`../../docs/harness.md`) works only when the
+operator also passes the pstack repository itself as a `--skills-root` (a root may hold no
+skills directly). An unrelated file next to it (`../../../otherrepo/.env`) is refused. A name
+listed twice is requested once; a skill both required and optional is refused. Digests are
+of the raw file bytes, as `shasum -a 256` prints them.
+
+- `workflow plan` lists each resolved skill's file and SHA-256; it reads files only.
+- `workflow start` refuses a missing or unreadable root, a missing or invalid required skill, a
+  broken link, or a missing or untrusted reference before anything starts, and binds the
+  resolved files and digests into the brief's SHA-256. A missing optional skill is reported
+  unavailable.
+- The writer and verifier prompts carry the catalog (name, description, path, digest, required
+  references), never the skill bodies, plus the mode requested for that one attempt and a
+  statement that no skill or mode adds authority. The attempt's mode applies to its verifiers
+  too; they stay read-only, skip any write-only step, and name it in the skill's `reason`. A
+  revision runs in a mode only with `workflow revise --mode <skill>`, which may also name an
+  optional skill the workflow resolved.
+- What an attempt requires is its own modes plus every required skill that was not a mode of
+  the first attempt. A first attempt's mode is required there only because it is a mode: on a
+  revision without `--mode` for it, the prompts list it as available, not required, and do not
+  tell any lane to apply it, and a `not-used` or missing report for it needs no waiver.
+- Verify, revise, and accept refuse once a bound skill file changed.
+- Results at `hmr.result/v2` report each skill's digest, whether it was read, and `applied`,
+  `not-used`, `skipped`, or `blocked`. `workflow accept` refuses until the writer's report and
+  every verifier lane's report match the bound digests and required references, and every
+  skill the attempt requires is `applied`. A required skill or mode a lane reported
+  `not-used`, `skipped` or `blocked` counts only with `--waive-skill <skill>`; each waiver must
+  name something a lane did not apply, and is written to `waivers-<attempt>.json` and the
+  acceptance evidence with the lane, status and reason. A wrong SKILL.md digest, a missing report or a
+  missing bound source cannot be waived. An `applied` report must include every required
+  reference at its bound digest. A waiver of a skipped skill records that the whole skill was
+  not applied, including reference reads it could not perform; it does not claim those reads
+  happened.
+- The gate fails closed when its records cannot be trusted: the attempt's mode record must
+  match the prompt whose SHA-256 the database holds, and each result file must still have its
+  recorded SHA-256. A missing, corrupt or edited record refuses acceptance; it never reads as
+  "no mode".
+- Reports are the workers' claims, not proof that a skill was followed: the coordinator still
+  reviews the work, and `workflow status` labels them as claims.
+
+Version 1 briefs and results are unchanged.
+
+### Coordinator bootstrap
+
+`start "<task>"` reads the rules file's `coordinator` role (or `--role <name>`), which must be a
+single lane; `--parent` resolves that role only. With `--dry-run` it prints the route, the
+model-router skill it will hand over, the skill catalog, the exact workflow commands, and the
+roles the coordinator will see, and touches nothing. Otherwise, inside Herdr, it starts that
+native CLI in a new pane with the same `env -i` launch and readiness check, binds its session
+and directory, and sends one prompt. It is recorded as `sending` first and never resent. The
+prompt holds:
+
+- the model-router skill's path and digest;
+- every role with its exact route, planned from the same read of the rules file as the
+  coordinator's own route, with `parent` resolved to the coordinator's own descriptor; if the
+  file changed after planning, nothing starts;
+- the exact commands to run, single-quoted: `--rules` with the canonical rules path, `--parent`
+  with the coordinator's descriptor, every `--skills-root`, and `MODEL_ROUTER_HOME=...` when the
+  operator set it explicitly (the launched CLI also gets that value, so its own `hmr` calls use
+  the same database);
+- the catalog of every `--skills-root` (validated even without `--mode`), from which the
+  coordinator picks the skills each brief needs, and any `--mode` the operator asked for;
+- the task verbatim. The task is the user's own instruction: the coordinator does what it
+  explicitly authorizes, within the project's policy. A mode, skill or brief adds no authority.
+
+The coordinator decides from the task whether source must change; a question or review does not
+start a writer workflow. That is the model's judgment, not a keyword match.
+
+The coordinator is a control role: it gets the CLI's ordinary permissions, without read-only
+or bypass flags, so it can run HMR. It is not OS read-only and holds no writer ownership; HMR's
+lease covers only writers started through HMR or agent-collab. One coordinator may be open
+per worktree. Its record moves only by compare-and-set: `starting`, `sending`, then `prompted`
+(Herdr observed activity), `sent` (Herdr accepted the submission but observed no activity:
+not confirmation that it read the task), `unknown`, or `failed`; `closed` and `failed` are final
+and a late launch step cannot reopen them. A launch step that throws leaves `unknown` once a
+pane exists or the prompt may have gone out, `failed` otherwise.
+
+`coordinator status <id>` reports the bootstrap, the workflows that coordinator started from its
+own pane, and how many were released, each from its own record. `coordinator close <id>
+--evidence ...` sends nothing and stops nothing. It refuses a launch still `starting` or
+`sending` (unless that state is older than 15 minutes), a coordinator whose workflows are still
+open, a caller in a worker pane, and any coordinator Herdr does not report idle or done in its
+bound pane with the same session; a pane created without a bound identity cannot be confirmed
+and stays held. What Herdr reported is recorded next to the operator's evidence. No classifier
+runs: with no coordinator role, `start` refuses.
 
 ## Semantic mode
 

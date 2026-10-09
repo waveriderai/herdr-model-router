@@ -1,0 +1,12 @@
+/status
+
+  >_ OpenAI Codex (v0.161.0)
+
+  Model:                gpt-6.1-sol (reasoning high, summaries auto)
+  Directory:            /work/project
+  Account:              SYNTHETIC_ACCOUNT_DETAILS
+  Session:
+                       019a0f3e-5b7c-7d21-9c4e-2f6a8b1d3
+                       e57
+
+  5h limit:             [████████░░░░░░░░░░░░] 41% used

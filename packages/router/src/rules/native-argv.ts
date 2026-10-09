@@ -64,11 +64,16 @@ export function nativeLaunch(
         read ? ["--permission-mode", "plan"] : [],
       ]);
     case "codex":
-      return built("codex", [
-        ["--model", model],
-        effort ? ["-c", `model_reasoning_effort="${effort}"`] : [],
-        read ? ["--sandbox", "read-only"] : [],
-      ]);
+      // `-c` is always required: a launch also sets the pane's Herdr context with it.
+      return built(
+        "codex",
+        [
+          ["--model", model],
+          effort ? ["-c", `model_reasoning_effort="${effort}"`] : [],
+          read ? ["--sandbox", "read-only"] : [],
+        ],
+        ["-c"],
+      );
     case "grok":
       return built("grok", [
         ["--model", model],
@@ -89,7 +94,11 @@ export function nativeLaunch(
   }
 }
 
-function built(provider: Provider, groups: string[][]): { ok: true; launch: NativeLaunch } {
+function built(
+  provider: Provider,
+  groups: string[][],
+  alsoRequired: string[] = [],
+): { ok: true; launch: NativeLaunch } {
   const args = groups.flat();
   return {
     ok: true,
@@ -100,7 +109,8 @@ function built(provider: Provider, groups: string[][]): { ok: true; launch: Nati
         ...new Set(
           args
             .filter((arg) => arg.startsWith("-"))
-            .concat(args.filter((arg) => arg === "plan" || arg === "read-only")),
+            .concat(args.filter((arg) => arg === "plan" || arg === "read-only"))
+            .concat(alsoRequired),
         ),
       ],
     },

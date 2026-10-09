@@ -8,7 +8,7 @@ export interface OpenDatabaseOptions {
   home: string;
 }
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 const MIGRATIONS: Record<number, string> = {
   1: "001_initial.sql",
@@ -16,6 +16,7 @@ const MIGRATIONS: Record<number, string> = {
   3: "003_live_effort.sql",
   4: "004_dispatch.sql",
   5: "005_workflow.sql",
+  6: "006_coordinator.sql",
 };
 
 /**

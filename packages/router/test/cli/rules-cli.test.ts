@@ -513,6 +513,37 @@ describe("workflow preview (R10)", () => {
     expectNoEffects(box, result);
   });
 
+  it("shows the requested shared skills from a trusted root with zero effects (R6)", async () => {
+    const box = sandbox();
+    const root = path.join(box.root, "skills");
+    mkdirSync(path.join(root, "poteto-mode"), { recursive: true });
+    writeFileSync(
+      path.join(root, "poteto-mode", "SKILL.md"),
+      "---\nname: poteto-mode\ndescription: Poteto mode.\n---\nBody.\n",
+    );
+    const skills = { required: ["poteto-mode"], modes: ["poteto-mode"] };
+    const file = brief(box, { version: "hmr.brief/v2", skills });
+    const result = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      file,
+      "--skills-root",
+      root,
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out);
+    expect(json.effects).toEqual([]);
+    expect(json.skills.skills[0]).toMatchObject({ name: "poteto-mode", mode: true });
+    expectNoEffects(box, result);
+    // Without a trusted root the request is refused, not guessed from the brief.
+    const missing = await cli(box, ["workflow", "plan", "--brief", file]);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain("--skills-root");
+    expectNoEffects(box, missing);
+  });
+
   it("refuses a panel writer role and an invalid brief, still with zero effects", async () => {
     const box = sandbox();
     const panel = await cli(box, [

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isHerdrEnv } from "../launch/readiness.js";
-import { parseBriefInput } from "../workflow/contracts.js";
+import { BRIEF_VERSION_V2, parseBriefInput } from "../workflow/contracts.js";
+import { resolveSkills } from "../workflow/skills.js";
 import { readRevision, type GitRead } from "../workflow/revision.js";
 import {
   acceptWorkflow,
@@ -77,6 +78,16 @@ function formatReport(report: WorkflowReport): string {
     ...(workflow.delivery
       ? [`Delivery: ${workflow.delivery.kind} (${workflow.delivery.evidence})`]
       : []),
+    ...(report.skills
+      ? [
+          `Skills: ${report.skills.skills.map((skill) => `${skill.name}${skill.required ? " (required)" : ""}`).join(", ")}; mode for this attempt: ${report.skills.modes === null ? "unknown (its record cannot be trusted)" : report.skills.modes.join(", ") || "none"}`,
+          report.skills.evidence
+            ? report.skills.evidence.satisfied
+              ? `  Skill reports of ${report.skills.lanes.map((lane) => lane.lane).join(", ")} meet the request (claims; your review decides).`
+              : `  Skill reports do not meet the request: ${report.skills.evidence.problems.join("; ")}`
+            : "  No writer skill report yet.",
+        ]
+      : []),
     ...(workflow.closingEvidence ? [`Note: ${workflow.closingEvidence}`] : []),
     ...(report.next.length > 0
       ? ["Next:", ...report.next.map((step) => `  ${step}`)]
@@ -121,6 +132,7 @@ export function executeWorkflowPlan(
   location: RulesLocation,
   briefFile: string,
   parent?: string,
+  skillRoots: readonly string[] = [],
 ): CommandResult {
   const read = readText(briefFile, "brief");
   if (!read.ok) return read.result;
@@ -142,6 +154,11 @@ export function executeWorkflowPlan(
     if (!verifier.ok) return verifier.result;
     verifiers.push(verifier.plan);
   }
+  // Reads the trusted roots' SKILL.md files only; same zero-effect boundary.
+  const skills =
+    brief.version === BRIEF_VERSION_V2 ? resolveSkills(skillRoots, brief.skills) : undefined;
+  if (skills && !skills.ok) return refused(skills.error, { code: skills.code });
+  const resolved = skills?.ok ? skills.value : undefined;
   const lines = [
     `Workflow brief "${brief.title}"`,
     `Writer: role ${writer.plan.role} -> ${writer.plan.lanes[0]!.descriptor} (write)`,
@@ -149,11 +166,34 @@ export function executeWorkflowPlan(
       (plan) =>
         `Verifier: role ${plan.role} -> ${plan.lanes.map((lane) => lane.descriptor).join(", ")} (read-only, ${plan.lanes.length} lane(s), every lane must pass)`,
     ),
+    ...(resolved
+      ? [
+          ...resolved.skills.map(
+            (skill) =>
+              `Skill: ${skill.name}${skill.required ? " (required)" : " (optional)"}${skill.mode ? ", first attempt's mode" : ""} -> ${skill.file} sha256 ${skill.sha256.slice(0, 12)}` +
+              (skill.references.length > 0
+                ? `; references ${skill.references.map((ref) => ref.path).join(", ")}`
+                : ""),
+          ),
+          ...(resolved.unavailable.length > 0
+            ? [`Skill unavailable (optional): ${resolved.unavailable.join(", ")}`]
+            : []),
+          "A skill or mode request adds no authority to merge, deploy, release, message, or read secrets.",
+        ]
+      : []),
     "Preview only: no process, pane, credential store, network, or router state was touched.",
   ];
   return {
     output: lines.join("\n"),
-    json: { ok: true, preview: true, effects: [], brief, writer: writer.plan, verifiers },
+    json: {
+      ok: true,
+      preview: true,
+      effects: [],
+      brief,
+      writer: writer.plan,
+      verifiers,
+      ...(resolved ? { skills: resolved } : {}),
+    },
     code: 0,
   };
 }
@@ -188,7 +228,13 @@ export function executeWorkflowBind(
 
 export async function executeWorkflowStart(
   deps: WorkflowDeps,
-  input: { cwd: string; briefFile: string; env: NodeJS.Dict<string>; parent?: string },
+  input: {
+    cwd: string;
+    briefFile: string;
+    env: NodeJS.Dict<string>;
+    parent?: string;
+    skillRoots?: readonly string[];
+  },
 ): Promise<CommandResult> {
   if (!isHerdrEnv(input.env)) {
     return refused(
@@ -203,6 +249,7 @@ export async function executeWorkflowStart(
     brief: parsed.value,
     cwd: input.cwd,
     ...(input.parent !== undefined ? { parent: input.parent } : {}),
+    ...(input.skillRoots ? { skillRoots: input.skillRoots } : {}),
   });
   const id = started.ok ? started.value.workflow.id : undefined;
   return fromStep(started, deps, id, ({ workflow, attempt }) =>
@@ -278,11 +325,20 @@ export async function executeWorkflowVerify(
 
 export async function executeWorkflowRevise(
   deps: WorkflowDeps,
-  input: { workflowId: string; attempt: string; file?: string; resume?: boolean },
+  input: {
+    workflowId: string;
+    attempt: string;
+    file?: string;
+    resume?: boolean;
+    modes?: readonly string[];
+  },
 ): Promise<CommandResult> {
   let delta: string | undefined;
   if (input.resume) {
     if (input.file) return refused("--resume sends the recorded prompt; it takes no --file.");
+    if (input.modes?.length) {
+      return refused("--resume sends the recorded prompt as it was; it takes no --mode.");
+    }
   } else {
     if (!input.file)
       return refused("--file <changes> is required (or --resume for a pending revision).");
@@ -296,6 +352,7 @@ export async function executeWorkflowRevise(
     expectedAttemptId: input.attempt,
     ...(delta ? { delta } : {}),
     ...(input.resume ? { resume: true } : {}),
+    ...(input.modes?.length ? { modes: input.modes } : {}),
   });
   return fromStep(
     revised,
@@ -308,7 +365,12 @@ export async function executeWorkflowRevise(
 
 export async function executeWorkflowAccept(
   deps: WorkflowDeps,
-  input: { workflowId: string; attempt: string; evidence?: string },
+  input: {
+    workflowId: string;
+    attempt: string;
+    evidence?: string;
+    waiveSkills?: readonly string[];
+  },
 ): Promise<CommandResult> {
   const evidence = requireEvidence(input.evidence);
   if (!evidence)
@@ -317,6 +379,7 @@ export async function executeWorkflowAccept(
     workflowId: input.workflowId,
     expectedAttemptId: input.attempt,
     evidence,
+    ...(input.waiveSkills?.length ? { waiveSkills: input.waiveSkills } : {}),
   });
   return fromStep(
     accepted,

@@ -17,6 +17,30 @@ interface StyledChar {
   dim: boolean;
 }
 
+/**
+ * Applies one SGR sequence's parameters to the dim state. Only standalone attributes count:
+ * 0 resets, 2 is dim, 22 is normal intensity. The extended colors 38, 48 and 58 carry their own
+ * parameters (`2;r;g;b` or `5;index`), which are data: a channel or index of 0, 2 or 22 never
+ * changes dim. A color whose form is unknown or cut short ends the sequence, and nothing after
+ * it in that sequence is read as an attribute. Colon forms (`38:2::r:g:b`) are one parameter.
+ */
+function sgrDim(body: string, dim: boolean): boolean {
+  const codes = body === "" ? ["0"] : body.split(";");
+  for (let at = 0; at < codes.length; at += 1) {
+    const code = codes[at];
+    if (code === "38" || code === "48" || code === "58") {
+      const form = codes[at + 1];
+      const length = form === "2" ? 4 : form === "5" ? 2 : undefined;
+      if (length === undefined || at + 1 + length > codes.length) break;
+      at += length;
+      continue;
+    }
+    if (code === "0" || code === "22") dim = false;
+    if (code === "2") dim = true;
+  }
+  return dim;
+}
+
 /** Splits one ANSI line into characters, tracking SGR 2 (dim), which both TUIs use for placeholders. */
 function styledChars(line: string): StyledChar[] {
   const chars: StyledChar[] = [];
@@ -27,12 +51,7 @@ function styledChars(line: string): StyledChar[] {
       const end = line.slice(index + 2).search(/[A-Za-z]/);
       if (end === -1) break;
       const body = line.slice(index + 2, index + 2 + end);
-      if (line[index + 2 + end] === "m") {
-        for (const code of body === "" ? ["0"] : body.split(";")) {
-          if (code === "0" || code === "22") dim = false;
-          if (code === "2") dim = true;
-        }
-      }
+      if (line[index + 2 + end] === "m") dim = sgrDim(body, dim);
       index += 3 + end;
       continue;
     }

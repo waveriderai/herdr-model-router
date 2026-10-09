@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -60,11 +61,19 @@ export function parsePolicy(
 /** Reads `<projectRoot>/.model-router/policy.json`; a missing file means no restrictions. */
 export function loadPolicy(
   projectRoot: string | undefined,
-): { ok: true; policy: ProjectPolicy | undefined; path?: string } | { ok: false; error: string } {
+):
+  | { ok: true; policy: ProjectPolicy | undefined; path?: string; sha256?: string }
+  | { ok: false; error: string } {
   if (!projectRoot) return { ok: true, policy: undefined };
   const file = path.join(projectRoot, POLICY_RELATIVE_PATH);
   if (!existsSync(file)) return { ok: true, policy: undefined };
-  const parsed = parsePolicy(readFileSync(file, "utf8"));
+  const text = readFileSync(file, "utf8");
+  const parsed = parsePolicy(text);
   if (!parsed.ok) return { ok: false, error: `${file}: ${parsed.error}` };
-  return { ok: true, policy: parsed.policy, path: file };
+  return {
+    ok: true,
+    policy: parsed.policy,
+    path: file,
+    sha256: createHash("sha256").update(text).digest("hex"),
+  };
 }

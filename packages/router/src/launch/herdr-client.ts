@@ -35,6 +35,16 @@ export interface HerdrClient {
   runInPane(paneId: string, command: string): Promise<CommandResult>;
   /** `herdr agent rename`: names the agent Herdr detected (target may be its pane id). */
   renameAgent(target: string, name: string): Promise<CommandResult>;
+  /**
+   * `herdr pane report-agent-session`: records the native session id an agent runs under,
+   * with `source` naming who observed it.
+   */
+  reportAgentSession(input: {
+    paneId: string;
+    source: string;
+    agent: string;
+    sessionId: string;
+  }): Promise<CommandResult>;
 }
 
 export function createProcessCommandAdapter(
@@ -135,6 +145,20 @@ export function createHerdrClient(runCommand: RunCommand): HerdrClient {
     renameAgent(target, name) {
       return runCommand(["herdr", "agent", "rename", target, name]);
     },
+    reportAgentSession(input) {
+      return runCommand([
+        "herdr",
+        "pane",
+        "report-agent-session",
+        input.paneId,
+        "--source",
+        input.source,
+        "--agent",
+        input.agent,
+        "--agent-session-id",
+        input.sessionId,
+      ]);
+    },
   };
 }
 
@@ -157,7 +181,7 @@ export interface HerdrPaneClient {
   getAgent(target: string): Promise<HerdrAgentInfo | undefined>;
   readPane(
     paneId: string,
-    options: { source: "visible" | "recent"; lines: number; ansi?: boolean },
+    options: { source: "visible" | "recent" | "recent-unwrapped"; lines: number; ansi?: boolean },
   ): Promise<string | undefined>;
   sendKeys(paneId: string, keys: readonly string[]): Promise<CommandResult>;
   sendText(paneId: string, text: string): Promise<CommandResult>;
