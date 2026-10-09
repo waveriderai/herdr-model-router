@@ -79,9 +79,15 @@ describe("panel dispatch (AE4)", () => {
     // Each pane runs exactly the resolved absolute binary with single-quoted native argv.
     expect(herdr.scripts.map((text) => text.trim().split("\n").at(-1)!.trim())).toEqual([
       "'/opt/fake bin/claude' '--model' 'claude-opus-5-5' '--effort' 'high' '--permission-mode' 'plan'",
-      "'/opt/fake bin/codex' '--model' 'gpt-6.1-sol' '-c' 'model_reasoning_effort=\"xhigh\"' '--sandbox' 'read-only'",
+      "'--model' 'gpt-6.1-sol' '-c' 'model_reasoning_effort=\"xhigh\"' '--sandbox' 'read-only'",
       "'/opt/fake bin/claude' '--model' 'claude-opus-5-5' '--effort' 'high' '--permission-mode' 'plan'",
     ]);
+    // Codex alone also gets the new pane's own Herdr context for its tool commands, set for
+    // this launch through its shell environment policy (never from the router's process).
+    expect(herdr.scripts[1]).toContain(
+      `  '/opt/fake bin/codex' \\\n  \${HERDR_PANE_ID:+-c} \${HERDR_PANE_ID:+"shell_environment_policy.set.HERDR_PANE_ID=\\"$HERDR_PANE_ID\\""} \\\n  '--model'`,
+    );
+    expect(herdr.scripts[0]).not.toContain("shell_environment_policy");
     expect(herdr.scripts[0]).toContain("exec /usr/bin/env -i \\\n");
     expect(herdr.scripts[0]).toContain("cd '/work/project' || exit 97");
     // The unready pane is closed and never named or prompted.

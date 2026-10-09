@@ -31,6 +31,13 @@
   the same user while that call runs.
 - The agent-collab subprocess receives the same allowlisted environment as Herdr calls, without
   provider API keys. agent-collab keeps its own copy of the brief in its own state directory.
+  On agent-collab, HMR also writes the writer's route (`route.json`: provider, model, effort,
+  directories, and digests, no credentials) to the private workflow directory and hands it to
+  agent-collab, which keeps its own copy.
+- Shared skills are read only from `--skills-root` directories the operator names; a brief
+  names skills, never paths. Prompts carry each skill's path and SHA-256, not its contents.
+- `start` sends the task text to the coordinator CLI in its pane once. The router database
+  keeps only the SHA-256 of the task and of that prompt, the route, and the pane and session.
 
 ## Quota mode and shared components
 

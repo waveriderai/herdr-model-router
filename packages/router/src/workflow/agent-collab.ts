@@ -124,6 +124,17 @@ const ProjectResponse = z.object({
 });
 export type CollabProject = z.infer<typeof ProjectResponse>;
 
+/** The route contract HMR hands agent-collab for a rules-mode writer. */
+export const ROUTE_CONTRACT = "hmr.rules-route/v1";
+
+/** `agent-collab capabilities`: read-only; which route contracts and writer kinds it takes. */
+const CapabilitiesResponse = z.object({
+  schema: z.literal("agent-collab.capabilities/v1"),
+  route_contracts: z.array(z.string().min(1)),
+  writer_kinds: z.record(z.string(), z.array(z.string().min(1))),
+});
+export type CollabCapabilities = z.infer<typeof CapabilitiesResponse>;
+
 /** `agent-collab verify --worktree`: read-only preflight; problems make it exit non-zero. */
 const VerifyResponse = z.object({
   ok: z.boolean(),
@@ -134,6 +145,8 @@ const VerifyResponse = z.object({
 
 export interface AgentCollabPort {
   readonly executable: string;
+  /** Read-only handshake: the route contracts and writer kinds this agent-collab accepts. */
+  capabilities(): Promise<CollabCall<CollabCapabilities>>;
   /** Read-only preflight of host, Herdr, state root and the worktree's project routing. */
   verify(input: { worktree: string }): Promise<CollabCall<{ problems: string[] }>>;
   /** Read-only: the worktree's canonical identity and the model policy agent-collab enforces. */
@@ -146,6 +159,8 @@ export interface AgentCollabPort {
     session: string;
     coordinator: string;
     briefFile: string;
+    /** The frozen `hmr.rules-route/v1` file; agent-collab validates it and never re-plans. */
+    routeFile: string;
   }): Promise<CollabCall<{ runId: string; ownerToken: string; attempt: string }>>;
   dispatch(input: {
     runId: string;
@@ -254,6 +269,9 @@ export function createAgentCollab(input: {
   };
   return {
     executable,
+    async capabilities() {
+      return strip(await call(["capabilities"], CapabilitiesResponse, []));
+    },
     async verify(args) {
       const out = await call(["verify", "--worktree", args.worktree], VerifyResponse, []);
       if (out.kind === "ok") return { kind: "ok", value: { problems: out.value.problems } };
@@ -285,6 +303,8 @@ export function createAgentCollab(input: {
           args.coordinator,
           "--task",
           `@${args.briefFile}`,
+          "--route",
+          `@${args.routeFile}`,
         ],
         AcquireResponse,
         [],

@@ -40,6 +40,13 @@ const refuse = (msg) => { save(); process.stderr.write(msg); process.exit(8); };
 const projectPath = path.join(dir, "project.json");
 const project = fs.existsSync(projectPath) ? JSON.parse(fs.readFileSync(projectPath, "utf8")) : {};
 switch (cmd) {
+  case "capabilities": {
+    // An agent-collab from before the rules-route contract has no such command.
+    if (mode === "missing") { save(); process.stderr.write("invalid choice: 'capabilities'"); process.exit(2); }
+    const kinds = mode === "claude-only" ? ["claude"] : ["claude", "codex", "grok"];
+    out({ schema: "agent-collab.capabilities/v1", route_contracts: mode === "no-route" ? [] : ["hmr.rules-route/v1"],
+      writer_kinds: { "legacy-policy": ["claude", "codex"], "rules-route": kinds } });
+  }
   case "verify": {
     const problems = project.problems || [];
     out({ ok: problems.length === 0, host: "fake", herdr_bin: "/fake/herdr", herdr_present: true, herdr_env: "1",
@@ -53,7 +60,11 @@ switch (cmd) {
   }
   case "acquire": {
     const brief = fs.readFileSync(opt("--task").slice(1), "utf8");
-    st.runs.r1 = { state: "acquired", current: "a1", session: opt("--session"), pane: opt("--pane"), attempts: [{ attempt_id: "a1", kind: "implementation", parent: null, dispatch_state: null, outcome: null }], brief };
+    const route = JSON.parse(fs.readFileSync(opt("--route").slice(1), "utf8"));
+    if (route.version !== "hmr.rules-route/v1" || route.kind !== opt("--kind") || !opt("--session")) {
+      save(); process.stderr.write("route refused"); process.exit(2);
+    }
+    st.runs.r1 = { state: "acquired", current: "a1", session: opt("--session"), pane: opt("--pane"), attempts: [{ attempt_id: "a1", kind: "implementation", parent: null, dispatch_state: null, outcome: null }], brief, route };
     out({ ok: true, run_id: "r1", owner_token: TOKEN, attempt: "a1", state: "acquired" });
   }
   case "dispatch": {
@@ -129,7 +140,15 @@ export interface FakeCollab {
   }) => void;
   state: () => {
     calls: { argv: string[]; envKeys: string[] }[];
-    runs: Record<string, { state: string; brief: string; attempts: { attempt_id: string }[] }>;
+    runs: Record<
+      string,
+      {
+        state: string;
+        brief: string;
+        route: Record<string, string | null>;
+        attempts: { attempt_id: string }[];
+      }
+    >;
     prompts: { attempt: string; prompt: string }[];
   };
   commands: () => string[];
@@ -180,6 +199,9 @@ export function fakeAgentCollab(
     commands: () =>
       state()
         .calls.map((call: { argv: string[] }) => call.argv[0]!)
-        .filter((command: string) => command !== "verify" && command !== "project"),
+        .filter(
+          (command: string) =>
+            command !== "capabilities" && command !== "verify" && command !== "project",
+        ),
   };
 }

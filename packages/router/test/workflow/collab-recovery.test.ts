@@ -184,7 +184,8 @@ describe("agent-collab replies lost after the effect (KTD12)", () => {
       expect(h.workflows.get(workflow.id)!.state).toBe("released");
       expect(counts[lose === "accept" ? "accept" : "release"]).toBe(1);
     }
-  });
+    // Two full lifecycles through a real fake-agent-collab process each.
+  }, 20_000);
 
   it("reconciles a lost dispatch from status as delivered, with exactly one submission", async () => {
     const fake = fakeAgentCollab();
@@ -230,6 +231,14 @@ describe("agent-collab replies lost after the effect (KTD12)", () => {
   });
 });
 
+/** A project constraint in agent-collab (a repo pin file), not its defaults. */
+const PINNED = {
+  source: "project-pin-file",
+  default: "claude-opus-5-5",
+  bounded_small_fix: "claude-sonnet-5-5",
+  allowed: ["claude-opus-5-5", "claude-sonnet-5-5"],
+};
+
 describe("agent-collab preflight and dispatch wait (R5, KTD10)", () => {
   async function startWith(fake: FakeCollab, rules: string, classification?: "bounded-small-fix") {
     const h = collabHarness(fake.port);
@@ -238,8 +247,20 @@ describe("agent-collab preflight and dispatch wait (R5, KTD10)", () => {
     return { h, started: await startWorkflow(h.deps, { brief, cwd: h.repo }) };
   }
 
-  it("refuses a writer model the project policy does not select, before any pane exists", async () => {
+  it("takes the rules file's exact model when the project sets no constraint", async () => {
     const fake = fakeAgentCollab();
+    const { started } = await startWith(
+      fake,
+      WORKFLOW_RULES.replace("claude-opus-5-5@high", "claude-opus-4-8@high"),
+    );
+    expect(started).toMatchObject({ ok: true });
+    // agent-collab received the rules file's model, not its own default.
+    expect(fake.state().runs.r1!.route).toMatchObject({ model: "claude-opus-4-8", effort: "high" });
+  });
+
+  it("refuses a writer model the project constraint does not allow, before any pane exists", async () => {
+    const fake = fakeAgentCollab();
+    fake.setProject({ model_policy: PINNED });
     const { h, started } = await startWith(
       fake,
       WORKFLOW_RULES.replace("claude-opus-5-5@high", "claude-opus-4-8@high"),
@@ -250,19 +271,24 @@ describe("agent-collab preflight and dispatch wait (R5, KTD10)", () => {
     expect(h.workflows.list(5)).toEqual([]);
   });
 
-  it("uses the bounded small-fix model only for an explicitly classified brief", async () => {
+  it("uses a pinned project's small-fix model only for an explicitly classified brief", async () => {
     const sonnet = WORKFLOW_RULES.replace(
       "writer: claude:claude-opus-5-5@high",
       "writer: claude:claude-sonnet-5-5@high",
     );
-    // Allowed by the policy, but not the model for ordinary implementation.
-    const plain = await startWith(fakeAgentCollab(), sonnet);
+    const pinned = () => {
+      const fake = fakeAgentCollab();
+      fake.setProject({ model_policy: PINNED });
+      return fake;
+    };
+    // Allowed by the pin, but not the model for ordinary implementation.
+    const plain = await startWith(pinned(), sonnet);
     expect(plain.started).toMatchObject({ ok: false, code: "backend-model-policy" });
     expect(plain.h.herdr.calls).toEqual([]);
-    const small = await startWith(fakeAgentCollab(), sonnet, "bounded-small-fix");
+    const small = await startWith(pinned(), sonnet, "bounded-small-fix");
     expect(small.started).toMatchObject({ ok: true });
     // And an explicit small fix routed to the default model is refused the same way.
-    const wrong = await startWith(fakeAgentCollab(), WORKFLOW_RULES, "bounded-small-fix");
+    const wrong = await startWith(pinned(), WORKFLOW_RULES, "bounded-small-fix");
     expect(wrong.started).toMatchObject({ ok: false, code: "backend-model-policy" });
   });
 

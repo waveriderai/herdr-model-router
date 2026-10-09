@@ -11,6 +11,26 @@ and released under a single tag.
 
 ### Added
 
+- agent-collab writers chosen by the rules file: Claude, Codex, or Grok. HMR checks agent-collab's
+  read-only `capabilities` (`hmr.rules-route/v1`) before any pane exists and hands it a frozen
+  route (provider, kind, model, effort, role, exact directory, rules, policy and brief digests).
+  agent-collab no longer picks the writer's model; a project pin there can only refuse.
+- Shared skills in `hmr.brief/v2` (`skills.required|optional|modes|references`) from trusted
+  `--skills-root` directories, with SHA-256-bound sources, per-attempt modes for the writer and
+  its verifiers (`workflow revise --mode`), `hmr.result/v2` skill claims, and an acceptance
+  gate over the writer's and every verifier lane's claims that fails closed on a missing or
+  altered record (`workflow accept --waive-skill` for an evaluated skip, recorded per lane).
+- `hmr start "<task>"`: starts the rules file's `coordinator` role as a native CLI and gives it
+  the model-router skill, the roles, the skills catalog, the exact quoted commands (rules
+  file, its own descriptor as parent, skills roots, router home), and the task once;
+  `hmr coordinator status|close`. Schema version 6 adds `coordinators` and
+  `coordinator_workflows`, with compare-and-set state changes; close needs the coordinator
+  confirmed stopped. Worker panes cannot start a coordinator or a workflow.
+- Codex launches pass the new pane's own Herdr context (and an explicit `MODEL_ROUTER_HOME`) to
+  Codex's tool commands with per-launch `-c shell_environment_policy.set.*` arguments.
+- A workflow or `start` refuses when the rules file or project policy changed between planning
+  and launch (`rules-changed`); the route's digests are of the text that was planned.
+
 - Rules mode, now the default for `router run`: routes an explicit `--role` from a
   `pstack-models.mdc` role table (`--rules`, the project's `.model-router/` or `.cursor/rules/`,
   then `~/.cursor/rules/`). New `roles` and `plan` commands and rules-mode `run --dry-run` read
@@ -54,6 +74,9 @@ and released under a single tag.
 
 ### Changed
 
+- An agent-collab workflow now needs an agent-collab that offers `capabilities` with
+  `hmr.rules-route/v1`; an older one is refused before any pane exists. agent-collab's
+  `defaults` model is no longer required of the writer; the rules file's exact model is used.
 - A real quota-mode `router run` now takes the worktree's writer authority before it sends the
   handoff and keeps it for the writer's whole run. The output names the writer task; end it with
   `router task complete` or `router task release --stopped`. `--session` continuing the same

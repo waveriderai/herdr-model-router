@@ -61,6 +61,11 @@ export interface DispatchDeps {
   launchFiles: LaunchFiles;
   /** Variable names (not values) the launched CLI keeps; see `launchEnvNames`. */
   launchEnvNames: readonly string[];
+  /**
+   * Values the operator set explicitly for the router (`MODEL_ROUTER_HOME`), passed literally
+   * so a launched CLI's own `hmr` calls open the same router home.
+   */
+  launchFixedEnv?: Readonly<Record<string, string>>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -188,7 +193,6 @@ export async function sendOnce(input: {
   workflowId?: string;
 }): Promise<DispatchAttempt> {
   const { deps } = input;
-  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const attempt = deps.store.beginAttempt({
     laneId: input.lane.id,
     purpose: input.purpose,
@@ -196,50 +200,63 @@ export async function sendOnce(input: {
     ...(input.workflowId ? { workflowId: input.workflowId } : {}),
   });
   input.onBegin?.(attempt);
-  let state: Exclude<AttemptState, "sending">;
-  let evidence: string;
+  const { state, evidence } = await promptOnce(deps, input.agentName, input.text);
+  deps.store.finishAttempt(attempt.id, state, evidence);
+  return deps.store.getAttempt(attempt.id)!;
+}
+
+/**
+ * Submits one prompt and classifies what Herdr showed. The caller records `sending` first and
+ * this outcome after; anything unclassifiable is `unknown`, which is never retried.
+ */
+export async function promptOnce(
+  deps: Pick<DispatchDeps, "herdr" | "timeoutMs">,
+  target: string,
+  text: string,
+): Promise<{ state: Exclude<AttemptState, "sending">; evidence: string }> {
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let result: CommandResult;
   try {
     result = await deps.herdr.prompt({
-      target: input.agentName,
-      text: input.text,
+      target,
+      text,
       until: ["working", "blocked"],
       timeoutMs,
     });
   } catch (error) {
-    deps.store.finishAttempt(
-      attempt.id,
-      "unknown",
-      `prompt call threw: ${redactCollectorText(String(error))}`,
-    );
-    return deps.store.getAttempt(attempt.id)!;
+    return {
+      state: "unknown",
+      evidence: `prompt call threw: ${redactCollectorText(String(error))}`,
+    };
   }
   const output = `${result.stdout}${result.stderr}`;
   if (result.ok) {
-    state = observedState(result.stdout);
-    evidence = `herdr agent prompt --wait observed ${state}`;
-  } else if (output.includes("agent_blocked")) {
-    state = "not-delivered";
-    evidence = "herdr rejected the prompt with agent_blocked before sending any input";
-  } else if (output.includes("agent_prompt_stalled")) {
-    // Herdr accepted the submission but saw no activity within its 5s window.
-    const waited = await deps.herdr.waitFor({
-      target: input.agentName,
-      until: ["working", "blocked"],
-      timeoutMs,
-    });
-    state = waited.ok ? observedState(waited.stdout) : "sent";
-    evidence = waited.ok
-      ? `submission accepted; a later wait observed ${state}`
-      : "submission accepted (agent_prompt_stalled); no working or blocked state observed yet";
-  } else {
-    state = "unknown";
-    evidence = redactCollectorText(
-      herdrError(result, "herdr agent prompt returned no delivery evidence"),
-    );
+    const state = observedState(result.stdout);
+    return { state, evidence: `herdr agent prompt --wait observed ${state}` };
   }
-  deps.store.finishAttempt(attempt.id, state, evidence);
-  return deps.store.getAttempt(attempt.id)!;
+  if (output.includes("agent_blocked")) {
+    return {
+      state: "not-delivered",
+      evidence: "herdr rejected the prompt with agent_blocked before sending any input",
+    };
+  }
+  if (output.includes("agent_prompt_stalled")) {
+    // Herdr accepted the submission but saw no activity within its 5s window.
+    const waited = await deps.herdr.waitFor({ target, until: ["working", "blocked"], timeoutMs });
+    const state = waited.ok ? observedState(waited.stdout) : "sent";
+    return {
+      state,
+      evidence: waited.ok
+        ? `submission accepted; a later wait observed ${state}`
+        : "submission accepted (agent_prompt_stalled); no working or blocked state observed yet",
+    };
+  }
+  return {
+    state: "unknown",
+    evidence: redactCollectorText(
+      herdrError(result, "herdr agent prompt returned no delivery evidence"),
+    ),
+  };
 }
 
 function laneText(
@@ -375,7 +392,14 @@ export function orphanNote(paneId: string, closed: boolean): string {
 export async function startNativeAgent(input: {
   deps: Pick<
     DispatchDeps,
-    "herdr" | "pane" | "launchFiles" | "launchEnvNames" | "sleep" | "timeoutMs" | "pollMs"
+    | "herdr"
+    | "pane"
+    | "launchFiles"
+    | "launchEnvNames"
+    | "launchFixedEnv"
+    | "sleep"
+    | "timeoutMs"
+    | "pollMs"
   >;
   laneId: string;
   cwd: string;
@@ -410,6 +434,19 @@ export async function startNativeAgent(input: {
         args: launch.argv.slice(1),
         cwd: input.cwd,
         envNames: deps.launchEnvNames,
+        ...(deps.launchFixedEnv ? { fixedEnv: deps.launchFixedEnv } : {}),
+        // Codex gives its tool commands only what its shell environment policy sets, so the
+        // new pane's Herdr context (and the router home) is set there for this launch alone.
+        ...(launch.kind === "codex"
+          ? {
+              codexContext: [
+                ...new Set([
+                  ...deps.launchEnvNames.filter((name) => name.startsWith("HERDR_")),
+                  ...Object.keys(deps.launchFixedEnv ?? {}),
+                ]),
+              ],
+            }
+          : {}),
       }),
     );
     const ran = await deps.herdr.runInPane(paneId, paneCommand(scriptPath));

@@ -173,7 +173,7 @@ hmr workflow delivery <id> --evidence "PR #12, CI green"    # or --not-applicabl
 hmr workflow release <id> --evidence "..."
 ```
 
-Briefs and results are versioned JSON (`hmr.brief/v1`, `hmr.result/v1`; see
+Briefs and results are versioned JSON (`hmr.brief/v1` and `/v2`, `hmr.result/v1` and `/v2`; see
 [examples/workflow](examples/workflow)). A result names its workflow, attempt, and the exact
 worktree revision (HEAD plus a fingerprint of every tracked and non-ignored untracked file); a
 the router refuses a stale attempt or a changed worktree. Verification, acceptance, and release need the
@@ -183,9 +183,46 @@ lane to pass. The router releases nothing before the coordinator records deliver
 
 Each worktree has one writer authority, either the router's own lease (`standalone`, the default) or
 the optional private `agent-collab` CLI (`hmr workflow bind --backend agent-collab`). Every HMR
-writer entrance follows that binding. A process that writes to the worktree without going
+writer entrance follows that binding. On agent-collab the writer is whatever the rules file
+names (Claude, Codex, or Grok); agent-collab receives that exact route and never substitutes a
+default model, and a project pin there can only refuse. A process that writes to the worktree without going
 through HMR or the bound authority is outside what HMR can control. Quota-mode `run` takes the same
 authority and holds it until its writer task is closed with `task complete`.
+
+### Shared skills and modes
+
+A `hmr.brief/v2` brief can ask for shared skills by name, such as a pstack `poteto-mode`, from
+directories you trust:
+
+```sh
+hmr workflow plan  --brief brief.json --skills-root ~/path/to/skills
+hmr workflow start --brief brief.json --skills-root ~/path/to/skills
+hmr workflow revise <id> --attempt <a> --file changes.txt --mode poteto-mode   # per attempt
+hmr workflow accept <id> --attempt <a> --evidence "..." [--waive-skill <skill>]
+```
+
+Workers get each skill's path and digest, not its text, and report what they read and applied
+(`hmr.result/v2`). A missing skill or reference refuses before anything starts; a changed one
+refuses later steps; acceptance needs the writer's and every verifier's report to match, and
+an evaluated skip needs an explicit waiver. Reports are claims, not proof. A mode applies to
+one attempt only, and no skill or mode request authorizes merging, deploying, or messaging. See
+[Shared skills](docs/rules.md#shared-skills).
+
+### Start from a task
+
+```sh
+hmr start "Add CSV export to the report page" --dry-run   # route and roles; touches nothing
+hmr start "Add CSV export to the report page" [--skills-root <dir>] [--mode poteto-mode]
+hmr coordinator status <id>
+```
+
+`start` reads the `coordinator` role in your rules file (for example
+`coordinator: codex:gpt-6.1-sol@high`), starts that CLI, and gives it the `model-router` skill,
+your roles, and the task once. The coordinator chooses the roles and drives `hmr workflow`.
+There is no classifier and no default model: without a coordinator role, `start` refuses. The
+coordinator is a control role with its CLI's ordinary permissions, not a writer and not
+read-only. A Bot that can run commands may call `hmr start` or write a brief itself; see
+[`examples/workflow/bot-brief.example.json`](examples/workflow/bot-brief.example.json).
 
 ## Provider status
 

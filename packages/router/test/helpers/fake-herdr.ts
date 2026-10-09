@@ -118,8 +118,12 @@ export function fakeHerdr(
       if (!scriptPath) return failed("", "unexpected command");
       const text = readFileSync(scriptPath, "utf8");
       scripts.push(text);
-      const last = text.trim().split("\n").at(-1)!.trim();
-      const executable = path.basename(/^'([^']+)'/.exec(last)![1]!);
+      // The executable is the script's first line that starts with a quoted absolute path.
+      const line = text
+        .split("\n")
+        .find((entry) => /^\s*'\//.test(entry))!
+        .trim();
+      const executable = path.basename(/^'([^']+)'/.exec(line)![1]!);
       const pane = panes.get(paneId)!;
       const kind = KIND_BY_EXECUTABLE[executable]!;
       Object.assign(

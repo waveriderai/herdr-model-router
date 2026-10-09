@@ -1,0 +1,21 @@
+{
+  "version": "hmr.brief/v2",
+  "title": "Add CSV export to the report page",
+  "goal": "A Bot relayed this request: the report page needs a CSV export button. Build it with tests.",
+  "scope": {
+    "allowed": ["src/reports/export.ts", "test/reports/export.test.ts"],
+    "excluded": []
+  },
+  "writerRole": "feature",
+  "verifierRoles": ["reviewers"],
+  "acceptance": ["The export matches the table on screen", "npm test passes"],
+  "constraints": [
+    "The Bot's request does not authorize deploying, merging, or messaging anyone; stop at a reviewed local change"
+  ],
+  "skills": {
+    "required": ["poteto-mode"],
+    "optional": [],
+    "modes": ["poteto-mode"],
+    "references": []
+  }
+}

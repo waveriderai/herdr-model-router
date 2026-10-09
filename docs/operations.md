@@ -68,6 +68,35 @@ interruption:
 
 The router refuses to change a worktree's binding while any workflow is open or a writer task owns it.
 
+Schema version 6 adds `coordinators` (one row per `start` bootstrap: its route, argv, bound
+pane and session, the SHA-256 of the task and of the one prompt, and its state) and
+`coordinator_workflows` (the workflows a coordinator started from its own pane). The task text
+itself is not stored. One coordinator may be open (`starting`, `sending`, `sent`, `prompted`,
+`unknown`) per worktree. Every state change is compare-and-set, so a closed record never
+reopens:
+
+- `sent`: Herdr accepted the submission but observed no activity. That is not confirmation the
+  coordinator read the task; check its pane.
+- `unknown`: the bootstrap may or may not have arrived, or a launch step failed after the pane
+  existed. It is never resent. Inspect the pane.
+- `failed`: nothing was delivered and the pane was closed (for example a trust or update
+  screen, or a prompt Herdr refused). Finish that screen in the CLI yourself, then start again.
+- `router coordinator close <id> --evidence "..."` sends nothing and stops nothing. It needs
+  Herdr to report the bound coordinator idle or done with the same session, no open workflow
+  started by it, and a caller outside any worker pane; it refuses a launch still `starting` or
+  `sending` unless that state is older than 15 minutes. A pane created without a bound
+  identity cannot be confirmed: the record stays held, and `coordinator status` shows the pane.
+
+`start` and every launch keep an explicitly set `MODEL_ROUTER_HOME`: the launched CLI gets the
+same value, and the coordinator's commands carry it, so they open the same database.
+
+agent-collab must offer `capabilities` with `hmr.rules-route/v1` before an agent-collab
+workflow starts; an older agent-collab is refused before any pane exists. Its runs from before
+the contract keep their meaning. Workflows with shared skills also keep `modes-<attempt>.json`
+next to each prompt in the private workflow directory: the modes that attempt was sent with,
+checked against that prompt's recorded SHA-256 before acceptance, and `waivers-<attempt>.json`
+when an acceptance waived a skill.
+
 ## Live effort switching
 
 Off unless `liveEffort.enabled` is `true` (see [Configuration](configuration.md)). Schema

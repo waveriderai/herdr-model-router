@@ -17,6 +17,7 @@ import { createLiveTypeSafeClient, type TypeSafePort } from "../semantic/typesaf
 import { openDatabase } from "../store/database.js";
 import { DispatchRepository } from "../store/dispatch-repository.js";
 import { WorkflowRepository } from "../store/workflow-repository.js";
+import { CoordinatorRepository } from "../store/coordinator-repository.js";
 import { userHome } from "./rules-commands.js";
 import type { RulesRunDeps } from "./rules-run.js";
 import { previewPlan } from "./rules-commands.js";
@@ -73,7 +74,11 @@ export function launchFilesIn(home: string): LaunchFiles {
 export function openDispatchDeps(
   env: NodeJS.Dict<string>,
   overrides: RulesRuntimeOverrides = {},
-): DispatchDeps & { workflows: WorkflowRepository; close: () => void } {
+): DispatchDeps & {
+  workflows: WorkflowRepository;
+  coordinators: CoordinatorRepository;
+  close: () => void;
+} {
   const home = loadConfig({ env }).home;
   const db = openDatabase({ home });
   const childEnv = sanitizeRuntimeEnv(env);
@@ -87,12 +92,16 @@ export function openDispatchDeps(
   return {
     store: new DispatchRepository(db),
     workflows: new WorkflowRepository(db),
+    coordinators: new CoordinatorRepository(db),
     herdr: (overrides.createHerdr ?? createHerdrClient)(adapter),
     pane: (overrides.createHerdrPane ?? createHerdrPaneClient)(quick),
     probeHelp: (executable) => quick([executable, "--help"]),
     resolveExecutable: (name) => resolveExecutable(name, env.PATH),
     launchFiles: launchFilesIn(home),
     launchEnvNames: launchEnvNames(env),
+    ...(env.MODEL_ROUTER_HOME
+      ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
+      : {}),
     close: () => db.close(),
   };
 }
@@ -141,6 +150,7 @@ export function openWorkflowDeps(
   const location = { cwd, home: userHome(env), ...(rulesFlag ? { rulesFlag } : {}) };
   return {
     workflows: dispatch.workflows,
+    coordinators: dispatch.coordinators,
     dispatch,
     artifacts: artifactStoreIn(home),
     git: createGitRead(env),

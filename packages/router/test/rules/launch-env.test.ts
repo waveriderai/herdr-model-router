@@ -15,7 +15,12 @@ import { describe, expect, it } from "vitest";
 import { openDispatchDeps } from "../../src/commands/rules-runtime.js";
 import type { CommandResult, HerdrClient, HerdrPaneClient } from "../../src/launch/herdr-client.js";
 import { dispatchPlan } from "../../src/rules/dispatch.js";
-import { launchScript, paneCommand, shQuote } from "../../src/rules/launch-script.js";
+import {
+  launchScript,
+  paneCommand,
+  shQuote,
+  tomlBasicString,
+} from "../../src/rules/launch-script.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
 import { planRoute } from "../../src/rules/plan.js";
 
@@ -236,5 +241,91 @@ describe("launch script quoting", () => {
     );
     expect(paneCommand("/a b/c.sh")).toBe("/bin/sh '/a b/c.sh'");
     expect(() => paneCommand("/a'b/c.sh")).toThrow(/cannot be quoted safely/);
+  });
+});
+
+describe("Codex tool-command context (process level)", () => {
+  /** Runs one launch script in `shell` with the pane's own environment; returns what codex saw. */
+  async function launchCodex(shell: string, paneEnv: Record<string, string>) {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "hmr-codex-ctx-")));
+    const record = path.join(root, "record.txt");
+    const fake = path.join(root, "codex");
+    writeFileSync(
+      fake,
+      `#!/bin/sh\n{ for a in "$@"; do printf 'arg=%s\\n' "$a"; done; /usr/bin/env; } > ${shQuote(record)}\n`,
+    );
+    chmodSync(fake, 0o755);
+    const script = path.join(root, "launch.sh");
+    const routerHome = path.join(root, 'router home "q" \\b');
+    writeFileSync(
+      script,
+      launchScript({
+        executable: fake,
+        args: ["--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'],
+        cwd: root,
+        envNames: ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HOME", "PATH"],
+        fixedEnv: { MODEL_ROUTER_HOME: routerHome },
+        codexContext: ["HERDR_ENV", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "MODEL_ROUTER_HOME"],
+      }),
+    );
+    const code = await run(shell, paneCommand(script), { PATH: "/usr/bin:/bin", ...paneEnv });
+    const lines = existsSync(record) ? readFileSync(record, "utf8").trim().split("\n") : [];
+    return {
+      code,
+      routerHome,
+      args: lines.filter((line) => line.startsWith("arg=")).map((line) => line.slice(4)),
+      env: lines.filter((line) => !line.startsWith("arg=")),
+    };
+  }
+
+  it.each(SHELLS)(
+    "sets the new pane's own Herdr values and the router home for codex's tools from %s",
+    async (shell) => {
+      const seen = await launchCodex(shell, {
+        HERDR_ENV: "1",
+        HERDR_PANE_ID: "w9:p1",
+        HERDR_SOCKET_PATH: "/tmp/herdr dir/herdr.sock",
+        OPENAI_API_KEY: "sk-synthetic-openai",
+      });
+      expect(seen.code).toBe(0);
+      expect(seen.args).toEqual([
+        "-c",
+        'shell_environment_policy.set.HERDR_ENV="1"',
+        "-c",
+        'shell_environment_policy.set.HERDR_PANE_ID="w9:p1"',
+        "-c",
+        'shell_environment_policy.set.HERDR_SOCKET_PATH="/tmp/herdr dir/herdr.sock"',
+        "-c",
+        `shell_environment_policy.set.MODEL_ROUTER_HOME=${tomlBasicString(seen.routerHome)}`,
+        "--model",
+        "gpt-6.1-sol",
+        "-c",
+        'model_reasoning_effort="high"',
+      ]);
+      // The process itself has the same values, and no API key.
+      expect(seen.env).toEqual(
+        expect.arrayContaining(["HERDR_PANE_ID=w9:p1", `MODEL_ROUTER_HOME=${seen.routerHome}`]),
+      );
+      expect(seen.env.join("\n")).not.toContain("sk-synthetic");
+    },
+  );
+
+  it("passes nothing for a Herdr value the pane does not have, and invents none", async () => {
+    const seen = await launchCodex("/bin/sh", { HERDR_ENV: "1", HERDR_PANE_ID: "w9:p1" });
+    expect(seen.code).toBe(0);
+    expect(seen.args.join(" ")).not.toContain("HERDR_SOCKET_PATH");
+  });
+
+  it("stops the launch when a pane value cannot be written as a plain TOML string", async () => {
+    const seen = await launchCodex("/bin/sh", {
+      HERDR_ENV: "1",
+      HERDR_PANE_ID: 'w9:p1" model="other',
+    });
+    expect(seen.code).toBe(96);
+    expect(seen.args).toEqual([]);
+  });
+
+  it("escapes a fixed value as a TOML basic string", () => {
+    expect(tomlBasicString('a"b\\c\nd')).toBe('"a\\"b\\\\c\\u000Ad"');
   });
 });
