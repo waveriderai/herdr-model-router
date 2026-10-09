@@ -271,18 +271,18 @@ U1–U8 的結果與驗證證據寫入本計畫的交付紀錄。三 provider �
 
 ## Delivery Evidence
 
-U8 與原生修正已完成 898 個測試的完整 gate；Codex 延遲刷新與 UUID 換行都有針對性 red／green tests，從真實 UI 擷取 UUID 後經 Herdr 的 `herdr:codex` 支援來源登記並讀回。獨立 Sonnet 已審查，Codex 新 coordinator 的工具 cwd／pane／thread 均與實際綁定一致。Grok 的兩 attempt 原生 writer／reviewer、poteto 第一交辦套用與第二交辦未 re-arm、local delivery 及 lease release 已驗收；預設 Codex coordinator 正在執行 Claude bug-fix 與 Codex code-generation 的序列流程，尚未宣稱全部完成。
+U1–U5、U7、U8 已完成實作與獨立審查。公開完整 gate 通過 93 個 test files、898 個 tests，包含 build、typecheck、lint、format。私有 staged AGC 通過 150／150，既有 project config 直接唯讀驗證，未複製設定或憑證。Sonnet 的最後來源審查只留下 CHANGELOG 的 session source 說明，Codex 已修正為 Herdr 支援的 `herdr:codex`。
 
-使用者已在本次任務明確授權處理必要 CLI 提示、安裝 Grok／Herdr 整合，並持續到經審查與 CI 通過後合併及 DevPro 本機啟用，不再逐步確認。此授權涵蓋本任務必要修正後的最終 head；品質 gate、精確 head 比對、既有訂閱與單 writer 規則保留。Grok integration 已安裝，新的 bootstrap 已取得真實 session ID 並派出 writer，沒有偽造 session 或放寬身分 gate。
+U8 已經原生驗證：MDC 選出的 Codex coordinator 在第一次任務前由 native `/status` 取得完整 UUID，後續 hook 回報同一個 UUID。工具看到的 cwd、pane、workspace、tab、thread 均符合綁定。延遲 echo、ANSI RGB 與 UUID 換行均有 red／green regression tests，未略過身分或 echo gate。
 
-原生驗收確認需要補正 R7：原始 brief 的 mode 必須列入 required，但不能因此在未 re-arm 的 revision 保持強制套用。新增設計澄清：snapshot 中原始 mode 的 required 義務只在該 attempt 的 modes 包含它時生效；一般 required skills 維持每次交辦的義務，revision 明確新增的 mode 仍需套用。inactive mode 只提供來源指標，不能透過 prompt 標籤或驗收 gate 自動重新啟用。Codex 的純函式 probe 已重現缺陷，修正回到同一 Opus writer，private AGC 不需要改動。
+Grok 原生 workflow 已完成初始交辦、同 session revision、readonly reviewer、Codex 的直接程式斷言、local delivery 與 lease release。第一交辦要求 poteto，第二交辦未 re-arm，沒有被 gate 強制重新套用。原生 coordinator 已停手並關閉其 slot。
 
-U1–U5、U7 已完成第一輪實作，尚未驗收交付。DevPro 的同一個 `claude-opus-5-5` session 實際執行 ce-work return-to-caller，`npm run verify` 通過 91 個 test files、824 個 tests。私有 staged AGC 通過 146／148 個 tests，另外兩項缺少 staging 的 entrypoint／真實專案設定；既有設定只會以唯讀方式驗證，不複製設定或憑證。
+預設 Codex coordinator 已解讀一個包含兩種工作類型的自然語言任務，先分派 MDC 的 Claude bug-fix，再於前一 workflow release 後分派 Codex code-generation。兩個 workflow 皆完成 readonly Sonnet review、accept、local delivery 與 release。Claude 三次交辦保持同一 session，最後一次只補讀參考檔並更正先前聲明，沒有改 source；Codex 使用新的原生 writer session。Root 已獨立核對唯一變更為 fixture source，並實際通過 inclusive count 與 sum 的一般、單點、反向範圍斷言。Coordinator 已 stopped，slot closed。
 
-獨立 Sonnet ce-code-review 已完成 report-only 審查；未執行 cross-model peer，不能宣稱跨模型審查通過。Codex 已確認需要修正 coordinator 的 rules／parent／runtime 傳遞、技能來源邊界、writer／verifier evidence gate、attempt artifact 缺失與 coordinator close 的競態。修正回到同一 writer session，保留 AGC lease。
+上述紀錄證明三 provider 的原生 writer 路由與生命週期可運作，不代表每個 agent 完整遵循 poteto。原生報告保留以下限制：Claude 初次漏讀 principles 後已補讀及更正，但歷史順序不能回溯宣稱成功；feature reviewer 的完整 playbook 與部分 leaf skills 未執行，以明確的角色／工具豁免記錄；workers 曾用 bare hmr 做唯讀 fingerprint，coordinator 另以指定 CLI 核對；bug-fix revision 的 reviewer prompt 漏帶新反向斷言，writer、coordinator 與後續獨立 reviewer 已實際通過該斷言。這些是 coordinator 品質及模式遵循限制，未宣稱 strict combined native acceptance 完全通過。HMR 的 required evidence、unused waiver refusal 與 effective-attempt mode gate 已驗證，report claims 仍不是行為證明。實際 served model／effort 無獨立 attestation。
 
-U6 尚未完成。三 provider 原生 workflow、自然語言 coordinator 的實際角色分派、工具 Herdr context 與 poteto 行為證據、CI、精確 head Kai GO、工具啟用與 cleanup 都待完成。已定位 `agent-orchestration` 的 Hermes → DevPro Herdr source contract；Grok EM／DE／SWE 的真實 gateway 與遠端技能部署仍未驗證，不能宣稱所有 Bot 已接通。此紀錄由 Codex 維護，Claude 實作不編輯 `docs/plans/`。
+使用者已明確授權本任務持續到最終 reviewed、CI-green head 合併及 DevPro 本機啟用，不再逐步確認。授權涵蓋必要 CLI 提示、Grok／Herdr 整合及本任務必要修正；品質 gate、精確 head 比對、既有訂閱與單 writer 規則保留。Grok integration 已安裝，Codex 的暫時診斷 hook 已移除，未讀 raw provider transcript 或 credentials。
 
-同 session 的 a2 修正已完成，`npm run verify` 通過 92 個 test files、858 個 tests；staged AGC 在直接唯讀驗證既有 project config 的設定下通過 150／150。獨立 Sonnet 的針對性驗證沒有發現修正回歸。Codex 另以純函式 probe 核對 waiver 語意，澄清文件：明確豁免整個 skipped skill 不代表已讀 references；`applied` 聲明仍須吻合所有 reference digest，bound source 缺失或變更仍不可豁免。這次只改說明與註解，沒有變更 gate 行為。
+U6 剩餘交付步驟為 final-head CI、Codex ACCEPT、分級腳本與既有使用者 GO、合併、canonical CLI build、限定三個私有 AGC source files 的 hash-gated 原子啟用及 rollback backup、MDC coordinator row、共享 model-router skill links、部署後 smoke check、development lease release 與 pane cleanup。公開 source 的 CI 已通過四項，這次交付紀錄修改將再次由 CI 核對。
 
-隔離的原生 dry-run 已確認自訂 rules、actual-parent、46 個 pstack catalog entries 與空 effects；runtime home 未產生檔案。原生 Codex 在更新提示停止，Claude 在新測試目錄的 trust 提示停止。兩次 HMR bootstrap 都記為 failed、沒有 prompt、建立的 pane 已關閉；這是 refusal 證據，不是正向通過。另開的 setup pane 保留提示供使用者處理，已提出僅 Skip 更新／信任隔離測試目錄的具體授權問題。U6、最終 ACCEPT、merge 與啟用保持未完成；先發布 draft PR 供審查及 CI，不把草稿視為交付。
+Bot 的共同 brief／skill contract 已完成。已定位 Hermes → DevPro Herdr 的 source contract，但 Grok EM／DE／SWE 的真實 gateway 與遠端部署仍未驗證。這是獨立未完成整合項，不能把本機啟用宣稱為所有 Bot 已接通。部署後 receipt 保存在 DevPro 私有交付紀錄，公開 repo 不放 owner token、runtime DB、個人 MDC 或原生 logs。
