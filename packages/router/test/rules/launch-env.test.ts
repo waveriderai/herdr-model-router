@@ -84,6 +84,7 @@ describe("native CLI launch environment (process level)", () => {
 
       const prompts: string[] = [];
       const paneCommands: string[] = [];
+      let renamed: string | undefined;
       const herdr: HerdrClient = {
         async splitCurrent() {
           return ok(JSON.stringify({ result: { pane: { pane_id: "w9:p1" } } }));
@@ -107,7 +108,8 @@ describe("native CLI launch environment (process level)", () => {
           });
           return code === 0 ? ok() : { ok: false, code: code ?? 1, stdout: "", stderr: "" };
         },
-        async renameAgent() {
+        async renameAgent(_target, name) {
+          renamed = name;
           return ok();
         },
         async waitFor() {
@@ -135,7 +137,10 @@ describe("native CLI launch environment (process level)", () => {
                 status: "idle",
                 paneId: "w9:p1",
                 interactiveReady: true,
-                name: target,
+                // What Herdr reports once the agent is named and its integration reported a session.
+                name: renamed ?? target,
+                sessionId: "sess-w9-p1",
+                cwd: project,
               }
             : undefined;
         },

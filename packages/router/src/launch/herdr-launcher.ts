@@ -64,6 +64,36 @@ export interface LaunchResult {
   launchToken?: string;
   paneId?: string;
   agentName?: string;
+  /**
+   * What is known about the handoff. `not-sent`: no input reached any agent (the launch stopped
+   * before the prompt, or Herdr's structured `agent_blocked` refused it before sending input).
+   * `unknown`: the prompt was submitted or may have been (timeout, stall, unreadable reply).
+   * `sent`: the agent started working on it. Absent for dry runs.
+   */
+  handoff?: "not-sent" | "unknown" | "sent";
+  /** A pane this launch created that may still run the agent (its close was not confirmed). */
+  paneOpen?: boolean;
+}
+
+/** Herdr's own error code for a failed command, read from its JSON reply only. */
+function herdrErrorCode(result: { stdout: string; stderr: string }): string | undefined {
+  for (const stream of [result.stdout, result.stderr]) {
+    try {
+      const data = JSON.parse(stream.trim()) as { error?: { code?: unknown } };
+      if (typeof data.error?.code === "string") return data.error.code;
+    } catch {
+      // Not JSON; try the next stream.
+    }
+  }
+  return undefined;
+}
+
+async function closeConfirmed(herdr: HerdrClient, paneId: string): Promise<boolean> {
+  try {
+    return (await herdr.closePane(paneId)).ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function launchRoutedAgent(input: {
@@ -110,11 +140,23 @@ export async function launchRoutedAgent(input: {
         ? await herdr.splitCurrent()
         : await herdr.splitCurrent({ cwd: input.cwd });
     if (!split.ok) {
-      return { ok: false, error: herdrError(split, "herdr pane split failed"), launchToken };
+      return {
+        ok: false,
+        error: herdrError(split, "herdr pane split failed"),
+        launchToken,
+        handoff: "not-sent",
+        paneOpen: false,
+      };
     }
     paneId = parseHerdrPaneId(split.stdout);
     if (!paneId) {
-      return { ok: false, error: "herdr pane split did not return a pane id", launchToken };
+      return {
+        ok: false,
+        error: "herdr pane split did not return a pane id",
+        launchToken,
+        handoff: "not-sent",
+        paneOpen: false,
+      };
     }
     paneCreated = true;
   }
@@ -130,15 +172,45 @@ export async function launchRoutedAgent(input: {
       const error = herdrError(started, "herdr agent start failed");
       if (paneCreated) {
         // Do not leave an empty shell pane behind for a launch that never started.
-        await herdr.closePane(paneId);
-        return { ok: false, error, launchToken, paneCreated: false, agentName };
+        const closed = await closeConfirmed(herdr, paneId);
+        return closed
+          ? {
+              ok: false,
+              error,
+              launchToken,
+              paneCreated: false,
+              agentName,
+              handoff: "not-sent",
+              paneOpen: false,
+            }
+          : {
+              ok: false,
+              error,
+              launchToken,
+              paneId,
+              paneCreated,
+              agentName,
+              handoff: "not-sent",
+              paneOpen: true,
+            };
       }
-      return { ok: false, error, launchToken, paneId, paneCreated, agentName };
+      return {
+        ok: false,
+        error,
+        launchToken,
+        paneId,
+        paneCreated,
+        agentName,
+        handoff: "not-sent",
+        paneOpen: false,
+      };
     }
     // `agent start` returns once the agent UI is detected; let startup (MCP, skills) settle
     // first, or a prompt pasted during startup can be dropped.
     const settled = await herdr.waitFor({ target: agentName, timeoutMs: HANDOFF_TIMEOUT_MS });
     if (!settled.ok) {
+      // Nothing was sent, but the started agent stays in its pane for inspection, so a writer
+      // authority taken for it is not given back.
       return {
         ok: false,
         error: herdrError(settled, "herdr agent wait failed"),
@@ -146,6 +218,8 @@ export async function launchRoutedAgent(input: {
         paneId,
         paneCreated,
         agentName,
+        handoff: "not-sent",
+        paneOpen: paneCreated,
       };
     }
   }
@@ -169,22 +243,37 @@ export async function launchRoutedAgent(input: {
         timeoutMs: HANDOFF_TIMEOUT_MS,
       });
       if (recovered.ok) {
-        return { ok: true, paneCreated, printed, launchToken, paneId, agentName };
+        return { ok: true, paneCreated, printed, launchToken, paneId, agentName, handoff: "sent" };
       }
+    }
+    // Only Herdr's structured agent_blocked code proves the prompt was refused before any input
+    // was sent. Anything else (a stall with no activity seen, a timeout, an unreadable reply)
+    // may have delivered it: the outcome is unknown and the handoff is never resent.
+    if (herdrErrorCode(prompted) === "agent_blocked") {
+      const closed = paneCreated ? await closeConfirmed(herdr, paneId) : false;
+      return {
+        ok: false,
+        error: `agent ${agentName} was blocked, and Herdr refused the handoff before sending any input${closed ? "; its new pane was closed" : ""}.`,
+        launchToken,
+        ...(closed ? {} : { paneId }),
+        paneCreated: paneCreated && !closed,
+        printed,
+        agentName,
+        handoff: "not-sent",
+        paneOpen: paneCreated && !closed,
+      };
     }
     return {
       ok: false,
-      error: output.includes("agent_blocked")
-        ? "agent is blocked; not resending the handoff"
-        : output.includes("agent_prompt_stalled")
-          ? `handoff not received by agent ${agentName} in pane ${paneId} (${herdrError(prompted, "").replace(/^: /, "")}); paste the task there or retry`
-          : herdrError(prompted, "herdr agent prompt failed"),
+      error: `the handoff to agent ${agentName} in pane ${paneId} has an unknown outcome (${herdrError(prompted, "herdr agent prompt").replace(/^herdr agent prompt: ?/, "")}); it may have been received. It is not resent: inspect that pane.`,
       launchToken,
       paneId,
       paneCreated,
       printed,
       agentName,
+      handoff: "unknown",
+      paneOpen: paneCreated,
     };
   }
-  return { ok: true, paneCreated, printed, launchToken, paneId, agentName };
+  return { ok: true, paneCreated, printed, launchToken, paneId, agentName, handoff: "sent" };
 }

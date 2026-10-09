@@ -19,7 +19,7 @@ describe("EffortChangeRepository", () => {
     db.exec("drop table effort_changes; drop table effort_locks;");
     db.pragma("user_version = 2");
     migrate(db);
-    expect(Number(db.pragma("user_version", { simple: true }))).toBe(4);
+    expect(Number(db.pragma("user_version", { simple: true }))).toBe(5);
     expect(new EffortChangeRepository(db).listForSession("sess_x")).toEqual([]);
     db.close();
   });

@@ -146,6 +146,10 @@ export interface HerdrAgentInfo {
   /** Herdr's `interactive_ready`, when reported. */
   interactiveReady?: boolean;
   name?: string;
+  /** The native session id an agent integration reported (`agent_session.value`), if any. */
+  sessionId?: string;
+  /** The agent's working directory: `foreground_cwd`, else the pane `cwd`, if reported. */
+  cwd?: string;
 }
 
 /** Controls an already-running agent pane; used by in-place effort switching. */
@@ -157,6 +161,10 @@ export interface HerdrPaneClient {
   ): Promise<string | undefined>;
   sendKeys(paneId: string, keys: readonly string[]): Promise<CommandResult>;
   sendText(paneId: string, text: string): Promise<CommandResult>;
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value !== "";
 }
 
 const AGENT_STATES = new Set<HerdrAgentState>(["idle", "working", "blocked", "done", "unknown"]);
@@ -171,6 +179,9 @@ export function parseHerdrAgentInfo(stdout: string): HerdrAgentInfo | undefined 
           pane_id?: unknown;
           interactive_ready?: unknown;
           name?: unknown;
+          agent_session?: { value?: unknown } | null;
+          foreground_cwd?: unknown;
+          cwd?: unknown;
         };
       };
     };
@@ -189,6 +200,14 @@ export function parseHerdrAgentInfo(stdout: string): HerdrAgentInfo | undefined 
         ? { interactiveReady: agent.interactive_ready }
         : {}),
       ...(typeof agent.name === "string" ? { name: agent.name } : {}),
+      ...(typeof agent.agent_session?.value === "string" && agent.agent_session.value !== ""
+        ? { sessionId: agent.agent_session.value }
+        : {}),
+      ...(nonEmpty(agent.foreground_cwd)
+        ? { cwd: agent.foreground_cwd }
+        : nonEmpty(agent.cwd)
+          ? { cwd: agent.cwd }
+          : {}),
     };
   } catch {
     return undefined;

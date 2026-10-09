@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { runCommand as defaultRunCommand, type runCommand } from "../collectors/command-runner.js";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import { resolveEnrichment, type Resolution } from "../enrich/resolver.js";
@@ -87,6 +87,58 @@ export interface RunDeps {
   callerEnv?: NodeJS.Dict<string>;
   sleep?: (ms: number) => Promise<void>;
   switchTimeoutMs?: number;
+  /**
+   * Refuses a launch into a worktree whose writer authority is elsewhere: bound to
+   * agent-collab, held by an open workflow, or owned by a rules-mode writer task. Returns the
+   * refusal, or undefined when this run may write there.
+   */
+  writerGate?: (cwd: string, continuing?: string) => string | undefined;
+  /** Holds the worktree's writer authority for this launch's whole writer lifetime. */
+  writerAuthority?: QuotaWriterAuthority;
+}
+
+/**
+ * Quota mode's share of the one writer authority per worktree. A launch takes it atomically
+ * (the same writer-task ownership rules-mode writers and workflows use) before any handoff is
+ * sent, and keeps it after the launch: the writer runs until someone ends its task with
+ * `task complete` or `task release`. A `--session` continuation in the same worktree keeps
+ * its chain's task. Refused when another writer, a workflow, or an agent-collab binding holds
+ * the worktree.
+ */
+export interface QuotaWriterAuthority {
+  acquire(input: {
+    /** Where the handoff writes: a launch directory, or the pane an in-place handoff targets. */
+    target: { cwd: string } | { paneId: string };
+    /** The writer task of the session chain being continued, if any. */
+    continuing?: string;
+    role: string;
+    descriptor: { provider: string; model: string; effort: string };
+  }): Promise<
+    | { ok: true; taskId: string; laneId: string; worktreeId: string; continued: boolean }
+    | { ok: false; error: string }
+  >;
+  /** The worktree identity of a directory, or undefined when it cannot be resolved. */
+  worktreeOf(cwd: string): string | undefined;
+  /**
+   * Records the handoff on the writer task as a durable attempt (sent, or unknown when it may
+   * have been received), with its pane and agent. The task keeps the worktree either way.
+   */
+  recordHandoff(
+    taskId: string,
+    laneId: string,
+    handoff: {
+      outcome: "sent" | "unknown" | "not-sent";
+      promptSha256: string;
+      evidence: string;
+      paneId?: string;
+      agentName?: string;
+    },
+  ): void;
+  /**
+   * Gives back an authority this launch took. Only for a launch known to have sent no input
+   * and to have left no pane of its own running.
+   */
+  rollback(taskId: string, evidence: string): void;
 }
 
 export interface RunOptions {
@@ -236,6 +288,21 @@ export async function executeRun(
     return prepared.failure;
   }
   const intent = prepared.intent;
+  // A new `--worktree` checkout has no other writer; any other launch (including `--session`
+  // and in-place continuation) writes where another authority may already hold the worktree.
+  if (!options.dryRun && deps.writerGate && intent?.action !== "create") {
+    const refusal = deps.writerGate(
+      intent?.action === "reuse" ? intent.workspace.path : (deps.cwd ?? process.cwd()),
+      previous?.writerTaskId,
+    );
+    if (refusal) {
+      return {
+        code: 2,
+        output: refusal,
+        json: { ok: false, error: refusal, reason: "writer-authority" },
+      };
+    }
+  }
   const enrichmentOff = options.noEnrich === true || deps.enrichmentEnabled === false;
   const enrichmentRun =
     intent?.action === "reuse"
@@ -501,6 +568,29 @@ export async function executeRun(
     env: { ...deps.env, ...deps.callerEnv },
   });
   let inPlaceOutcome: InPlaceOutcome | undefined;
+  const refuseWriter = (error: string) => {
+    if (reservation) reservations.release(reservation.id);
+    return { code: 2, output: error, json: { ok: false, error, reason: "writer-authority" } };
+  };
+  // The writer authority is taken atomically for the place this handoff actually writes, the
+  // target pane's own worktree for an in-place handoff, before anything is sent.
+  const launchCwd = workspace?.path ?? deps.cwd ?? process.cwd();
+  let authority:
+    { taskId: string; laneId: string; worktreeId: string; continued: boolean } | undefined;
+  if (!options.dryRun && deps.writerAuthority) {
+    const acquired = await deps.writerAuthority.acquire({
+      target: inPlace.ok && sessionId ? { paneId: inPlace.plan.paneId } : { cwd: launchCwd },
+      ...(previous?.writerTaskId ? { continuing: previous.writerTaskId } : {}),
+      role: `quota:${decision.phase}`,
+      descriptor: {
+        provider: selected.model.agent,
+        model: selected.model.launchName,
+        effort: decision.effort,
+      },
+    });
+    if (!acquired.ok) return refuseWriter(acquired.error);
+    authority = acquired;
+  }
   if (inPlace.ok && !options.dryRun && sessionId) {
     inPlaceOutcome = await continueInPlace({
       plan: inPlace.plan,
@@ -520,6 +610,25 @@ export async function executeRun(
   // The handoff may already be running in the old pane; a new pane would duplicate it.
   const unconfirmedInPlace =
     inPlace.ok && inPlaceOutcome?.ok === false && inPlaceOutcome.noFallback === true;
+  // A failed in-place handoff falls back to a new pane in the launch directory; that must be
+  // the worktree whose authority was taken for the pane.
+  if (
+    authority &&
+    inPlace.ok &&
+    !continuedInPlace &&
+    !unconfirmedInPlace &&
+    deps.writerAuthority?.worktreeOf(launchCwd) !== authority.worktreeId
+  ) {
+    if (!authority.continued) {
+      deps.writerAuthority?.rollback(
+        authority.taskId,
+        "in-place handoff failed; no new pane in another worktree",
+      );
+    }
+    return refuseWriter(
+      `The in-place handoff to pane ${inPlace.plan.paneId} failed, and a new pane here (${launchCwd}) would write in another worktree. Nothing was launched.`,
+    );
+  }
   const launch = unconfirmedInPlace
     ? {
         ok: false,
@@ -563,6 +672,37 @@ export async function executeRun(
   // An unconfirmed handoff may be running in the old pane, so its reservation is kept.
   if (reservation && (options.dryRun || (!launch.ok && !unconfirmedInPlace))) {
     reservations.release(reservation.id);
+  }
+  // The authority is given back only when nothing can have reached an agent: a known
+  // pre-input stop (no pane, a failed start, Herdr's agent_blocked refusal) whose own pane, if
+  // any, was confirmed closed. A timeout, stall or unreadable reply may have delivered the
+  // handoff, so the writer task keeps the worktree with the evidence, and nothing is resent.
+  const handoffOutcome: "sent" | "unknown" | "not-sent" =
+    launch.ok && !unconfirmedInPlace
+      ? "sent"
+      : unconfirmedInPlace
+        ? "unknown"
+        : ("handoff" in launch && launch.handoff) || "unknown";
+  const paneStillOpen = "paneOpen" in launch ? launch.paneOpen === true : !launch.ok;
+  const rolledBack =
+    !launch.ok && !unconfirmedInPlace && handoffOutcome === "not-sent" && !paneStillOpen;
+  if (authority && deps.writerAuthority) {
+    if (rolledBack) {
+      if (!authority.continued) {
+        deps.writerAuthority.rollback(
+          authority.taskId,
+          `no handoff was sent: ${launch.error ?? "launch failed"}`,
+        );
+      }
+    } else {
+      deps.writerAuthority.recordHandoff(authority.taskId, authority.laneId, {
+        outcome: handoffOutcome,
+        promptSha256: createHash("sha256").update(handoffPrompt).digest("hex"),
+        evidence: redactCollectorText(launch.error ?? "the agent started working on the handoff"),
+        ...(launch.paneId ? { paneId: launch.paneId } : {}),
+        ...(launch.agentName ? { agentName: launch.agentName } : {}),
+      });
+    }
   }
   // The pane lock held by an in-place handover is released once the new session that owns
   // the pane is recorded, or if recording it throws.
@@ -618,6 +758,9 @@ export async function executeRun(
         paneId: launch.paneId,
         workspace,
         topTierUnlocked,
+        ...(authority && (launch.ok || unconfirmedInPlace)
+          ? { writerTaskId: authority.taskId }
+          : {}),
         ...(continuedInPlace || unconfirmedInPlace
           ? {
               continuation: "in-place",
@@ -712,6 +855,12 @@ export async function executeRun(
     freshness: snapshot ? `refreshed at ${snapshot.collectedAt}` : undefined,
     reset: snapshot?.windows.find((window) => window.resetsAt)?.resetsAt,
   });
+  const heldTask = authority && !rolledBack ? authority.taskId : undefined;
+  const writerNote = !heldTask
+    ? ""
+    : handoffOutcome === "sent"
+      ? `\nWriter task ${heldTask} holds this worktree for the writer's whole run; end it with \`task complete ${heldTask} --evidence ...\` or \`task release ${heldTask} --stopped --evidence ...\`.`
+      : `\nWriter task ${heldTask} keeps this worktree: ${handoffOutcome === "unknown" ? "the handoff may have reached the agent" : "the agent's pane may still be running"}${launch.paneId ? ` in pane ${launch.paneId}` : ""}. Nothing is resent. Inspect that pane; once its agent is confirmed stopped, run \`task release ${heldTask} --stopped --evidence ...\` (see \`task status ${heldTask}\`).`;
   const workspaceNote =
     workspace && !launch.ok
       ? intent?.action === "create"
@@ -720,9 +869,10 @@ export async function executeRun(
       : "";
   return {
     code: launch.ok ? 0 : 1,
-    output: `${card}\n${launch.printed ?? launch.error ?? ""}${workspaceNote}`,
+    output: `${card}\n${launch.printed ?? launch.error ?? ""}${workspaceNote}${writerNote}`,
     json: {
       ok: launch.ok,
+      ...(heldTask ? { writerTaskId: heldTask } : {}),
       selected: selected.opaqueId,
       effort: decision.effort,
       dryRun: options.dryRun,

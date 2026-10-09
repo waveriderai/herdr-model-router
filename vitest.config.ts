@@ -7,6 +7,8 @@ export default defineConfig({
     // their own branch's source and lockfile, so a worktree on an older scope fails on
     // imports that have since been renamed, and a root `npm test` goes red for reasons
     // that have nothing to do with the working branch.
-    exclude: [...configDefaults.exclude, "**/.kilo/**", "**/.worktrees/**"],
+    // `.audit/` holds private review evidence (probes, reports); it is never public test input
+    // and runs only through its own config.
+    exclude: [...configDefaults.exclude, "**/.kilo/**", "**/.worktrees/**", "**/.audit/**"],
   },
 });

@@ -14,7 +14,19 @@ describe("herdr pane client", () => {
       agent: "claude",
       status: "working",
       paneId: "wJ:p1",
+      sessionId: "0f8e1a2b-3c4d",
+      cwd: "/repo",
     });
+    // The foreground process directory wins over the pane's; an empty session is no session.
+    expect(
+      parseHerdrAgentInfo(
+        JSON.stringify({
+          result: {
+            agent: { ...agent, foreground_cwd: "/repo/sub", agent_session: { value: "" } },
+          },
+        }),
+      ),
+    ).toEqual({ agent: "claude", status: "working", paneId: "wJ:p1", cwd: "/repo/sub" });
     expect(
       parseHerdrAgentInfo(
         JSON.stringify({

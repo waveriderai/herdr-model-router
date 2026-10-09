@@ -35,6 +35,39 @@ run when the recorded workspace is no longer usable.
 If the source checkout changes while a new `--worktree` run is routing (new commit, or
 uncommitted files), the router does not create the worktree. Commit or clean up, then retry.
 
+## Coordinator workflow
+
+Schema version 5 adds `worktree_bindings`, `workflows`, `workflow_attempts`,
+`workflow_verifications`, `workflow_verifier_results`, and `workflow_intents`, and the bound
+`session_id` and `session_cwd` of each writer lane. Existing tasks are kept; a writer task from
+before version 5 has no bound session, so it cannot take revisions or join a workflow.
+
+The router home must be outside the checkouts it writes for: `workflow`, `task`, and rules-mode
+launches, and real quota-mode runs, refuse a `MODEL_ROUTER_HOME` inside the target checkout (compared by real path, so a
+symlink alias counts) before creating any state.
+
+`router workflow status <id>` prints the commands that can make progress now. After an
+interruption:
+
+- Attempt `unknown` or `sending` (standalone): inspect the writer's pane, then
+  `router workflow recover <id> --delivered|--not-delivered --evidence "..."`. Nothing is
+  resent. A confirmed non-delivery is ended with `workflow release <id> --abort`.
+- agent-collab: `router workflow recover <id>` reads `agent-collab status --run`. A lost
+  `acquire` answer is manual recovery through `agent-collab recover --worktree <path>`; HMR
+  never acquires twice.
+- `release` and `release --abort` refuse unless Herdr reports the bound writer idle or done
+  with its exact session. If the writer is gone and Herdr cannot confirm it, the workflow stays
+  open; inspect the pane rather than forcing a release.
+- `operation-in-progress`: another coordinator step holds the workflow. A step whose process
+  died is taken over by the next one on the same host; on another host it stays until that
+  host's step ends.
+- An unresolved agent-collab call (`intent-unresolved`, `backend-unknown`) blocks the
+  workflow's other external calls until `workflow recover` reconciles it from status.
+- A start whose new pane could not be confirmed closed keeps the worktree (`unknown`):
+  inspect that pane. A start that rolled back cleanly is `failed` and holds nothing.
+
+The router refuses to change a worktree's binding while any workflow is open or a writer task owns it.
+
 ## Live effort switching
 
 Off unless `liveEffort.enabled` is `true` (see [Configuration](configuration.md)). Schema

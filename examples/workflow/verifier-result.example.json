@@ -1,0 +1,15 @@
+{
+  "version": "hmr.result/v1",
+  "workflowId": "wf_00000000-0000-4000-8000-000000000000",
+  "attemptId": "wfa_00000000-0000-4000-8000-000000000001",
+  "lane": "verifier",
+  "verifierLaneId": "lane_00000000-0000-4000-8000-000000000002",
+  "status": "fail",
+  "revision": {
+    "head": "0000000000000000000000000000000000000000",
+    "content": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "changedPaths": [],
+  "checks": [{ "command": "npm test -- parse-range", "result": "pass" }],
+  "blockers": ["The new test does not cover a single-day range."]
+}

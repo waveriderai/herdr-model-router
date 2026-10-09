@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -459,5 +466,158 @@ describe("semantic mode is per-invocation opt-in (AE2)", () => {
     expect(result.code).toBe(2);
     expect(result.err).toBe("--worktree need --routing-mode quota\n");
     expectNoEffects(box, result);
+  });
+});
+
+describe("workflow preview (R10)", () => {
+  const brief = (box: Sandbox, overrides: Record<string, unknown> = {}) => {
+    const file = path.join(box.root, "brief.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        version: "hmr.brief/v1",
+        title: "Fix the parser",
+        goal: "Fix the off-by-one in the parser.",
+        scope: { allowed: ["src/parser.ts"] },
+        writerRole: "bug-fix",
+        verifierRoles: ["reviewers"],
+        acceptance: ["parser tests pass"],
+        ...overrides,
+      }),
+    );
+    return file;
+  };
+
+  it("plans the writer and every verifier lane with zero effects", async () => {
+    const box = sandbox();
+    const result = await cli(box, ["workflow", "plan", "--brief", brief(box), "--json"], {
+      env: { TYPESAFE_API_KEY: "ts-should-not-be-used" },
+    });
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out) as {
+      effects: unknown[];
+      writer: { access: string; lanes: { descriptor: string }[] };
+      verifiers: { access: string; lanes: { descriptor: string }[] }[];
+    };
+    expect(json.effects).toEqual([]);
+    expect(json.writer).toMatchObject({ access: "write" });
+    expect(json.writer.lanes.map((lane) => lane.descriptor)).toEqual([
+      "claude:claude-opus-5-5@xhigh",
+    ]);
+    expect(json.verifiers[0]!.access).toBe("read");
+    expect(json.verifiers[0]!.lanes.map((lane) => lane.descriptor)).toEqual([
+      "claude:claude-opus-5-5@high",
+      "codex:gpt-6.1-sol@xhigh",
+      "claude:claude-opus-5-5@high",
+    ]);
+    expectNoEffects(box, result);
+  });
+
+  it("refuses a panel writer role and an invalid brief, still with zero effects", async () => {
+    const box = sandbox();
+    const panel = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      brief(box, { writerRole: "reviewers" }),
+    ]);
+    expect(panel.code).toBe(2);
+    expect(panel.err).toContain("not a single-lane writer role");
+    expectNoEffects(box, panel);
+    const invalid = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      brief(box, { version: "hmr.brief/v0" }),
+    ]);
+    expect(invalid.code).toBe(2);
+    expect(invalid.err).toContain("version");
+    expectNoEffects(box, invalid);
+  });
+
+  it("refuses to start outside Herdr before opening any state", async () => {
+    const box = sandbox();
+    const result = await cli(box, ["workflow", "start", "--brief", brief(box)]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("HERDR_ENV=1 is required");
+    expectNoEffects(box, result);
+  });
+
+  it("plans the published example brief against the example rules (docs smoke)", async () => {
+    const box = sandbox();
+    const examples = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../examples",
+    );
+    const result = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      path.join(examples, "workflow/brief.example.json"),
+      "--rules",
+      path.join(examples, "pstack-models.example.mdc"),
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("Writer: role bug-fix -> claude:claude-opus-5-5@xhigh (write)");
+    expect(result.out).toContain(
+      "Verifier: role reviewers -> claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, grok:grok-4.7@high (read-only, 3 lane(s), every lane must pass)",
+    );
+    expectNoEffects(box, result);
+  });
+
+  it("resolves parent aliases in workflow roles from an explicit --parent, keeping every lane", async () => {
+    const box = sandbox();
+    const file = brief(box, { verifierRoles: ["arena runners"] });
+    const result = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      file,
+      "--parent",
+      "codex:gpt-6.1-sol@high",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out) as {
+      verifiers: { lanes: { descriptor: string; from: string }[] }[];
+    };
+    expect(json.verifiers[0]!.lanes.map((lane) => [lane.descriptor, lane.from])).toEqual([
+      ["codex:gpt-6.1-sol@high", "parent"],
+      ["codex:gpt-6.1-sol@high", "parent"],
+      ["grok:grok-4.7@xhigh", "rule"],
+    ]);
+    expectNoEffects(box, result);
+    const missing = await cli(box, ["workflow", "plan", "--brief", file]);
+    expect(missing.code).toBe(2);
+    expect(missing.err).toMatch(/parent/i);
+    expectNoEffects(box, missing);
+  });
+});
+
+describe("router home inside the checkout (KTD11)", () => {
+  it.each([
+    ["directly", (box: Sandbox) => path.join(box.project, ".hmr-home")],
+    [
+      "through a symlink alias",
+      (box: Sandbox) => {
+        const alias = path.join(box.root, "alias");
+        symlinkSync(box.project, alias);
+        return path.join(alias, ".hmr-home");
+      },
+    ],
+  ])("refuses %s before creating any state", async (_label, homeIn) => {
+    const box = sandbox();
+    const home = homeIn(box);
+    for (const args of [
+      ["workflow", "status"],
+      ["task", "status"],
+      ["run", "Fix it", "--role", "bug-fix"],
+    ]) {
+      const result = await cli(box, args, { env: { MODEL_ROUTER_HOME: home, HERDR_ENV: "1" } });
+      expect(result.code).toBe(2);
+      expect(`${result.out}${result.err}`).toContain("is inside the checkout");
+      expect(effects.databases).toEqual([]);
+      expect(existsSync(home)).toBe(false);
+    }
   });
 });

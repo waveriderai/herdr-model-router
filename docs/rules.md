@@ -154,13 +154,126 @@ router task complete <task-id> --evidence "<what shows it is done>"
 router task release <task-id> --stopped --evidence "<what shows the writer stopped>"
 ```
 
-A revision checks that the original agent of the same kind still runs in the recorded pane and
-passes the readiness check; if not, it refuses, sends nothing, and never relaunches. The task's open status and current worktree ownership
-are checked again in the same database transaction that reserves the attempt, so a task that
-was completed, released, or replaced while the revision waited on Herdr sends nothing.
-`complete` is refused while a launch is still dispatching; a stopped router's task is closed
-with `release --stopped`, and a dispatch never reopens a task closed under it. Ownership is released only by `complete`, `release`, or automatically when
-a launch never sent any prompt. It is never taken over by another task.
+Before a writer lane's first prompt the router records the native session, working directory,
+and agent name Herdr reports for it; a writer whose Herdr integration reports no session is not
+started. A revision checks all of them again (name, kind, pane, session, directory) and the
+readiness check: a replacement session in the same pane, a renamed agent, or another directory
+refuses, sends nothing, and never relaunches or rebinds. A lane recorded before identity was
+kept has none, so its task cannot take revisions; release it and start a new one. The task's
+open status and current worktree ownership are checked again in the same database transaction
+that reserves the attempt, so a task that was completed, released, or replaced while the
+revision waited on Herdr sends nothing. `complete` is refused while a launch is still
+dispatching; a stopped router's task is closed with `release --stopped`, and a dispatch never
+reopens a task closed under it. Ownership is released only by `complete`, `release`, or
+automatically when a launch never sent any prompt and every pane it opened was confirmed
+closed. It is never taken over by another task.
+
+## Coordinator workflow
+
+`router workflow` holds one writer task across review, revision, acceptance, and delivery.
+
+```text
+start -> dispatched -> result (receipt) -> verify -> reviewed -> accept -> delivery -> release
+                ^                                       |           |
+                +---------------- revise ---------------+-----------+
+```
+
+- **Brief.** `hmr.brief/v1`: title, goal, allowed and excluded paths, the writer role (a
+  single-lane role), verifier roles, acceptance, constraints, and an optional
+  `classification` (`bounded-small-fix` only when the coordinator says so). `workflow start`
+  records it privately with the workflow id, the baseline revision, the writer's exact
+  descriptor, and the `--parent` descriptor if one resolved parent aliases; its SHA-256 is the
+  brief identity. Verification plans its roles with the same parent, keeping every lane and
+  duplicate in order. The rules file is never rewritten.
+- **One step at a time.** Each coordinator step takes the workflow's operation slot in one
+  transaction before it waits on anything, and every state change it makes checks it still
+  holds the slot. A second step on the same workflow is refused (`operation-in-progress`)
+  instead of interleaving, so an abort can never release a writer while a revision is being
+  sent. A slot left by a process that no longer exists on this host is taken over.
+- **Attempts.** Every prompt to the writer is an attempt with its own id, sent at most once.
+  The prompt names the workflow and attempt and asks for one `hmr.result/v1` JSON reply. The
+  attempt and its prompt are recorded before anything is sent, and linked to the dispatch
+  attempt before the prompt is submitted, so a crash mid-send stays recoverable. A revision
+  refused before submission stays `pending` and can be sent once with `revise --resume`.
+- **Revision.** HEAD plus a SHA-256 over the bytes of every tracked and non-ignored untracked
+  file (`router workflow fingerprint`). Staged, unstaged, and untracked edits change it; ignored
+  files do not; it does not depend on the index, so committing exactly the reviewed files keeps
+  it.
+- **Result.** `workflow result --attempt <current attempt>` records a lane's reply only when its
+  workflow, attempt, lane, and revision all match and the revision is the worktree's current
+  one. The attempt must have been delivered; an `unknown` send is recovered first. An idle pane
+  is never a result.
+- **Writer stopped.** Verification, acceptance, release, and abort need the bound writer, by
+  name, kind, pane, session, and working directory, with Herdr reporting it `idle` or `done`.
+  `working`, `blocked`, `unknown`, or no record refuses. The router claims nothing on a guess.
+- **Verify.** Each verifier role runs as a read-only panel on the result's revision. Each lane
+  reports its own result. A lane that failed to start or has no result is not a pass.
+- **Revise.** Same session, same pane, new attempt, after the same identity and readiness
+  checks as `task revise`. Never after an unresolved send. A revision after acceptance reopens
+  it.
+- **Accept.** The current attempt's result is `impl-complete`, every verifier lane passed on
+  the same revision, and the worktree is still at that revision. Acceptance releases nothing.
+- **Delivery.** The coordinator records the authorized delivery or `--not-applicable`. A Git
+  delivery names a commit (`--commit`, default `HEAD`) whose own tree must hold exactly the
+  accepted content and descend from the accepted HEAD; working-tree bytes do not count, so a
+  partial commit, or an accepted worktree that also held unrelated uncommitted files, is
+  refused. `--not-applicable` needs the worktree still at the accepted HEAD and content. The
+  router never commits, pushes, merges, or deploys.
+- **Release.** Ends the workflow and frees the worktree, after delivery and with the writer
+  stopped. `--abort --evidence` stops an undelivered workflow under the same stopped check.
+- **Failed starts.** A start that sent no prompt and whose new pane Herdr confirmed closed
+  rolls back: its lease is freed and the workflow is `failed`, with the reason. If the close
+  was not confirmed, the pane may still run the CLI, so the worktree stays held (`unknown`)
+  until someone inspects it; a missing writer record never counts as stopped.
+- **Callers.** Coordinator steps refuse a caller whose `HERDR_PANE_ID` is the writer's or a
+  verifier lane's pane. The router trusts processes of the same OS user elsewhere. This is a
+  guard, not a sandbox.
+
+### Writer authority
+
+Each worktree is bound to one writer authority, chosen with `router workflow bind --backend
+standalone|agent-collab` while nothing is active. The binding lives in the router's database,
+never in a repository file. Every writer entrance checks it in the same transaction that takes
+ownership:
+
+| Entrance                               | Standalone binding                                                       | agent-collab binding          |
+| -------------------------------------- | ------------------------------------------------------------------------ | ----------------------------- |
+| `workflow start`                       | SQLite writer lease                                                      | `agent-collab acquire`        |
+| `run --role <writer>`                  | refused while a workflow is open                                         | refused                       |
+| `run --routing-mode quota`             | takes a writer task for its lifetime                                     | refused                       |
+| `--session` continuation               | keeps its chain's writer task; checked against the target pane's own cwd | refused                       |
+| `task revise/complete/release/recover` | refused on a workflow's tasks                                            | refused on a workflow's tasks |
+
+Quota mode takes the same writer-task ownership as rules-mode writers, atomically and before
+any handoff, and keeps it after the launch returns: the writer task (printed by `run`) holds
+the worktree until `task complete` or `task release --stopped`. A launch that fails before any
+handoff gives it back. Continuing the same session chain in the same worktree keeps the task.
+
+With agent-collab, HMR first runs agent-collab's own read-only `verify` and `project` for the
+worktree, before any pane exists. The writer's exact model must be the project policy's
+`default`, or its `bounded_small_fix` when the brief is explicitly classified as a bounded small
+fix; being in the allowed list is not enough. A mismatch refuses: HMR does not rewrite the
+rules file or pick another model. The effort is checked by HMR's own project policy. Then HMR
+starts the native CLI itself (the same `env -i` launch, readiness, and
+dialog refusal), binds the session, and calls `agent-collab acquire`. agent-collab is then the
+only prompt sender (`agent-collab dispatch`, one call, no retries, waiting only until the writer
+is `working` or `blocked`, never for the task to finish) and owns receipt,
+request-changes, accept, and release; HMR keeps only references. The first version takes a
+Claude writer only. Every external call is written as an intent first, with the attempt and
+the effect it expects; while one is unresolved, every other external call of that workflow is
+refused. A successful reply only marks the intent `observed`: it becomes `done` in the same
+database transaction as HMR's own matching change, so a process that dies between the two
+leaves the intent unresolved for recovery instead of losing it. A call whose answer is lost
+stays `unknown` and is never replayed. `workflow recover` reads `agent-collab status` and
+changes nothing unless the status names exactly the workflow's run, its bound native session
+and pane, and the attempt the call concerns. It then records only what that status shows: a
+submitted dispatch of the current attempt, a receipt with the expected status, the revision
+opened directly from the reviewed attempt, that attempt's own acceptance (`accepted_at`), a
+released run, or an acquired run whose capability was saved (its first prompt is then sent
+once with `revise --resume`). An effect the status shows did not happen is recorded as not
+applied; anything else stays unresolved with the reason. An `acquire` whose answer is lost, or
+whose capability was not saved, may hold the worktree for a run HMR cannot address; recover it
+with `agent-collab recover --worktree <path>`.
 
 ## Semantic mode
 

@@ -31,9 +31,42 @@ and released under a single tag.
   ready-prompt evidence.
 - `hmr` as a second name for the CLI; `NOTICE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
   `AGENTS.md`, issue and pull request templates, and a GitHub `verify` workflow.
+- Coordinator workflows (`router workflow plan|start|status|result|verify|revise|accept|delivery|release|recover|fingerprint|bind`):
+  one writer per worktree, read-only verifier panels, and explicit result, acceptance,
+  delivery, and release steps. Briefs and results are versioned JSON (`hmr.brief/v1`,
+  `hmr.result/v1`) tied to a workflow, an attempt, and an exact worktree revision (HEAD plus a
+  fingerprint of tracked and non-ignored untracked files). Verification, acceptance, and
+  release need the bound writer (name, kind, pane, native session, and directory) reported idle
+  or done. Every verifier lane must pass, and a Git delivery is checked against the commit's own
+  tree. `--parent` resolves parent aliases for the whole workflow. The `model-router` skill
+  gains the coordinator procedure (`references/workflow.md`), and `examples/workflow/` holds
+  synthetic briefs and results.
+- An optional writer authority per worktree: the router's own lease (`standalone`, the
+  default) or the external `agent-collab` CLI, chosen with `router workflow bind` and followed
+  by every writer entrance. With agent-collab, the router runs its read-only `verify` and
+  `project` preflight, requires the writer's exact model to match that project's policy, starts
+  the native CLI itself, and lets agent-collab send the single prompt. The router keeps the
+  owner capability in a private file and never in its database, JSON output, or prompts.
+- Recovery without replay. Each prompt is sent at most once. Each external call is recorded
+  before it runs and finishes in the same database transaction as the router's own change.
+  `router workflow recover` settles an interrupted call from read-only backend status, and only
+  when that status names the exact run, native session, pane, and attempt.
 
 ### Changed
 
+- A real quota-mode `router run` now takes the worktree's writer authority before it sends the
+  handoff and keeps it for the writer's whole run. The output names the writer task; end it with
+  `router task complete` or `router task release --stopped`. `--session` continuing the same
+  chain in the same worktree keeps the task. The task is given back only when no input can have
+  reached an agent. A handoff with an unknown outcome keeps the worktree, is recorded as an
+  `unknown` attempt, and is never resent. Use `--worktree` to run several quota agents at once.
+- Rules-mode writer lanes record the native session, directory, and agent name before their
+  first prompt, and `task revise` checks all of them. A writer task recorded before this change
+  has no recorded session, so it cannot take revisions. A writer whose Herdr integration
+  reports no session is not started.
+- `task revise|complete|release|recover` refuse tasks that belong to an open workflow.
+  Workflow, task, rules-mode, and real quota-mode commands refuse a `MODEL_ROUTER_HOME` inside
+  the target checkout.
 - `router run` without `--routing-mode` no longer calls TypeSafe. The upstream ranking is
   `--routing-mode quota`; `--session`, `--worktree`, `--usage`, and `--no-enrich` require it.
   `--routing-mode semantic` lets TypeSafe pick a role from the rules file for one run.

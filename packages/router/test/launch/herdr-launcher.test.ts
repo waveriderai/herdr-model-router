@@ -273,9 +273,11 @@ describe("herdr launcher", () => {
       herdr,
     });
     expect(result.ok).toBe(false);
+    // A stall with no activity seen is not proof the handoff was not received: never "retry".
     expect(result.error).toBe(
-      `handoff not received by agent ${result.agentName} in pane w1:p9 (agent_prompt_stalled: no activity observed); paste the task there or retry`,
+      `the handoff to agent ${result.agentName} in pane w1:p9 has an unknown outcome (agent_prompt_stalled: no activity observed); it may have been received. It is not resent: inspect that pane.`,
     );
+    expect(result).toMatchObject({ handoff: "unknown", paneOpen: true });
     expect(result.paneId).toBe("w1:p9");
     expect(calls.some((argv) => argv[2] === "close")).toBe(false);
     expect(calls.filter((argv) => argv[2] === "prompt")).toHaveLength(1);

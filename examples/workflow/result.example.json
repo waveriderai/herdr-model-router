@@ -1,0 +1,14 @@
+{
+  "version": "hmr.result/v1",
+  "workflowId": "wf_00000000-0000-4000-8000-000000000000",
+  "attemptId": "wfa_00000000-0000-4000-8000-000000000001",
+  "lane": "writer",
+  "status": "impl-complete",
+  "revision": {
+    "head": "0000000000000000000000000000000000000000",
+    "content": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "changedPaths": ["src/date/parse-range.ts", "test/date/parse-range.test.ts"],
+  "checks": [{ "command": "npm test", "result": "pass" }],
+  "blockers": []
+}

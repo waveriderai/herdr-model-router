@@ -96,6 +96,11 @@ export const RouterSessionSchema = z.object({
   liveEffort: ReasoningEffortSchema.optional(),
   /** Set when the agent refused an in-place switch (for example a cache-warning dialog). */
   liveSwitchUnsupported: z.boolean().optional(),
+  /**
+   * The writer task that holds this session chain's worktree. Continuing the chain in the same
+   * worktree keeps it; it is freed only by `task complete` or `task release`.
+   */
+  writerTaskId: z.string().min(1).optional(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

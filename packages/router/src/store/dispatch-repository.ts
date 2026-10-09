@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { writerAuthorityRefusal } from "./workflow-repository.js";
 
 export type TaskStatus =
   "dispatching" | "dispatched" | "partial" | "failed" | "complete" | "released";
@@ -38,6 +39,9 @@ export interface DispatchLane {
   argv: string[];
   agentName?: string;
   paneId?: string;
+  /** Native session and canonical directory bound before a writer lane's first prompt. */
+  sessionId?: string;
+  sessionCwd?: string;
   state: LaneState;
   error?: string;
 }
@@ -100,6 +104,21 @@ export class NotOwnerError extends Error {
   }
 }
 
+/**
+ * A task that belongs to an open coordinator workflow, changed from outside that workflow.
+ * Enforced here, in the store, so no caller can skip it by leaving out a dependency.
+ */
+export class WorkflowTaskError extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly workflowId: string,
+  ) {
+    super(
+      `Task ${taskId} belongs to open workflow ${workflowId}; change it only with \`workflow\` commands (status, recover, release ${workflowId}).`,
+    );
+  }
+}
+
 const CLOSED_STATUSES: readonly TaskStatus[] = ["complete", "released"];
 
 interface TaskRow {
@@ -127,6 +146,8 @@ interface LaneRow {
   argv_json: string;
   agent_name: string | null;
   pane_id: string | null;
+  session_id: string | null;
+  session_cwd: string | null;
   state: LaneState;
   error: string | null;
 }
@@ -171,6 +192,8 @@ function lane(row: LaneRow): DispatchLane {
     argv: JSON.parse(row.argv_json) as string[],
     ...(row.agent_name === null ? {} : { agentName: row.agent_name }),
     ...(row.pane_id === null ? {} : { paneId: row.pane_id }),
+    ...(row.session_id === null ? {} : { sessionId: row.session_id }),
+    ...(row.session_cwd === null ? {} : { sessionCwd: row.session_cwd }),
     state: row.state,
     ...(row.error === null ? {} : { error: row.error }),
   };
@@ -197,6 +220,8 @@ export interface NewTask {
   worktreeId: string;
   cwd: string;
   rulesPath: string;
+  /** The workflow this writer task belongs to, if any; other open workflows refuse it. */
+  workflowId?: string;
   lanes: {
     index: number;
     descriptor: string;
@@ -222,6 +247,8 @@ export class DispatchRepository {
     const create = this.db.transaction(() => {
       const at = this.now();
       if (input.access === "write") {
+        const refusal = writerAuthorityRefusal(this.db, input.worktreeId, input.workflowId);
+        if (refusal) throw refusal;
         const owner = this.ownerOf(input.worktreeId);
         if (owner) throw new OwnershipConflictError(owner);
       }
@@ -271,6 +298,30 @@ export class DispatchRepository {
     });
     const id = create.immediate();
     return { task: this.getTask(id)!, lanes: this.lanes(id) };
+  }
+
+  /** The open workflow a task belongs to, as its writer or as a verifier panel. */
+  ownerWorkflow(taskId: string): { id: string; role: "writer" | "verifier" } | undefined {
+    const row = this.db
+      .prepare(
+        `select id, case when task_id = ? then 'writer' else 'verifier' end as role from workflows
+         where (task_id = ? or id in (select workflow_id from workflow_verifications where task_id = ?))
+           and state not in ('released', 'aborted', 'failed')
+         limit 1`,
+      )
+      .get(taskId, taskId, taskId) as { id: string; role: "writer" | "verifier" } | undefined;
+    return row;
+  }
+
+  private refuseOutsideWorkflow(
+    taskId: string,
+    callerWorkflowId: string | undefined,
+    roles: readonly ("writer" | "verifier")[],
+  ): void {
+    const owner = this.ownerWorkflow(taskId);
+    if (owner && roles.includes(owner.role) && owner.id !== callerWorkflowId) {
+      throw new WorkflowTaskError(taskId, owner.id);
+    }
   }
 
   getTask(id: string): DispatchTask | undefined {
@@ -337,18 +388,22 @@ export class DispatchRepository {
 
   updateLane(
     id: string,
-    patch: Partial<Pick<DispatchLane, "agentName" | "paneId" | "state" | "error">>,
+    patch: Partial<
+      Pick<DispatchLane, "agentName" | "paneId" | "sessionId" | "sessionCwd" | "state" | "error">
+    >,
   ): void {
     const current = this.getLane(id);
     if (!current) throw new Error(`Unknown lane ${id}`);
     const next = { ...current, ...patch };
     this.db
       .prepare(
-        "update dispatch_lanes set agent_name = ?, pane_id = ?, state = ?, error = ?, updated_at = ? where id = ?",
+        "update dispatch_lanes set agent_name = ?, pane_id = ?, session_id = ?, session_cwd = ?, state = ?, error = ?, updated_at = ? where id = ?",
       )
       .run(
         next.agentName ?? null,
         next.paneId ?? null,
+        next.sessionId ?? null,
+        next.sessionCwd ?? null,
         next.state,
         next.error ?? null,
         this.now(),
@@ -379,10 +434,13 @@ export class DispatchRepository {
     laneId: string;
     purpose: DispatchAttempt["purpose"];
     promptSha256: string;
+    /** The workflow sending it; a workflow's writer takes prompts from that workflow only. */
+    workflowId?: string;
   }): DispatchAttempt {
     const begin = this.db.transaction(() => {
       const lane = this.getLane(input.laneId);
       if (!lane) throw new Error(`Unknown lane ${input.laneId}`);
+      this.refuseOutsideWorkflow(lane.taskId, input.workflowId, ["writer"]);
       const task = this.getTask(lane.taskId)!;
       if (CLOSED_STATUSES.includes(task.status)) throw new TaskClosedError(task);
       if (task.access === "write") {
@@ -416,10 +474,19 @@ export class DispatchRepository {
   }
 
   /** Resolves an unresolved attempt from evidence the caller gathered. */
-  recoverAttempt(id: string, delivered: boolean, evidence: string): DispatchAttempt {
+  recoverAttempt(
+    id: string,
+    delivered: boolean,
+    evidence: string,
+    options: { workflowId?: string } = {},
+  ): DispatchAttempt {
     const recover = this.db.transaction(() => {
       const current = this.getAttempt(id);
       if (!current) throw new Error(`Unknown attempt ${id}`);
+      this.refuseOutsideWorkflow(this.getLane(current.laneId)!.taskId, options.workflowId, [
+        "writer",
+        "verifier",
+      ]);
       if (!UNRESOLVED_ATTEMPT_STATES.includes(current.state)) {
         throw new Error(
           `Attempt ${id} is already ${current.state}; only sending or unknown attempts are recovered.`,
@@ -435,10 +502,16 @@ export class DispatchRepository {
    * Closes a task and releases its worktree ownership. `complete` needs every attempt
    * resolved; `released` (the writer stopped) is allowed with unresolved attempts on record.
    */
-  closeTask(id: string, status: "complete" | "released", evidence: string): DispatchTask {
+  closeTask(
+    id: string,
+    status: "complete" | "released",
+    evidence: string,
+    options: { workflowId?: string } = {},
+  ): DispatchTask {
     const close = this.db.transaction(() => {
       const current = this.getTask(id);
       if (!current) throw new Error(`Unknown task ${id}`);
+      this.refuseOutsideWorkflow(id, options.workflowId, ["writer", "verifier"]);
       if (CLOSED_STATUSES.includes(current.status)) {
         throw new Error(`Task ${id} is already ${current.status}.`);
       }
@@ -467,8 +540,9 @@ export class DispatchRepository {
   }
 
   /** Releases ownership taken by a launch that never sent a prompt. */
-  releaseUnsent(id: string, evidence: string): void {
+  releaseUnsent(id: string, evidence: string, options: { workflowId?: string } = {}): void {
     const release = this.db.transaction(() => {
+      this.refuseOutsideWorkflow(id, options.workflowId, ["writer"]);
       const sent = this.lanes(id).some((planned) => this.attempts(planned.id).length > 0);
       if (sent)
         throw new Error(`Task ${id} has prompt attempts; release it explicitly with evidence.`);

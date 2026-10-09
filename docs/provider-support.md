@@ -20,6 +20,11 @@ and requires the pane's screen to show that CLI's ordinary prompt with no startu
 ([readiness check](rules.md#readiness-check)). On some machines a bare `agent` is another
 vendor's CLI, which is why Cursor is always `cursor-agent`.
 
+Coordinator workflows bind the writer's native session id and working directory from Herdr's
+agent record (`agent_session`, `foreground_cwd`). A provider whose Herdr integration does not
+report a session cannot be a workflow writer; the router refuses it before any prompt and
+names the missing session. The agent-collab backend takes a Claude writer only.
+
 ### Live checks
 
 One read-only panel was run through the router in real Herdr panes, in a fresh directory, with
@@ -40,6 +45,38 @@ The same run checked the environment of the real `grok` and `cursor-agent` proce
 a fake executable launched by the final router in a real pane, for API-key and cloud-credential
 variable names and synthetic canary values. None were present, and credential values were never
 read. Persistent CLI logins (config files, OS keychain) are operator-owned and were not changed.
+
+### Coordinator workflow live checks
+
+Both writer authorities were run end to end in real Herdr panes, on a test worktree whose
+first-run trust step the operator had already completed, with the operator's own existing
+subscriptions:
+
+| Role               | Provider and model         | Result                                                                   |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------ |
+| Writer             | `claude:claude-opus-5-5`   | Verified: received the brief in one session and reported its result      |
+| Read-only verifier | `claude:claude-sonnet-5-5` | Verified: ran read-only on the reported revision and reported its result |
+
+- Standalone: start, result, verify, accept, delivery and release completed. This run had no
+  revision.
+- agent-collab: preflight, acquire, dispatch, receipt, request-changes, a correction sent as a
+  second attempt to the same writer session and pane, re-verification, accept, a local
+  delivery recorded as not applicable, and release completed. Afterwards agent-collab reported
+  the worktree unlocked.
+
+In the same tests:
+
+- In a directory not yet trusted, the CLI showed its workspace trust screen. The router
+  refused the lane and sent no prompt.
+- In a narrow pane, the CLI's composer was not fully visible. The readiness check refused it,
+  and the router closed that pane with no prompt sent. The same roles worked in wide panes, one
+  role per Herdr tab.
+
+The router never answers a trust, login, update or permission dialog. Before routing a CLI in
+a new directory, open it there once yourself and finish its first-run steps. Keep each lane's
+pane wide enough to show the CLI's whole input box; one role per tab avoids squeezed splits.
+Only the providers and models listed in these tables were checked live; other models and
+providers are not claimed.
 
 ## Quota mode
 
