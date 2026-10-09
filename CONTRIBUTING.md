@@ -10,7 +10,13 @@ npm run verify
 ```
 
 `npm run verify` builds the shared heartbeat types, then runs typecheck, lint, the Prettier
-check, every test, and the build. CI runs the same command on every pull request.
+check, every test, and the build. CI runs the same command on every pull request, on Ubuntu
+and macOS with Node 22 and 24.
+
+Use Node 22.12 or newer (`.nvmrc`). That is the floor the locked dependencies declare
+(`better-sqlite3` 13: `>=22`; `commander` 15: `>=22.12.0`; Vitest 5:
+`^22.12.0 || ^24.0.0 || >=26.0.0`), and `npm ci` warns `EBADENGINE` below it. On Node 20 the
+`better-sqlite3` native addon crashes with SIGSEGV on its first database call.
 
 ## Ground rules
 

@@ -38,11 +38,12 @@ choose a model for you.
 
 ## Prerequisites
 
-- Node.js 20 or newer, and a C/C++ toolchain (`better-sqlite3` builds natively when no
-  prebuilt binary matches).
+- Node.js 22.12 or newer (CI runs 22 and 24), and a C/C++ toolchain (`better-sqlite3` builds
+  natively when no prebuilt binary matches). Node 20 is not supported: the locked
+  `better-sqlite3`, `commander`, and Vitest versions require Node 22.
 - [Herdr](https://herdr.dev) 0.9 or newer, to launch panes. Previews work without it.
 - The CLIs your rules name, each logged in on its own: `grok`, `codex`, `claude`, or Cursor's
-  `cursor-agent`. OpenCode is supported for writer lanes only.
+  `cursor-agent`. OpenCode remains a legacy quota-mode provider.
 
 ## Install
 

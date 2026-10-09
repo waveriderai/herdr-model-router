@@ -302,7 +302,7 @@ Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗�
 - 審查修正：五項已驗證的 correctness／security findings 已修正，包含 SQLite transaction ownership guard、真實 provider process 的環境隔離及所有 alias pins 的檢查。
 - 驗證：`npm run verify` 通過，72 個測試檔案／655 個測試，包含 typecheck、lint、format 與 build。移除 ownership guard 或 `env -i` 時，相對應的回歸測試會失敗。
 - 公開內容：tracked snapshot 掃描沒有新增憑證或私人設定；唯一 scanner 命中是與 upstream baseline 完全相同的合成測試 fixture。
-- U6：公開 fork 已建立於 [waveriderai/herdr-model-router](https://github.com/waveriderai/herdr-model-router)，Issues、Discussions 與 private vulnerability reporting 已啟用。獨立真實 Herdr 驗證已完成；公開 PR 與該 head 的 CI 尚待完成。
+- U6：公開 fork 已建立於 [waveriderai/herdr-model-router](https://github.com/waveriderai/herdr-model-router)，Issues、Discussions 與 private vulnerability reporting 已啟用。獨立真實 Herdr 驗證已完成；公開 PR 已建立；CI／review／merge 的即時耐久紀錄以 [PR #1](https://github.com/waveriderai/herdr-model-router/pull/1) 的 head／Checks 為準。
 - 下一步：記錄各 provider 的實際支援／未驗證結果，建立同 repo 公開 PR，確認該 head 的 CI 後執行 tier gate。本 repo 的程式路徑屬未映射 scope，若 gate 判為 tier 3，保留可審查的公開 PR 並等待該 head 的 Kai GO。
 
 ### U7. Refuse startup dialogs before prompt submission
@@ -319,4 +319,19 @@ Descriptor 語意如下；這是 grammar sketch，實作者以 Zod 等邊界驗�
 - 真實四 lane panel：Grok 只收到一次 prompt 並回應；Codex 更新畫面、Claude 信任畫面、Cursor 信任／無法辨識的畫面均為零 prompt、零 attempt，未自行回答對話框。
 - provider 支援仍按個別證據呈現：Grok 推論已驗證；其餘三家需操作員先處理首次信任或更新，尚未完成同一路由的模型回應驗證。
 - 非阻擋限制：過窄 pane 可能等到 timeout 才拒絕；可見對話內容引用對話框字樣可能保守拒絕 revision。CLI UI 改版須重新核對 composer patterns。
-- 交付剩餘事項：公開 PR、exact-head CI、tier gate；若屬 tier 3，停在 not merged，等待該 head 的 Kai GO。
+- 交付紀錄：公開 PR 已建立，exact-head CI、tier gate 與合併結果以該 PR 為準；tier 3 需要該 head 的 Kai GO，不自動合併。
+
+### U8. Supported Node versions and CI delivery
+
+- Trigger：公開 [PR #1](https://github.com/waveriderai/herdr-model-router/pull/1) 的初次 CI 中，Linux／macOS 的 Node 20 SQLite 測試 workers 發生 SIGSEGV；Node 22 不在失敗集合。
+- Verified cause：現行 direct dependencies `better-sqlite3 13.0.3` 要求 Node >=22，`Vitest 5.0.1` 要求 ^22.12.0、^24 或 >=26。新建 CI／文件的 Node 20 支援宣告與這些既有依賴不一致。使用者未指定 Node 20 為必要支援版本。
+- Correction：對齊 package／plugin／文件的最低版本與實際 dependency contract，CI 驗證 Linux／macOS 的 Node 22／24；不刪除或跳過任何測試 assertion，不降級依賴掩蓋宣告錯誤。
+- Ownership：同一 Opus writer 以 ce-debug mode:pipeline 修正，Codex 保有 commit／push、CI、exact-head tier gate 與交付。
+- Delivery record：公開 repo 與 PR 已建立；CI、review 與 merge 的即時耐久證據以該 PR 的 head／Checks 為準。完成此 CI 單元後跑 tier gate；tier 3 保留 public PR 並等待該 head 的 Kai GO。
+
+### U8 acceptance result
+
+- U8 修正完成。隔離的官方 Node 20.20.2 在純 Node 的 `new Database(':memory:')` 即 SIGSEGV／exit 139，Node 22.23.3、24.21.0 則正常；不是測試 assertion 或 Vitest pool 的問題。
+- 未修改任何測試、依賴版本或模型／UI／ownership 程式。Node 22／24 的完整檢查各通過 655 tests；修正後 Node 22 與 DevPro Node 26 亦完整通過。
+- package、lockfile、.nvmrc、plugin／文件的最低版本已對齊 Node >=22.12.0，CI 使用 Linux／macOS × Node 22／24。
+- U1–U5、U7、U8 的實作與獨立驗收已完成；U6 的公開 repo／PR 已交付。exact-head CI、tier gate、Kai GO 與 merge 狀態在 [PR #1](https://github.com/waveriderai/herdr-model-router/pull/1) 保留耐久證據。沒有部署或 npm 發布階段。

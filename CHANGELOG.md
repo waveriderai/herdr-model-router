@@ -38,6 +38,12 @@ and released under a single tag.
   `--routing-mode quota`; `--session`, `--worktree`, `--usage`, and `--no-enrich` require it.
   `--routing-mode semantic` lets TypeSafe pick a role from the rules file for one run.
 - `npm run verify` builds the heartbeat package first, so it passes from a clean checkout.
+- The supported Node.js floor is now 22.12 (`engines`, `.nvmrc`, docs, plugin manifest), and
+  CI runs Node 22 and 24 on Ubuntu and macOS. The previous `>=20` claim (and the first CI's
+  Node 20 jobs) contradicted the locked dependencies: `better-sqlite3` 13 requires Node 22,
+  `commander` 15 requires 22.12, and Vitest 5 requires 22.12+. On Node 20, `npm ci` warns
+  `EBADENGINE` for six packages and `better-sqlite3` segfaults on its first database call, which
+  crashed every SQLite-backed test worker.
 
 - Live effort switching for Opus 5.5 and GPT 6 Astra, opt-in with `liveEffort.enabled`.
   `router run --session <id>` continues the next phase in the previous pane when TypeSafe

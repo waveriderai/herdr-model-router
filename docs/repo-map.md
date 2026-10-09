@@ -1,6 +1,6 @@
 # Repo Map: herdr-model-router
 
-npm workspaces monorepo (TypeScript, Node 20+, vitest). ~7.3k LOC in `packages/router/src`.
+npm workspaces monorepo (TypeScript, Node 22.12+, vitest). ~7.3k LOC in `packages/router/src`.
 
 ## Packages
 

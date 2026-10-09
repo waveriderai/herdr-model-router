@@ -12,7 +12,7 @@ herdr plugin install waveriderai/herdr-model-router
 The manifest lives at the repository root, so no subdirectory is needed. The plugin id is
 the `id` field of `herdr-plugin.toml`; the commands below use it.
 
-Install runs `npm ci` and builds the router workspace, which needs **Node.js 20+**
+Install runs `npm ci` and builds the router workspace, which needs **Node.js 22.12+**
 and a C/C++ toolchain (`better-sqlite3` compiles natively). If you already have
 `router` on your `PATH`, the plugin uses that binary instead of the checkout's
 build.

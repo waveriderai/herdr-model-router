@@ -10,7 +10,7 @@ min_herdr_version = "0.9.0"
 description = "Route a task to the models your role rules name and launch them in Herdr panes"
 platforms = ["linux", "macos"]
 
-# Requires Node.js 20+ and a C/C++ toolchain (better-sqlite3 builds natively).
+# Requires Node.js 22.12+ and a C/C++ toolchain (better-sqlite3 builds natively).
 [[build]]
 command = ["npm", "ci"]
 

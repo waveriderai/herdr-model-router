@@ -15,7 +15,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node: [20, 22]
+        # Supported runtimes only: better-sqlite3 13, commander 15, and Vitest 5 require Node 22.12+.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

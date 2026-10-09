@@ -20,7 +20,7 @@ are shown with `--routing-mode quota`.
 
 ## Prerequisites
 
-- **Node.js 20 or newer** (`nvm use` reads `.nvmrc`).
+- **Node.js 22.12 or newer** (`nvm use` reads `.nvmrc`).
 - **A TypeSafe API key.** Routing always calls TypeSafe; there is no fallback. Each run sends
   the task text to TypeSafe. Recognizable credentials are rejected locally before the call;
   do not place other sensitive narrative data in routing tasks.
