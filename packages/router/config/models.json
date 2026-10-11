@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-09-17T00:00:00.000Z",
+  "updatedAt": "2026-10-11T00:00:00.000Z",
   "provenance": "Operator-curated conservative launch profiles. Live availability and quota must come from collectors; this file does not assert that a model is currently offered.",
   "models": [
     {
@@ -177,6 +177,70 @@
         "debugging": 0.7,
         "creativity": 0.65,
         "research": 0.7
+      },
+      "relativeQuotaCost": 1,
+      "relativeLatency": 1
+    },
+    {
+      "id": "grok:grok-4.7",
+      "provider": "grok",
+      "agent": "grok",
+      "launchName": "grok-4.7",
+      "supportedEfforts": ["low", "medium", "high", "xhigh"],
+      "capabilities": {
+        "planning": 0.85,
+        "coding": 0.85,
+        "debugging": 0.85,
+        "creativity": 0.75,
+        "research": 0.8
+      },
+      "relativeQuotaCost": 2,
+      "relativeLatency": 1.2
+    },
+    {
+      "id": "grok:grok-4.7-build-fast",
+      "provider": "grok",
+      "agent": "grok",
+      "launchName": "grok-4.7-build-fast",
+      "supportedEfforts": ["low", "medium", "high", "xhigh"],
+      "capabilities": {
+        "planning": 0.75,
+        "coding": 0.8,
+        "debugging": 0.75,
+        "creativity": 0.65,
+        "research": 0.7
+      },
+      "relativeQuotaCost": 0.5,
+      "relativeLatency": 0.5
+    },
+    {
+      "id": "grok:grok-4.6",
+      "provider": "grok",
+      "agent": "grok",
+      "launchName": "grok-4.6",
+      "supportedEfforts": ["low", "medium", "high", "xhigh"],
+      "capabilities": {
+        "planning": 0.8,
+        "coding": 0.8,
+        "debugging": 0.75,
+        "creativity": 0.7,
+        "research": 0.7
+      },
+      "relativeQuotaCost": 1,
+      "relativeLatency": 1
+    },
+    {
+      "id": "grok:grok-4.5",
+      "provider": "grok",
+      "agent": "grok",
+      "launchName": "grok-4.5",
+      "supportedEfforts": ["low", "medium", "high", "xhigh"],
+      "capabilities": {
+        "planning": 0.75,
+        "coding": 0.75,
+        "debugging": 0.7,
+        "creativity": 0.65,
+        "research": 0.65
       },
       "relativeQuotaCost": 1,
       "relativeLatency": 1

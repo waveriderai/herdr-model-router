@@ -8,6 +8,7 @@ import { runCommand } from "./command-runner.js";
 import { createCursorStatuslineCollector } from "./cursor/cursor-statusline-collector.js";
 import { createClaudeStatuslineCollector } from "./anthropic/claude-statusline-collector.js";
 import { createCodexStatuslineCollector } from "./openai/codex-statusline-collector.js";
+import { createGrokStatuslineCollector } from "./grok/grok-statusline-collector.js";
 import type { UsageCollector } from "./types.js";
 
 export interface CollectorRegistryOptions {
@@ -16,9 +17,11 @@ export interface CollectorRegistryOptions {
   cursorQuotaCachePath?: string;
   claudeQuotaCachePath?: string;
   codexQuotaCachePath?: string;
+  grokQuotaCachePath?: string;
 }
 
-function officialCollector(account: Account, run: typeof runCommand): UsageCollector {
+// Grok has no official usage collector; its usage comes only from the local-session cache.
+function officialCollector(account: Account, run: typeof runCommand): UsageCollector | undefined {
   if (account.agent === "claude-code") {
     return createClaudeCollector(run);
   }
@@ -27,6 +30,9 @@ function officialCollector(account: Account, run: typeof runCommand): UsageColle
   }
   if (account.agent === "opencode") {
     return opencodeCollector;
+  }
+  if (account.agent === "grok") {
+    return undefined;
   }
   return createCursorCollector(run);
 }
@@ -49,7 +55,8 @@ export function collectorsForAccount(
     options.browserCollector ?? createBrowserDashboardCollector({ approvedBridge: false });
   return account.collectorPreference.flatMap((kind) => {
     if (kind === "official-cli" || kind === "official-api") {
-      return [officialCollector(account, run)];
+      const official = officialCollector(account, run);
+      return official ? [official] : [];
     }
     if (kind === "local-session") {
       if (usesOpenCode(account)) {
@@ -63,6 +70,9 @@ export function collectorsForAccount(
       }
       if (account.agent === "codex") {
         return [createCodexStatuslineCollector({ cachePath: options.codexQuotaCachePath })];
+      }
+      if (account.agent === "grok") {
+        return [createGrokStatuslineCollector({ cachePath: options.grokQuotaCachePath })];
       }
       return [];
     }

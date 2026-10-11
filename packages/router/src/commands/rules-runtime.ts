@@ -46,6 +46,7 @@ const AGENT_PROVIDER: Partial<Record<AgentId, Provider>> = {
   codex: "codex",
   cursor: "cursor",
   opencode: "opencode",
+  grok: "grok",
 };
 
 /** Per-lane launch scripts under the router home, readable only by the user. */

@@ -6,7 +6,7 @@ export const SessionIdSchema = z.string().min(1).brand<"SessionId">();
 export const OpaqueCandidateIdSchema = z.string().min(1).brand<"OpaqueCandidateId">();
 export const ProviderIdSchema = z.string().min(1).brand<"ProviderId">();
 
-export const AgentIdSchema = z.enum(["cursor", "claude-code", "codex", "opencode"]);
+export const AgentIdSchema = z.enum(["cursor", "claude-code", "codex", "opencode", "grok"]);
 
 export type AccountId = z.infer<typeof AccountIdSchema>;
 export type ModelId = z.infer<typeof ModelIdSchema>;

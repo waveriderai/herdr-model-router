@@ -64,6 +64,23 @@ describe("collector registry", () => {
     expect(snapshot.certainty).toBe("unknown");
   });
 
+  it("uses only the Grok status line quota cache for Grok accounts", async () => {
+    const account = {
+      ...personal,
+      agent: "grok" as const,
+      provider: "grok" as typeof personal.provider,
+      enabledModels: ["grok:grok-4.6"] as unknown as typeof personal.enabledModels,
+      collectorPreference: ["official-cli", "local-session"] as const,
+    };
+    const collectors = collectorsForAccount(account, {
+      grokQuotaCachePath: path.join(os.tmpdir(), "missing-grok-quota.json"),
+    });
+    expect(collectors.map((collector) => collector.kind)).toEqual(["local-session"]);
+    const snapshot = await collectors[0]!.collectUsage(account);
+    expect(snapshot.source).toBe("local-session");
+    expect(snapshot.certainty).toBe("unknown");
+  });
+
   it("uses the OpenCode local-session collector for the OpenCode CLI", () => {
     const account = {
       ...personal,
