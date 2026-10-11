@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig, resolveHome } from "../../src/config/config-loader.js";
 import { loadModelCatalog } from "../../src/catalog/model-catalog.js";
+import { PROVIDER_EFFORTS } from "../../src/rules/descriptor.js";
 
 function tempHome(): string {
   return mkdtempSync(path.join(os.tmpdir(), "model-router-config-"));
@@ -211,6 +212,25 @@ describe("model catalog", () => {
     for (const model of catalog.models) {
       expect(model).not.toHaveProperty("available");
     }
+  });
+
+  it("ships native grok profiles that launch through the grok CLI", () => {
+    const grok = loadModelCatalog().models.filter((model) => model.agent === "grok");
+    expect(grok.map((model) => model.id)).toEqual([
+      "grok:grok-4.7",
+      "grok:grok-4.7-build-fast",
+      "grok:grok-4.6",
+      "grok:grok-4.5",
+    ]);
+    for (const model of grok) {
+      expect(model.provider).toBe("grok");
+      expect(`grok:${model.launchName}`).toBe(model.id);
+      expect(PROVIDER_EFFORTS.grok).toEqual(expect.arrayContaining(model.supportedEfforts));
+      expect(model.quotaPool).toBeUndefined();
+    }
+    const [full, fast] = grok;
+    expect(fast!.relativeQuotaCost).toBeLessThan(full!.relativeQuotaCost);
+    expect(fast!.relativeLatency).toBeLessThan(full!.relativeLatency);
   });
 
   it("loads a catalog from an explicit path for tests", () => {

@@ -145,26 +145,26 @@ The links follow whatever branch is checked out in this repo.
 Defined in `packages/router/config/models.json`. Add an ID to an account's `enabledModels` to
 use it.
 
-| Model ID                  | Agent       | Starts as                                                        | Efforts                              | Quota pool |
-| ------------------------- | ----------- | ---------------------------------------------------------------- | ------------------------------------ | ---------- |
-| `cursor:grok-4.6`         | Cursor      | `agent --model cursor-grok-4.6-<effort>`                         | low, medium, high                    | spend      |
-| `cursor:grok-4.5`         | Cursor      | `agent --model cursor-grok-4.5-high`                             | high                                 | spend      |
-| `cursor:composer-2.5`     | Cursor      | `agent --model composer-2.5`                                     | none                                 | auto       |
-| `anthropic:claude-sonnet` | Claude Code | `claude --model sonnet --effort <effort>`                        | low, medium, high                    |            |
-| `anthropic:claude-opus`   | Claude Code | `claude --model opus --effort <effort>`                          | low, medium, high, xhigh, max        |            |
-| `openai:gpt-6-astra`      | Codex       | `codex --model gpt-6-astra -c model_reasoning_effort="<effort>"` | low, medium, high, xhigh, max, ultra |            |
-| `openai:gpt-5.6-sol`      | Codex       | `codex --model gpt-5.6-sol …`                                    | low, medium, high, ultra             |            |
-| `openai:gpt-5.6-terra`    | Codex       | `codex --model gpt-5.6-terra …`                                  | low, medium, high, ultra             |            |
-| `openai:gpt-5.6-luna`     | Codex       | `codex --model gpt-5.6-luna …`                                   | low, medium, high                    |            |
-| `openai:gpt-5.5`          | Codex       | `codex --model gpt-5.5 …`                                        | low, medium, high                    |            |
-| `openai:opencode`         | OpenCode    | `opencode --model openai`                                        | low, medium, high                    |            |
+| Model ID                   | Agent       | Starts as                                                        | Efforts                              | Quota pool |
+| -------------------------- | ----------- | ---------------------------------------------------------------- | ------------------------------------ | ---------- |
+| `cursor:grok-4.6`          | Cursor      | `agent --model cursor-grok-4.6-<effort>`                         | low, medium, high                    | spend      |
+| `cursor:grok-4.5`          | Cursor      | `agent --model cursor-grok-4.5-high`                             | high                                 | spend      |
+| `cursor:composer-2.5`      | Cursor      | `agent --model composer-2.5`                                     | none                                 | auto       |
+| `anthropic:claude-sonnet`  | Claude Code | `claude --model sonnet --effort <effort>`                        | low, medium, high                    |            |
+| `anthropic:claude-opus`    | Claude Code | `claude --model opus --effort <effort>`                          | low, medium, high, xhigh, max        |            |
+| `openai:gpt-6-astra`       | Codex       | `codex --model gpt-6-astra -c model_reasoning_effort="<effort>"` | low, medium, high, xhigh, max, ultra |            |
+| `openai:gpt-5.6-sol`       | Codex       | `codex --model gpt-5.6-sol …`                                    | low, medium, high, ultra             |            |
+| `openai:gpt-5.6-terra`     | Codex       | `codex --model gpt-5.6-terra …`                                  | low, medium, high, ultra             |            |
+| `openai:gpt-5.6-luna`      | Codex       | `codex --model gpt-5.6-luna …`                                   | low, medium, high                    |            |
+| `openai:gpt-5.5`           | Codex       | `codex --model gpt-5.5 …`                                        | low, medium, high                    |            |
+| `openai:opencode`          | OpenCode    | `opencode --model openai`                                        | low, medium, high                    |            |
+| `grok:grok-4.7`            | Grok        | `grok --model grok-4.7 --reasoning-effort <effort>`              | low, medium, high, xhigh             |            |
+| `grok:grok-4.7-build-fast` | Grok        | `grok --model grok-4.7-build-fast --reasoning-effort <effort>`   | low, medium, high, xhigh             |            |
+| `grok:grok-4.6`            | Grok        | `grok --model grok-4.6 --reasoning-effort <effort>`              | low, medium, high, xhigh             |            |
+| `grok:grok-4.5`            | Grok        | `grok --model grok-4.5 --reasoning-effort <effort>`              | low, medium, high, xhigh             |            |
 
-**Grok is not routable in quota mode yet.** `models.json` has no native Grok (`grok` CLI)
-profile, so `router run --routing-mode quota` never picks a `grok` account: its
-`enabledModels` match no catalog entry. A `grok` account is still accepted, listed by
-`router accounts`, and reports quota in `router status --usage`. The `cursor:grok-*` rows
-above run through Cursor, not the `grok` CLI. To route to the native `grok` CLI today, use
-[rules mode](rules.md).
+The `grok:*` rows run the native `grok` CLI; the `cursor:grok-*` rows run Grok through
+Cursor. All `grok:*` models share the account's weekly quota from the Grok cache below.
 
 TypeSafe picks the effort from the model's list. `max` and `ultra` are only offered when the
 task you started the chain with (`router run` without `--session`) contains the word
