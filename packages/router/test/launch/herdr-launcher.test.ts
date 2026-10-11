@@ -158,6 +158,13 @@ describe("herdr launcher", () => {
       kind: "opencode",
       args: ["--model", "openai"],
     },
+    {
+      agent: "grok" as const,
+      launchName: "grok-4.6",
+      effort: "medium" as const,
+      kind: "grok",
+      args: ["--model", "grok-4.6", "--reasoning-effort", "medium"],
+    },
   ])(
     "passes only native $agent arguments to herdr agent start",
     async ({ agent, launchName, effort, kind, args }) => {

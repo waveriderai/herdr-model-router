@@ -92,6 +92,31 @@ describe("config loader", () => {
     expect(JSON.stringify(config)).not.toMatch(/sk-|cookie|password/i);
   });
 
+  it("accepts a grok agent account", () => {
+    const home = tempHome();
+    writeFileSync(
+      path.join(home, "config.json"),
+      JSON.stringify({
+        accounts: [
+          {
+            id: "acct_personal_grok",
+            label: "personal grok",
+            provider: "xai",
+            agent: "grok",
+            ownership: "personal",
+            collectorPreference: ["local-session"],
+            enabledModels: ["xai:grok-4.6"],
+            enabled: true,
+          },
+        ],
+      }),
+    );
+
+    const config = loadConfig({ env: { MODEL_ROUTER_HOME: home } });
+
+    expect(config.accounts.map((account) => account.agent)).toEqual(["grok"]);
+  });
+
   it("lets environment variables override file values", () => {
     const home = tempHome();
     writeFileSync(

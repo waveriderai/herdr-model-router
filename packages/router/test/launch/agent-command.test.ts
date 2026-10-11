@@ -55,4 +55,19 @@ describe("agent commands", () => {
       buildAgentCommand({ agent: "opencode", launchName: "openai/gpt", effort: "low" }),
     ).toEqual(["opencode", "--model", "openai/gpt"]);
   });
+
+  it("starts Grok with --model and a supported --reasoning-effort", () => {
+    expect(buildAgentCommand({ agent: "grok", launchName: "grok-4.6", effort: "high" })).toEqual([
+      "grok",
+      "--model",
+      "grok-4.6",
+      "--reasoning-effort",
+      "high",
+    ]);
+    expect(buildAgentCommand({ agent: "grok", launchName: "grok-4.6", effort: "ultra" })).toEqual([
+      "grok",
+      "--model",
+      "grok-4.6",
+    ]);
+  });
 });

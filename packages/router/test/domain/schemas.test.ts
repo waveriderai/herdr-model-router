@@ -57,6 +57,21 @@ describe("AccountSchema", () => {
     expect(account.provider).toBe("openai");
   });
 
+  it("accepts the grok CLI as an agent", () => {
+    const account = AccountSchema.parse({
+      id: "acct_personal_grok",
+      label: "personal grok",
+      provider: "xai",
+      agent: "grok",
+      ownership: "personal",
+      collectorPreference: ["local-session"],
+      enabledModels: ["xai:grok-4.6"],
+      enabled: true,
+    });
+
+    expect(account.agent).toBe("grok");
+  });
+
   it("rejects malformed ownership and reserve floors", () => {
     const base = {
       id: "acct_bad",

@@ -4,6 +4,7 @@ import type { ReasoningEffort } from "../domain/model-profile.js";
 const CLAUDE_EFFORTS = new Set<ReasoningEffort>(["low", "medium", "high", "xhigh", "max"]);
 // Codex reads model_reasoning_effort from config; `none` keeps the user's Codex default.
 const CODEX_EFFORTS = new Set<ReasoningEffort>(["low", "medium", "high", "xhigh", "max", "ultra"]);
+const GROK_EFFORTS = new Set<ReasoningEffort>(["low", "medium", "high", "xhigh"]);
 
 export function cursorModelId(launchName: string, effort: ReasoningEffort): string {
   if (effort === "none" || /^cursor-.+-(none|low|medium|high|ultra)$/.test(launchName)) {
@@ -13,7 +14,9 @@ export function cursorModelId(launchName: string, effort: ReasoningEffort): stri
   return `cursor-${base}-${effort}`;
 }
 
-export function herdrAgentKind(agent: AgentId): "cursor" | "claude" | "codex" | "opencode" {
+export function herdrAgentKind(
+  agent: AgentId,
+): "cursor" | "claude" | "codex" | "opencode" | "grok" {
   return agent === "claude-code" ? "claude" : agent;
 }
 
@@ -41,5 +44,12 @@ export function buildAgentCommand(input: {
     }
     case "opencode":
       return ["opencode", "--model", input.launchName];
+    case "grok": {
+      const args = ["grok", "--model", input.launchName];
+      if (GROK_EFFORTS.has(input.effort)) {
+        args.push("--reasoning-effort", input.effort);
+      }
+      return args;
+    }
   }
 }

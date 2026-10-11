@@ -16,7 +16,7 @@ are shown with `--routing-mode quota`.
 - **Policy-first:** deterministic eligibility rules run before semantic ranking.
 - **Local-first:** configuration, usage snapshots, decisions, and session history stay on
   your machine unless an explicitly configured integration needs them.
-- **Agent-agnostic:** supports Cursor, Claude Code, Codex, and OpenCode through one command.
+- **Agent-agnostic:** supports Cursor, Claude Code, Codex, OpenCode, and Grok through one command.
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ are shown with `--routing-mode quota`.
   the task text to TypeSafe. Recognizable credentials are rejected locally before the call;
   do not place other sensitive narrative data in routing tasks.
 - **At least one agent CLI you are logged in to:** `agent` (Cursor), `claude` (Claude Code),
-  `codex`, or `opencode`. The router uses those logins; no provider API keys are needed.
+  `codex`, `opencode`, or `grok`. The router uses those logins; no provider API keys are needed.
 - **Herdr**, to launch agents. `router run` without `--dry-run` only launches from inside a
   Herdr pane (`HERDR_ENV=1`).
 
@@ -114,8 +114,8 @@ one entry per agent login:
 
 | Field                 | Values                                                                                       |
 | --------------------- | -------------------------------------------------------------------------------------------- |
-| `agent`               | `cursor`, `claude-code`, `codex`, `opencode`                                                 |
-| `provider`            | Matches the models: `cursor`, `anthropic`, `openai`                                          |
+| `agent`               | `cursor`, `claude-code`, `codex`, `opencode`, `grok`                                         |
+| `provider`            | Matches the models: `cursor`, `anthropic`, `openai`, `xai`                                   |
 | `ownership`           | `personal`, or `shared` for a subscription other people also use (see below)                 |
 | `reserveFloor`        | Optional, 0 to 1. Shared accounts default to `0.40` and cannot go lower                      |
 | `collectorPreference` | Where usage comes from: `local-session`, `official-cli`, `official-api`, `browser-dashboard` |
@@ -234,7 +234,7 @@ still eligible. Shared accounts still exclude `quota-exhausted` and `unknown-usa
 
 ### Where quota comes from
 
-The Cursor, Claude Code, and Codex CLIs do not report plan usage on the command line. The
+The Cursor, Claude Code, Codex, and Grok CLIs do not report plan usage on the command line. The
 router reads quota from cache files that **your own status line scripts** write; the router
 does not install those scripts. Enable it with `"local-session"` in the account's
 `collectorPreference`. Cache data older than 15 minutes counts as unknown, and a cache only
@@ -271,6 +271,16 @@ available.
 
 `weekly_left` is the percent of weekly quota remaining (0–100), and `at` is Unix time in
 seconds. The router does not write this file.
+
+**Grok:** `~/.grok/statusline-quota-cache.json`, same shape as Codex:
+
+```json
+{ "weekly_left": 40, "at": 1700000000 }
+```
+
+`weekly_left` is the percent of weekly quota remaining (0–100), and `at` is Unix time in
+seconds. Grok has no official usage collector, so `official-cli` and `official-api` add
+nothing for a `grok` account; use `"local-session"`. The router does not write this file.
 
 **OpenCode:** harness-only; quota belongs to the underlying provider.
 
