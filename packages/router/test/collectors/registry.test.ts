@@ -68,8 +68,8 @@ describe("collector registry", () => {
     const account = {
       ...personal,
       agent: "grok" as const,
-      provider: "xai" as typeof personal.provider,
-      enabledModels: ["xai:grok-4.6"] as unknown as typeof personal.enabledModels,
+      provider: "grok" as typeof personal.provider,
+      enabledModels: ["grok:grok-4.6"] as unknown as typeof personal.enabledModels,
       collectorPreference: ["official-cli", "local-session"] as const,
     };
     const collectors = collectorsForAccount(account, {

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   createGrokStatuslineCollector,
   defaultGrokQuotaCachePath,
-} from "../../src/collectors/xai/grok-statusline-collector.js";
+} from "../../src/collectors/grok/grok-statusline-collector.js";
 import { personal } from "../cli/fixtures.js";
 
 const nowMs = Date.parse("2026-09-17T10:00:00.000Z");
@@ -13,8 +13,8 @@ const nowMs = Date.parse("2026-09-17T10:00:00.000Z");
 const grokAccount = {
   ...personal,
   agent: "grok" as const,
-  provider: "xai" as typeof personal.provider,
-  enabledModels: ["xai:grok-4.6"] as unknown as typeof personal.enabledModels,
+  provider: "grok" as typeof personal.provider,
+  enabledModels: ["grok:grok-4.6"] as unknown as typeof personal.enabledModels,
 };
 
 function cacheFile(contents: unknown): string {
@@ -54,6 +54,20 @@ describe("grok status line quota collector", () => {
     const snapshot = await collector(cacheFile({ weekly_left: 40, at })).collectUsage(grokAccount);
     expect(snapshot.certainty).toBe("unknown");
     expect(snapshot.source).toBe("local-session");
+  });
+
+  it("returns unknown when the cache is dated more than 60 seconds in the future", async () => {
+    const at = (nowMs + 61_000) / 1000;
+    const snapshot = await collector(cacheFile({ weekly_left: 40, at })).collectUsage(grokAccount);
+    expect(snapshot.certainty).toBe("unknown");
+    expect(snapshot.source).toBe("local-session");
+  });
+
+  it("tolerates up to 60 seconds of clock skew", async () => {
+    const at = (nowMs + 60_000) / 1000;
+    const snapshot = await collector(cacheFile({ weekly_left: 40, at })).collectUsage(grokAccount);
+    expect(snapshot.certainty).toBe("estimated");
+    expect(snapshot.windows[0]).toMatchObject({ kind: "weekly", remainingRatio: 0.4 });
   });
 
   it("returns unknown when the cache is missing or malformed", async () => {

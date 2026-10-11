@@ -8,7 +8,7 @@ import { runCommand } from "./command-runner.js";
 import { createCursorStatuslineCollector } from "./cursor/cursor-statusline-collector.js";
 import { createClaudeStatuslineCollector } from "./anthropic/claude-statusline-collector.js";
 import { createCodexStatuslineCollector } from "./openai/codex-statusline-collector.js";
-import { createGrokStatuslineCollector } from "./xai/grok-statusline-collector.js";
+import { createGrokStatuslineCollector } from "./grok/grok-statusline-collector.js";
 import type { UsageCollector } from "./types.js";
 
 export interface CollectorRegistryOptions {

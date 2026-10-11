@@ -10,6 +10,8 @@ import type { UsageCollector } from "../types.js";
 // Written by a user's Grok status line (or a small script) as
 // `{ "weekly_left": <0-100 percent remaining>, "at": <Unix seconds> }`. The router only reads this file.
 export const GROK_QUOTA_MAX_AGE_MS = 15 * 60_000;
+// A cache dated further ahead than this is not trusted: it would otherwise stay "fresh" forever.
+export const GROK_QUOTA_MAX_CLOCK_SKEW_MS = 60_000;
 
 const CacheSchema = z.object({
   weekly_left: z.number(),
@@ -54,7 +56,8 @@ export function createGrokStatuslineCollector(
         return unknown(account);
       }
       const collectedAtMs = cache.data.at * 1000;
-      if (now() - collectedAtMs > GROK_QUOTA_MAX_AGE_MS) {
+      const ageMs = now() - collectedAtMs;
+      if (ageMs > GROK_QUOTA_MAX_AGE_MS || ageMs < -GROK_QUOTA_MAX_CLOCK_SKEW_MS) {
         return unknown(account);
       }
       const left = Math.max(0, Math.min(100, cache.data.weekly_left));

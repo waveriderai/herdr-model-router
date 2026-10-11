@@ -115,7 +115,7 @@ one entry per agent login:
 | Field                 | Values                                                                                       |
 | --------------------- | -------------------------------------------------------------------------------------------- |
 | `agent`               | `cursor`, `claude-code`, `codex`, `opencode`, `grok`                                         |
-| `provider`            | Matches the models: `cursor`, `anthropic`, `openai`, `xai`                                   |
+| `provider`            | Matches the models: `cursor`, `anthropic`, `openai`, `grok`                                  |
 | `ownership`           | `personal`, or `shared` for a subscription other people also use (see below)                 |
 | `reserveFloor`        | Optional, 0 to 1. Shared accounts default to `0.40` and cannot go lower                      |
 | `collectorPreference` | Where usage comes from: `local-session`, `official-cli`, `official-api`, `browser-dashboard` |
@@ -158,6 +158,13 @@ use it.
 | `openai:gpt-5.6-luna`     | Codex       | `codex --model gpt-5.6-luna …`                                   | low, medium, high                    |            |
 | `openai:gpt-5.5`          | Codex       | `codex --model gpt-5.5 …`                                        | low, medium, high                    |            |
 | `openai:opencode`         | OpenCode    | `opencode --model openai`                                        | low, medium, high                    |            |
+
+**Grok is not routable in quota mode yet.** `models.json` has no native Grok (`grok` CLI)
+profile, so `router run --routing-mode quota` never picks a `grok` account: its
+`enabledModels` match no catalog entry. A `grok` account is still accepted, listed by
+`router accounts`, and reports quota in `router status --usage`. The `cursor:grok-*` rows
+above run through Cursor, not the `grok` CLI. To route to the native `grok` CLI today, use
+[rules mode](rules.md).
 
 TypeSafe picks the effort from the model's list. `max` and `ultra` are only offered when the
 task you started the chain with (`router run` without `--session`) contains the word
@@ -279,8 +286,9 @@ seconds. The router does not write this file.
 ```
 
 `weekly_left` is the percent of weekly quota remaining (0–100), and `at` is Unix time in
-seconds. Grok has no official usage collector, so `official-cli` and `official-api` add
-nothing for a `grok` account; use `"local-session"`. The router does not write this file.
+seconds. A timestamp more than 60 seconds in the future counts as unknown. Grok has no
+official usage collector, so `official-cli` and `official-api` add nothing for a `grok`
+account; use `"local-session"`. The router does not write this file.
 
 **OpenCode:** harness-only; quota belongs to the underlying provider.
 

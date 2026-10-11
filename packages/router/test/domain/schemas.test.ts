@@ -61,11 +61,11 @@ describe("AccountSchema", () => {
     const account = AccountSchema.parse({
       id: "acct_personal_grok",
       label: "personal grok",
-      provider: "xai",
+      provider: "grok",
       agent: "grok",
       ownership: "personal",
       collectorPreference: ["local-session"],
-      enabledModels: ["xai:grok-4.6"],
+      enabledModels: ["grok:grok-4.6"],
       enabled: true,
     });
 
