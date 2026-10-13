@@ -70,6 +70,10 @@ export function executeTaskStatus(
     ...(report.task.closingEvidence ? [`Closing evidence: ${report.task.closingEvidence}`] : []),
     ...report.lanes.flatMap((lane) => [
       `Lane ${lane.index} [${lane.id}] ${lane.descriptor}: ${lane.state}${lane.paneId ? ` pane ${lane.paneId}` : ""}${lane.agentName ? ` agent ${lane.agentName}` : ""}${lane.error ? ` error: ${lane.error}` : ""}`,
+      ...(lane.skipped ?? []).map(
+        (skipped) =>
+          `  skipped ${skipped.descriptor}: ${skipped.reason}${skipped.attemptId ? ` (attempt ${skipped.attemptId})` : ""}`,
+      ),
       ...lane.attempts.map(
         (attempt) =>
           `  attempt ${attempt.seq} [${attempt.id}] ${attempt.purpose}: ${attempt.state === "sending" ? "sending (no outcome recorded; the router may have stopped mid-send)" : attempt.state}${attempt.evidence ? ` (${attempt.evidence})` : ""}`,

@@ -1,0 +1,418 @@
+import { describe, expect, it } from "vitest";
+import { formatLaneOutcome } from "../../src/commands/rules-run.js";
+import { executeTaskStatus } from "../../src/commands/task-commands.js";
+import { dispatchPlan, reviseTask } from "../../src/rules/dispatch.js";
+import { parseRules, type RuleSet } from "../../src/rules/mdc-parser.js";
+import { planRoute, type RoutePlan } from "../../src/rules/plan.js";
+import { detectQuota } from "../../src/rules/readiness.js";
+import { deps, fakeHerdr, READY_SCREEN, type FakeHerdr } from "../helpers/fake-herdr.js";
+
+const RULES = `---
+description: Synthetic fallback rules for tests
+---
+# Header prose: delete a line to fall back to the skill default. fallback: not a role's
+feature, refactoring: claude:claude-opus-5-5@high
+# fallback: codex:gpt-6.1-sol@high, then grok:grok-4.7@high
+explorer: grok:grok-4.7@medium  # fallback: cursor Auto, then claude:claude-sonnet-5-5@high
+design consultant: codex:gpt-6.1-sol@high
+# Visual and UX decisions; no code.
+# fallback: claude:claude-sonnet-5-5@high, then cursor Auto
+design implementation: claude:claude-sonnet-5-5@high
+# UI code from the spec. fallback: codex:gpt-6.1-sol@high then claude:claude-sonnet-5-5@high.
+review gate: codex:gpt-6.1-sol@high
+# All SEV levels. Gate fallback stays per the merge policy.
+reviewers: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high
+# fallback: grok:grok-4.7@high
+writer twice: claude:claude-opus-5-5@high
+# fallback: codex:gpt-6.1-sol@high, then claude:claude-opus-5-5@high, then inherit-parent
+`;
+
+function rules(text = RULES): RuleSet {
+  const parsed = parseRules(text);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.rules;
+}
+
+function plan(role: string, extra: Partial<Parameters<typeof planRoute>[0]> = {}): RoutePlan {
+  const result = planRoute({
+    rules: rules(),
+    rulesSource: { path: "/rules/pstack-models.mdc", origin: "flag" },
+    role,
+    cwd: "/work/project",
+    ...extra,
+  });
+  if (!result.ok) throw new Error(result.error);
+  return result;
+}
+
+const fallbackSelectors = (set: RuleSet, role: string) =>
+  set.roles
+    .find((entry) => entry.names.includes(role))!
+    .fallbacks.map((entry) => (entry.ok ? entry.selector : `!${entry.selector}`));
+
+describe("fallback order in the rules file", () => {
+  it("attaches each `# fallback:` comment to the role entry above it", () => {
+    const set = rules();
+    expect(fallbackSelectors(set, "refactoring")).toEqual([
+      "codex:gpt-6.1-sol@high",
+      "grok:grok-4.7@high",
+    ]);
+    // A trailing comment on the role line itself; an unusable entry is kept, marked.
+    expect(fallbackSelectors(set, "explorer")).toEqual([
+      "!cursor Auto",
+      "claude:claude-sonnet-5-5@high",
+    ]);
+    // After another comment line, and after a sentence inside a comment.
+    expect(fallbackSelectors(set, "design consultant")).toEqual([
+      "claude:claude-sonnet-5-5@high",
+      "!cursor Auto",
+    ]);
+    expect(fallbackSelectors(set, "design implementation")).toEqual([
+      "codex:gpt-6.1-sol@high",
+      "claude:claude-sonnet-5-5@high",
+    ]);
+    // Prose that mentions a fallback without `fallback:` declares none.
+    expect(fallbackSelectors(set, "review gate")).toEqual([]);
+    const explorer = set.roles.find((entry) => entry.names.includes("explorer"))!;
+    expect(explorer.fallbacks[0]).toMatchObject({
+      ok: false,
+      line: 7,
+      error: 'unrecognized model descriptor "cursor Auto"; write provider:model@effort',
+    });
+    expect(explorer.lanes).toHaveLength(1);
+    expect(set.invalid).toEqual([]);
+  });
+
+  it("ignores a fallback comment before the first role, and one after an invalid entry", () => {
+    const set = rules(
+      "# fallback: codex:gpt-6.1-sol@high\nbroken: nope\n# fallback: codex:gpt-6.1-sol@high\nok: claude:claude-opus-5-5@high\n",
+    );
+    expect(set.roles.map((role) => [role.names, role.fallbacks])).toEqual([[["ok"], []]]);
+    expect(set.invalid.map((role) => role.names)).toEqual([["broken"]]);
+  });
+
+  it("marks a role with two fallback lines invalid instead of guessing which one counts", () => {
+    const set = rules(
+      "solo: claude:claude-opus-5-5@high  # fallback: codex:gpt-6.1-sol@high\n# fallback: grok:grok-4.7@high\nother: codex:gpt-6.1-sol@high\n",
+    );
+    expect(set.roles.map((role) => role.names)).toEqual([["other"]]);
+    expect(set.invalid).toEqual([
+      {
+        line: 1,
+        names: ["solo"],
+        error:
+          'line 2: role "solo" already has a fallback order on line 1; write one fallback line per role',
+      },
+    ]);
+  });
+});
+
+describe("fallback order in a plan", () => {
+  it("plans a single lane's fallbacks and notes every entry it drops", () => {
+    const explorer = plan("explorer");
+    expect(explorer.fallbacks.map((lane) => [lane.index, lane.descriptor])).toEqual([
+      [1, "claude:claude-sonnet-5-5@high"],
+    ]);
+    expect(explorer.notes).toEqual([
+      'fallback 1 (cursor Auto) skipped: unrecognized model descriptor "cursor Auto"; write provider:model@effort',
+    ]);
+    const twice = plan("writer twice");
+    expect(twice.fallbacks.map((lane) => lane.descriptor)).toEqual(["codex:gpt-6.1-sol@high"]);
+    expect(twice.notes).toEqual([
+      "fallback 2 (claude:claude-opus-5-5@high) skipped: claude:claude-opus-5-5@high is already earlier in this role's order",
+      "fallback 3 (inherit-parent) skipped: inherit-parent needs --parent provider:model@effort",
+    ]);
+    const withParent = plan("writer twice", { parent: "grok:grok-4.7@high" });
+    expect(withParent.fallbacks.map((lane) => [lane.descriptor, lane.from])).toEqual([
+      ["codex:gpt-6.1-sol@high", "rule"],
+      ["grok:grok-4.7@high", "parent"],
+    ]);
+  });
+
+  it("applies the project policy to fallbacks and never gives a panel one", () => {
+    const allowed = plan("feature", {
+      policy: { allowedProviders: ["claude", "grok"] },
+      policySource: "/work/project/.herdr/policy.json",
+    });
+    expect(allowed.fallbacks.map((lane) => lane.descriptor)).toEqual(["grok:grok-4.7@high"]);
+    expect(allowed.notes).toEqual([
+      "fallback 1 (codex:gpt-6.1-sol@high) skipped: project policy allows claude, grok, not codex",
+    ]);
+    const pinned = plan("feature", {
+      policy: { pins: { feature: "claude:claude-opus-5-5@high" } },
+      policySource: "/work/project/.herdr/policy.json",
+    });
+    expect(pinned.fallbacks).toEqual([]);
+    expect(pinned.notes[0]).toBe(
+      'fallback 1 (codex:gpt-6.1-sol@high) skipped: project policy pin "feature" requires claude:claude-opus-5-5@high',
+    );
+    const panel = plan("reviewers");
+    expect(panel.fallbacks).toEqual([]);
+    expect(panel.notes).toContain(
+      'the fallback order on line 16 is ignored: role "reviewers" is a panel, and every panel lane already runs',
+    );
+  });
+});
+
+describe("quota detection", () => {
+  it("recognizes each CLI's exhausted-limit message, wrapped or not", () => {
+    expect(detectQuota("⏺ Claude usage limit reached. Your limit will reset at 5pm")).toBe(
+      "limit reached",
+    );
+    expect(detectQuota("5-hour limit reached ∙ resets 3pm")).toBe("limit reached");
+    expect(detectQuota("You've hit your limit · resets 3pm")).toBe("hit your limit");
+    expect(
+      detectQuota(
+        "■ You've hit your usage\n  limit. Upgrade to Pro, or try again in 4 days 12 hours.",
+      ),
+    ).toBe("hit your limit");
+    expect(detectQuota("stream error: exceeded retry limit, last status: 429 Too Many")).toBe(
+      "HTTP 429 after retries",
+    );
+    expect(detectQuota("Error: Rate limit exceeded. Please retry later.")).toBe(
+      "rate limit exceeded",
+    );
+    expect(detectQuota("You exceeded your current quota, please check your plan")).toBe(
+      "quota exceeded",
+    );
+    expect(detectQuota("You have run out of credits")).toBe("out of credits");
+  });
+
+  it("ignores warnings, context limits, and the echo of the prompt the router sent", () => {
+    expect(detectQuota("Approaching usage limit · resets at 3pm")).toBeUndefined();
+    expect(detectQuota("Context limit reached · /compact or /clear to continue")).toBeUndefined();
+    expect(detectQuota(READY_SCREEN.claude!)).toBeUndefined();
+    const sent = "When Codex says You've hit your usage limit, switch models.\nAdd tests.";
+    // The pane wraps and indents the echoed prompt.
+    const echoed =
+      "> When Codex says You've hit your\n  usage limit, switch models.\n  Add tests.\n";
+    expect(detectQuota(echoed, sent)).toBeUndefined();
+    expect(detectQuota(`${echoed}■ You've hit your usage limit.`, sent)).toBe("hit your limit");
+  });
+});
+
+const QUOTA = {
+  claude: "⏺ You've hit your limit · resets 3pm (America/Los_Angeles)\n",
+  codex: "■ You've hit your usage limit. Upgrade to Pro, or try again in 2 hours.\n",
+  grok: "Error: Rate limit exceeded for grok-4.7.\n",
+};
+
+/**
+ * After a prompt to a pane whose CLI is in `limited`, that CLI ends its turn on its own
+ * quota message; the pane echoes the prompt above it, as a real pane does.
+ */
+function quotaAfterPrompt(herdr: () => FakeHerdr, limited: string[]) {
+  return (target: string) => {
+    const pane = [...herdr().panes.values()].find((entry) => entry.name === target);
+    if (pane?.kind && limited.includes(pane.kind)) {
+      pane.history = `${pane.history ?? ""}${QUOTA[pane.kind as keyof typeof QUOTA]}`;
+      pane.status = "idle";
+    }
+    return undefined;
+  };
+}
+
+describe("dispatch follows the fallback order on a quota or usage limit", () => {
+  it("closes a writer that hit its limit after the prompt and hands the task to the next model", async () => {
+    const herdr: FakeHerdr = fakeHerdr({ prompt: quotaAfterPrompt(() => herdr, ["claude"]) });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Fix the crash",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    const lane = result.lanes[0]!;
+    expect(lane).toMatchObject({
+      descriptor: "codex:gpt-6.1-sol@high",
+      state: "prompted",
+      paneId: "w1:p2",
+      attempt: { state: "working" },
+      skipped: [
+        {
+          descriptor: "claude:claude-opus-5-5@high",
+          reason: 'claude reported a quota or usage-limit error ("hit your limit")',
+        },
+      ],
+    });
+    expect(lane.argv[0]).toBe("/opt/fake bin/codex");
+    expect(result.task).toMatchObject({ access: "write", status: "dispatched" });
+    // The same writer text went to both models; the limited pane was closed first.
+    expect(herdr.prompts.map((prompt) => prompt.text)).toEqual([
+      expect.stringContaining("Fix the crash"),
+      expect.stringContaining("Fix the crash"),
+    ]);
+    expect(herdr.prompts[0]!.text).toBe(herdr.prompts[1]!.text);
+    const order = herdr.calls.map((call) => call.slice(0, 3).join(" "));
+    expect(order.indexOf("pane close w1:p1")).toBeLessThan(
+      order.indexOf("pane split /work/project", 1),
+    );
+    // The task keeps its worktree; the lane records what it skipped and on which attempt.
+    expect(d.store.ownerOf("/work/project")?.taskId).toBe(result.task.id);
+    const stored = d.store.getLane(lane.laneId)!;
+    const [first, second] = d.store.attempts(lane.laneId);
+    expect(stored).toMatchObject({
+      descriptor: "codex:gpt-6.1-sol@high",
+      provider: "codex",
+      paneId: "w1:p2",
+      sessionId: "sess-w1:p2",
+      skipped: [
+        {
+          descriptor: "claude:claude-opus-5-5@high",
+          reason: 'claude reported a quota or usage-limit error ("hit your limit")',
+          paneId: "w1:p1",
+          attemptId: first!.id,
+        },
+      ],
+    });
+    expect(second?.state).toBe("working");
+    expect(formatLaneOutcome(lane).split("\n")).toEqual([
+      'Lane 1 skipped claude:claude-opus-5-5@high: claude reported a quota or usage-limit error ("hit your limit")',
+      `Lane 1 [${lane.laneId}] codex:gpt-6.1-sol@high prompted pane w1:p2 agent ${lane.agentName} attempt ${second!.id}: working (herdr agent prompt --wait observed working)`,
+    ]);
+    const status = executeTaskStatus(d.store, result.task.id);
+    expect(status.output).toContain(
+      `  skipped claude:claude-opus-5-5@high: claude reported a quota or usage-limit error ("hit your limit") (attempt ${first!.id})`,
+    );
+    // A revision goes to the model that took over, in its own pane.
+    const pane = herdr.panes.get("w1:p2")!;
+    pane.status = "idle";
+    const revised = await reviseTask({ taskId: result.task.id, text: "Also add a test", deps: d });
+    expect(revised.ok && revised.lane.paneId).toBe("w1:p2");
+    expect(herdr.prompts.at(-1)).toEqual({ target: lane.agentName, text: "Also add a test" });
+  });
+
+  it("skips a model whose screen shows its limit at startup, and a fallback whose CLI is missing", async () => {
+    const herdr = fakeHerdr({
+      detect: (_pane, executable) =>
+        executable === "claude" ? { screen: `${QUOTA.claude}${READY_SCREEN.claude}` } : {},
+    });
+    const { deps: d } = deps(herdr, {
+      resolveExecutable: (name) => (name === "codex" ? undefined : `/opt/fake bin/${name}`),
+    });
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Fix it",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.lanes[0]).toMatchObject({
+      descriptor: "grok:grok-4.7@high",
+      state: "prompted",
+      skipped: [
+        {
+          descriptor: "claude:claude-opus-5-5@high",
+          reason: 'claude reported a quota or usage-limit error ("hit your limit")',
+        },
+        {
+          descriptor: "codex:gpt-6.1-sol@high",
+          reason: "`codex` is not on PATH; the codex CLI is missing.",
+        },
+      ],
+    });
+    // The limited CLI was never named or prompted.
+    expect(herdr.calls.filter((call) => call[1] === "rename").map((call) => call[2])).toEqual([
+      "w1:p2",
+    ]);
+    expect(herdr.prompts).toHaveLength(1);
+    expect(d.store.getLane(result.lanes[0]!.laneId)?.skipped?.[0]).toMatchObject({
+      paneId: "w1:p1",
+    });
+    expect(d.store.getLane(result.lanes[0]!.laneId)?.skipped?.[0]?.attemptId).toBeUndefined();
+  });
+
+  it("stops with a clear error and releases the worktree when every model hits its limit", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: quotaAfterPrompt(() => herdr, ["claude", "codex", "grok"]),
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Fix it",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.lanes[0]).toMatchObject({ state: "failed", descriptor: "grok:grok-4.7@high" });
+    expect(result.lanes[0]?.paneId).toBeUndefined();
+    expect(result.lanes[0]?.attempt).toBeUndefined();
+    expect(result.lanes[0]?.error).toBe(
+      'every model in the fallback order for role "feature" hit a quota or usage limit or could not be launched: ' +
+        'claude:claude-opus-5-5@high (claude reported a quota or usage-limit error ("hit your limit")); ' +
+        'codex:gpt-6.1-sol@high (codex reported a quota or usage-limit error ("hit your limit")); ' +
+        'grok:grok-4.7@high (grok reported a quota or usage-limit error ("rate limit exceeded")). ' +
+        "Nothing else is tried, and no API key is used.",
+    );
+    expect(herdr.calls.filter((call) => call[1] === "close").map((call) => call[2])).toEqual([
+      "w1:p1",
+      "w1:p2",
+      "w1:p3",
+    ]);
+    // No writer is left running, so the worktree is free again, with the evidence on record.
+    expect(result.task).toMatchObject({
+      status: "released",
+      closingEvidence: expect.stringContaining("hit a quota or usage limit"),
+    });
+    expect(d.store.ownerOf("/work/project")).toBeUndefined();
+  });
+
+  it("does not launch a fallback while the limited pane may still run", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: quotaAfterPrompt(() => herdr, ["claude"]),
+      close: () => false,
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Fix it",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.lanes[0]).toMatchObject({
+      state: "failed",
+      paneId: "w1:p1",
+      descriptor: "claude:claude-opus-5-5@high",
+      error: expect.stringContaining("Closing pane w1:p1 was not confirmed"),
+    });
+    expect(herdr.calls.filter((call) => call[1] === "split")).toHaveLength(1);
+    expect(d.store.ownerOf("/work/project")?.taskId).toBe(result.task.id);
+  });
+
+  it("leaves a lane alone when its prompt only mentions a usage limit, or it has no fallback order", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: (target) => {
+        const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
+        // The pane echoes the task, which talks about usage limits, and the turn goes on.
+        pane.history = `> ${herdr.prompts.at(-1)!.text}\n`;
+        return undefined;
+      },
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Retry when Codex prints You've hit your usage limit",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    expect(result.ok && result.lanes[0]).toMatchObject({
+      descriptor: "claude:claude-opus-5-5@high",
+      state: "prompted",
+    });
+    expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
+
+    const gate: FakeHerdr = fakeHerdr({ prompt: quotaAfterPrompt(() => gate, ["codex"]) });
+    const reads = deps(gate);
+    const review = await dispatchPlan({
+      plan: plan("review gate"),
+      prompt: "Review it",
+      worktreeId: "/work/project",
+      deps: reads.deps,
+    });
+    // Without a fallback order the router does not watch the pane after the prompt.
+    expect(review.ok && review.lanes[0]).toMatchObject({ state: "prompted" });
+    expect(gate.calls.filter((call) => call[1] === "close")).toEqual([]);
+  });
+});

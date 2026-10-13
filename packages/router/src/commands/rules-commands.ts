@@ -2,7 +2,13 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import { parseRules, type RuleSet } from "../rules/mdc-parser.js";
 import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
-import { planRoute, roleNames, type PlanRefusal, type RoutePlan } from "../rules/plan.js";
+import {
+  planRoute,
+  roleNames,
+  type PlannedLane,
+  type PlanRefusal,
+  type RoutePlan,
+} from "../rules/plan.js";
 import { nativeLaunch, permissionProfile } from "../rules/native-argv.js";
 import {
   findProjectRoot,
@@ -90,6 +96,15 @@ export function executeRoles(location: RulesLocation): CommandResult {
       selectors: role.lanes.map((lane) =>
         lane.kind === "parent" ? lane.alias : lane.descriptor.canonical,
       ),
+      fallbacks: role.fallbacks.map((entry) =>
+        !entry.ok
+          ? { selector: entry.selector, error: entry.error }
+          : {
+              selector: entry.selector,
+              resolved:
+                entry.lane.kind === "parent" ? entry.lane.alias : entry.lane.descriptor.canonical,
+            },
+      ),
     })),
     ...rules.invalid.map((role) => ({ names: role.names, line: role.line, error: role.error })),
   ].sort((a, b) => a.line - b.line);
@@ -98,7 +113,18 @@ export function executeRoles(location: RulesLocation): CommandResult {
     ...roles.map((role) =>
       "error" in role
         ? `  ${role.names.join(", ")}: INVALID (${role.error})`
-        : `  ${role.names.join(", ")}: ${role.selectors.join(", ")}${role.kind === "panel" ? `  [panel, ${role.lanes} lanes]` : ""}`,
+        : [
+            `  ${role.names.join(", ")}: ${role.selectors.join(", ")}${role.kind === "panel" ? `  [panel, ${role.lanes} lanes]` : ""}`,
+            ...(role.fallbacks.length > 0
+              ? [
+                  `    fallback on quota: ${role.fallbacks
+                    .map((entry) =>
+                      "error" in entry ? `${entry.selector} (unusable)` : entry.resolved,
+                    )
+                    .join(", then ")}`,
+                ]
+              : []),
+          ].join("\n"),
     ),
   ];
   return {
@@ -164,8 +190,8 @@ export function refusal(plan: PlanRefusal): CommandResult {
 }
 
 /** Each lane's exact native argv, or why it cannot run. */
-export function laneLaunches(plan: RoutePlan) {
-  return plan.lanes.map((lane) => {
+export function laneLaunches(plan: RoutePlan, lanes: PlannedLane[] = plan.lanes) {
+  return lanes.map((lane) => {
     const launch = nativeLaunch(lane, permissionProfile(plan));
     return launch.ok
       ? { ok: true as const, index: lane.index, kind: launch.launch.kind, argv: launch.launch.argv }
@@ -189,6 +215,14 @@ export function formatPlan(plan: RoutePlan, footer: string): string {
         ...lane.notes.map((note) => `  note: ${note}`),
       ];
     }),
+    ...laneLaunches(plan, plan.fallbacks).flatMap((launch, position) => {
+      const lane = plan.fallbacks[position]!;
+      return [
+        `Fallback ${position + 1} on quota or usage limit: ${lane.descriptor}`,
+        launch.ok ? `  argv: ${launch.argv.join(" ")}` : `  cannot launch: ${launch.error}`,
+        ...lane.notes.map((note) => `  note: ${note}`),
+      ];
+    }),
     ...plan.notes.map((note) => `note: ${note}`),
     footer,
   ].join("\n");
@@ -199,7 +233,13 @@ export const PREVIEW_FOOTER =
 
 export function planJson(plan: RoutePlan, extra: Record<string, unknown> = {}) {
   const launches = laneLaunches(plan);
-  return { ...plan, launches, launchable: launches.every((launch) => launch.ok), ...extra };
+  return {
+    ...plan,
+    launches,
+    fallbackLaunches: laneLaunches(plan, plan.fallbacks),
+    launchable: launches.every((launch) => launch.ok),
+    ...extra,
+  };
 }
 
 export function executePlan(location: RulesLocation, request: PlanRequest): CommandResult {

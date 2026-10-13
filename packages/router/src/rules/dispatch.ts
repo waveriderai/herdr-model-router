@@ -18,8 +18,10 @@ import { WriterAuthorityError } from "../store/workflow-repository.js";
 import type { Provider } from "./descriptor.js";
 import { launchScript, paneCommand } from "./launch-script.js";
 import {
+  detectQuota,
   extractPaneText,
   hasReadinessEvidence,
+  quotaReason,
   screenVerdict,
   type ReadinessKind,
   type ScreenVerdict,
@@ -32,7 +34,7 @@ import {
   permissionProfile,
   type NativeLaunch,
 } from "./native-argv.js";
-import type { RoutePlan } from "./plan.js";
+import type { PlannedLane, RoutePlan } from "./plan.js";
 import { ensureCodexSession } from "./codex-identity.js";
 import {
   canonicalCwd,
@@ -44,6 +46,8 @@ import {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_MS = 500;
 const SCREEN_LINES = 80;
+const DEFAULT_QUOTA_WATCH_MS = 20_000;
+const NOTHING_ELSE = " Nothing was launched and no other model or API key is tried.";
 
 /** Where the per-lane launch scripts live (private to the user) and how they are removed. */
 export interface LaunchFiles {
@@ -71,6 +75,11 @@ export interface DispatchDeps {
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
+  /**
+   * How long, after a prompt goes out on a lane with a fallback order, the router watches
+   * that pane for a quota or usage-limit error before it leaves the lane to the model.
+   */
+  quotaWatchMs?: number;
 }
 
 /** A lane's launch with argv[0] replaced by the resolved absolute executable. */
@@ -88,6 +97,8 @@ export interface LaneOutcome {
   agentName?: string;
   attempt?: Pick<DispatchAttempt, "id" | "state" | "evidence">;
   error?: string;
+  /** Models this lane skipped, in order, before the one it ended on. */
+  skipped?: { descriptor: string; reason: string }[];
 }
 
 export type DispatchResult =
@@ -131,7 +142,7 @@ export async function preflightLaunches(
         return {
           ok: false,
           code: "capability-missing",
-          error: `lane ${lane.index}: \`${name}\` is not on PATH; the ${lane.provider} CLI is missing. Nothing was launched and no other model or API key is tried.`,
+          error: `lane ${lane.index}: \`${name}\` is not on PATH; the ${lane.provider} CLI is missing.${NOTHING_ELSE}`,
         };
       }
       const result = await deps.probeHelp(executable);
@@ -145,7 +156,7 @@ export async function preflightLaunches(
       return {
         ok: false,
         code: "capability-missing",
-        error: `lane ${lane.index}: \`${probed.executable} --help\` failed; the ${lane.provider} CLI is missing or broken. Nothing was launched and no other model or API key is tried.`,
+        error: `lane ${lane.index}: \`${probed.executable} --help\` failed; the ${lane.provider} CLI is missing or broken.${NOTHING_ELSE}`,
       };
     }
     const missing = missingCapabilities(probed.text, built.launch.requiredHelp);
@@ -283,19 +294,27 @@ const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resol
  * router created. Any other detected kind is a mismatch; no ready agent before the timeout
  * is unready. Both fail closed.
  */
-/** Reads the visible screen of a pane this task owns and judges it. Never sends input. */
-export async function readReadiness(
+/** The visible text of a pane this task owns, or undefined when it cannot be read. */
+async function readScreen(
   deps: Pick<DispatchDeps, "pane">,
   paneId: string,
-  kind: ReadinessKind,
-): Promise<ScreenVerdict> {
+): Promise<string | undefined> {
   let raw: string | undefined;
   try {
     raw = await deps.pane.readPane(paneId, { source: "visible", lines: SCREEN_LINES });
   } catch {
     raw = undefined;
   }
-  return screenVerdict(kind, extractPaneText(raw));
+  return extractPaneText(raw);
+}
+
+/** Reads the visible screen of a pane this task owns and judges it. Never sends input. */
+export async function readReadiness(
+  deps: Pick<DispatchDeps, "pane">,
+  paneId: string,
+  kind: ReadinessKind,
+): Promise<ScreenVerdict> {
+  return screenVerdict(kind, await readScreen(deps, paneId));
 }
 
 /**
@@ -308,7 +327,7 @@ async function observeAgent(
   deps: Pick<DispatchDeps, "pane" | "sleep" | "timeoutMs" | "pollMs">,
   paneId: string,
   expected: ReadinessKind,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; quota?: string }> {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
   const sleep = deps.sleep ?? sleepFor;
@@ -325,7 +344,14 @@ async function observeAgent(
           error: `pane ${paneId} runs ${info.agent}, not ${expected}; refusing to name or prompt it`,
         };
       }
-      const verdict = await readReadiness(deps, paneId, expected);
+      const text = await readScreen(deps, paneId);
+      // Before dialogs: Claude Code offers a numbered menu with its usage-limit message.
+      const quota = text === undefined ? undefined : detectQuota(text);
+      if (quota) {
+        const reason = quotaReason(expected, quota);
+        return { ok: false, error: `${reason}; no prompt was sent`, quota: reason };
+      }
+      const verdict = screenVerdict(expected, text);
       if (verdict.state === "dialog") {
         return {
           ok: false,
@@ -364,7 +390,7 @@ export type NativeStart =
    * `pane` is absent when no pane was created. `closed: false` means Herdr did not confirm
    * the close: the pane may still run the CLI, so the caller keeps it on record.
    */
-  | { ok: false; error: string; pane?: { id: string; closed: boolean } };
+  | { ok: false; error: string; pane?: { id: string; closed: boolean }; quota?: string };
 
 /** Closes a pane this launch created and reports whether Herdr confirmed it. */
 export async function closeCreatedPane(
@@ -382,6 +408,41 @@ export function orphanNote(paneId: string, closed: boolean): string {
   return closed
     ? ""
     : ` Closing pane ${paneId} was not confirmed; it may still run the CLI (no prompt was sent).`;
+}
+
+/**
+ * After a prompt went out on a lane with a fallback order, watches that lane's own pane for a
+ * bounded time for the CLI to end its turn on a quota or usage-limit error. Returns the
+ * reason, or undefined once the turn ends without one, the agent asks for input, or the
+ * window closes. Reads only; it never sends input.
+ */
+export async function watchForQuota(
+  deps: Pick<DispatchDeps, "pane" | "sleep" | "pollMs" | "quotaWatchMs">,
+  input: { paneId: string; kind: string; sent: string; started: boolean },
+): Promise<string | undefined> {
+  const windowMs = deps.quotaWatchMs ?? DEFAULT_QUOTA_WATCH_MS;
+  const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
+  const sleep = deps.sleep ?? sleepFor;
+  let started = input.started;
+  for (let waited = 0; ; waited += pollMs) {
+    let info;
+    try {
+      info = await deps.pane.getAgent(input.paneId);
+    } catch {
+      info = undefined;
+    }
+    if (info?.status === "blocked") return undefined;
+    if (info?.status === "working") started = true;
+    if (info?.status === "idle") {
+      const text = await readScreen(deps, input.paneId);
+      const quota = text === undefined ? undefined : detectQuota(text, input.sent);
+      if (quota) return quotaReason(input.kind, quota);
+      // The turn started and ended without a quota error: the model is answering.
+      if (started) return undefined;
+    }
+    if (waited >= windowMs) return undefined;
+    await sleep(pollMs);
+  }
 }
 
 /**
@@ -421,9 +482,14 @@ export async function startNativeAgent(input: {
     };
   }
   input.onPaneCreated?.(paneId);
-  const closeWith = async (error: string): Promise<NativeStart> => {
+  const closeWith = async (error: string, quota?: string): Promise<NativeStart> => {
     const closed = await closeCreatedPane(deps.herdr, paneId);
-    return { ok: false, error: error + orphanNote(paneId, closed), pane: { id: paneId, closed } };
+    return {
+      ok: false,
+      error: error + orphanNote(paneId, closed),
+      pane: { id: paneId, closed },
+      ...(quota ? { quota } : {}),
+    };
   };
   // The CLI starts from the pane's own shell through `env -i`, so whatever that shell's rc
   // files export (API keys included) never reaches it, while the pane's own Herdr context does.
@@ -461,7 +527,7 @@ export async function startNativeAgent(input: {
   } finally {
     if (scriptPath) deps.launchFiles.remove(scriptPath);
   }
-  if (!observed.ok) return closeWith(observed.error);
+  if (!observed.ok) return closeWith(observed.error, observed.quota);
   const agentName = laneAgentName(launch.kind, input.laneId);
   const renamed = await deps.herdr.renameAgent(paneId, agentName);
   if (!renamed.ok) {
@@ -573,8 +639,11 @@ export async function dispatchPlan(input: {
   const { task } = created;
   input.onTaskCreated?.(task);
   const outcomes: LaneOutcome[] = [];
-  for (const [position, lane] of created.lanes.entries()) {
-    const launch = preflight.launches[position]!;
+  // A workflow binds its writer's identity once, so only plain dispatch follows a fallback order.
+  const fallbackOrder = input.workflowId ? [] : plan.fallbacks;
+  for (const [position, created_] of created.lanes.entries()) {
+    let lane = created_;
+    let launch = preflight.launches[position]!;
     const outcome: LaneOutcome = {
       laneId: lane.id,
       index: lane.index,
@@ -588,89 +657,57 @@ export async function dispatchPlan(input: {
       outcome.error = redactCollectorText(error);
       deps.store.updateLane(lane.id, { state: "failed", error: outcome.error });
     };
-    const forgetPane = () => {
+    const pending = [...fallbackOrder];
+    for (;;) {
+      const run = await runLane({
+        ...input,
+        lane,
+        launch,
+        outcome,
+        fail,
+        task,
+        watchQuota: fallbackOrder.length > 0,
+      });
+      if (run.kind !== "quota") break;
+      const skip = (skipped: { descriptor: string; reason: string }, extra = {}) => {
+        const reason = redactCollectorText(skipped.reason);
+        deps.store.recordSkipped(lane.id, { descriptor: skipped.descriptor, reason, ...extra });
+        (outcome.skipped ??= []).push({ descriptor: skipped.descriptor, reason });
+      };
+      skip(
+        { descriptor: lane.descriptor, reason: run.reason },
+        { paneId: run.paneId, ...(run.attemptId ? { attemptId: run.attemptId } : {}) },
+      );
+      const next = await nextFallback(pending, plan, deps, skip);
+      if (!next) {
+        fail(
+          `every model in the fallback order for role "${plan.role}" hit a quota or usage limit or could not be launched: ` +
+            `${outcome.skipped!.map((entry) => `${entry.descriptor} (${entry.reason})`).join("; ")}. ` +
+            "Nothing else is tried, and no API key is used.",
+        );
+        break;
+      }
+      try {
+        lane = deps.store.switchLaneModel(lane.id, {
+          descriptor: next.lane.descriptor,
+          provider: next.lane.provider,
+          model: next.lane.model,
+          effort: next.lane.effort,
+          argv: next.launch.argv,
+        });
+      } catch (error) {
+        const message = guardMessage(error);
+        if (!message) throw error;
+        fail(`${message} The fallback ${next.lane.descriptor} was not launched.`);
+        break;
+      }
+      launch = next.launch;
+      Object.assign(outcome, { descriptor: lane.descriptor, argv: launch.argv, state: "planned" });
       delete outcome.paneId;
-      deps.store.updateLane(lane.id, { paneId: undefined });
-    };
-    const started = await startNativeAgent({
-      deps,
-      laneId: lane.id,
-      cwd: plan.cwd,
-      launch,
-      onPaneCreated: (paneId) => {
-        outcome.paneId = paneId;
-        outcome.state = "pane-created";
-        deps.store.updateLane(lane.id, { paneId, state: "pane-created" });
-      },
-    });
-    if (!started.ok) {
-      // A confirmed close forgets the pane; an unconfirmed one stays on record as an orphan.
-      if (outcome.paneId && started.pane?.closed !== false) forgetPane();
-      fail(started.error);
-      continue;
+      delete outcome.agentName;
+      delete outcome.attempt;
+      delete outcome.error;
     }
-    const { paneId, agentName } = started;
-    outcome.agentName = agentName;
-    outcome.state = "agent-started";
-    deps.store.updateLane(lane.id, { agentName, state: "agent-started" });
-    const refuseLane = async (error: string) => {
-      const closed = await closeCreatedPane(deps.herdr, paneId);
-      if (closed) forgetPane();
-      fail(error + orphanNote(paneId, closed));
-    };
-    let identity: BoundIdentity | undefined;
-    if (plan.access === "write") {
-      const bound = await bindWriterIdentity(deps, { paneId, agentName, cwd: plan.cwd });
-      if (!bound.ok) {
-        await refuseLane(bound.error);
-        continue;
-      }
-      identity = bound.identity;
-      deps.store.updateLane(lane.id, { sessionId: identity.sessionId, sessionCwd: identity.cwd });
-    }
-    if (input.beforeSend) {
-      const allowed = await input.beforeSend({
-        laneId: lane.id,
-        paneId,
-        agentName,
-        ...(identity ? { identity } : {}),
-      });
-      if (!allowed.ok) {
-        await refuseLane(allowed.error);
-        continue;
-      }
-    }
-    let sent: DispatchAttempt;
-    try {
-      sent = await sendOnce({
-        deps,
-        lane: deps.store.getLane(lane.id)!,
-        agentName,
-        text: input.laneText
-          ? input.laneText(lane, task)
-          : laneText(plan, task, lane, input.prompt),
-        purpose: "initial",
-        ...(input.workflowId ? { workflowId: input.workflowId } : {}),
-        ...(input.onAttemptBegun
-          ? {
-              onBegin: (begun: DispatchAttempt) =>
-                input.onAttemptBegun!({ laneId: lane.id }, begun),
-            }
-          : {}),
-      });
-    } catch (error) {
-      const message = guardMessage(error);
-      if (!message) throw error;
-      fail(`${message} The agent in pane ${paneId} was left running and was not prompted.`);
-      continue;
-    }
-    outcome.attempt = {
-      id: sent.id,
-      state: sent.state,
-      ...(sent.evidence ? { evidence: sent.evidence } : {}),
-    };
-    outcome.state = "prompted";
-    deps.store.updateLane(lane.id, { state: "prompted" });
   }
   const delivered = outcomes.filter((outcome) =>
     ["sent", "working", "blocked"].includes(outcome.attempt?.state ?? ""),
@@ -678,10 +715,25 @@ export async function dispatchPlan(input: {
   const anyAttempt = outcomes.some((outcome) => outcome.attempt);
   // A pane whose close was not confirmed may still run the writer: the worktree stays held.
   const orphaned = outcomes.some((outcome) => outcome.state === "failed" && outcome.paneId);
+  const options = input.workflowId ? { workflowId: input.workflowId } : {};
   if (plan.access === "write" && !anyAttempt && !orphaned) {
-    deps.store.releaseUnsent(task.id, "no prompt was sent; ownership released automatically", {
-      ...(input.workflowId ? { workflowId: input.workflowId } : {}),
-    });
+    // Prompts that reached only models past their quota leave no writer running: every such
+    // pane was closed, so the worktree is released with that evidence.
+    const quotaOnly = created.lanes.some((planned) => deps.store.attempts(planned.id).length > 0);
+    if (quotaOnly) {
+      deps.store.closeTask(
+        task.id,
+        "released",
+        "every model that received the prompt hit a quota or usage limit and its pane was closed; ownership released automatically",
+        options,
+      );
+    } else {
+      deps.store.releaseUnsent(
+        task.id,
+        "no prompt was sent; ownership released automatically",
+        options,
+      );
+    }
   } else {
     // Never reopens a task that was completed or released while this dispatch ran.
     deps.store.finishDispatch(
@@ -690,6 +742,164 @@ export async function dispatchPlan(input: {
     );
   }
   return { ok: true, task: deps.store.getTask(task.id)!, lanes: outcomes };
+}
+
+/**
+ * The next launchable model in a lane's fallback order, preflighted like a planned lane. An
+ * entry whose CLI is missing or lacks a required flag is skipped, with the reason logged.
+ */
+async function nextFallback(
+  pending: PlannedLane[],
+  plan: RoutePlan,
+  deps: DispatchDeps,
+  skip: (skipped: { descriptor: string; reason: string }) => void,
+): Promise<{ lane: PlannedLane; launch: ResolvedLaunch } | undefined> {
+  for (let next = pending.shift(); next; next = pending.shift()) {
+    const checked = await preflightLaunches({ ...plan, lanes: [next] }, deps);
+    if (checked.ok) return { lane: next, launch: checked.launches[0]! };
+    skip({
+      descriptor: next.descriptor,
+      reason: checked.error.replace(/^lane \d+: /, "").replace(NOTHING_ELSE, ""),
+    });
+  }
+  return undefined;
+}
+
+type LaneRun =
+  | { kind: "prompted" | "failed" }
+  /** The model hit a quota or usage limit and its pane was closed: the lane may move on. */
+  | { kind: "quota"; reason: string; paneId: string; attemptId?: string };
+
+/**
+ * Launches, binds and prompts one lane on its current model. With `watchQuota`, a quota or
+ * usage-limit error at startup or right after the prompt closes the pane and reports `quota`;
+ * if that close is not confirmed the lane fails instead, so no second model runs beside it.
+ */
+async function runLane(input: {
+  plan: RoutePlan;
+  prompt: string;
+  deps: DispatchDeps;
+  task: DispatchTask;
+  lane: DispatchLane;
+  launch: ResolvedLaunch;
+  outcome: LaneOutcome;
+  fail: (error: string) => void;
+  watchQuota: boolean;
+  workflowId?: string;
+  beforeSend?: Parameters<typeof dispatchPlan>[0]["beforeSend"];
+  onAttemptBegun?: Parameters<typeof dispatchPlan>[0]["onAttemptBegun"];
+  laneText?: Parameters<typeof dispatchPlan>[0]["laneText"];
+}): Promise<LaneRun> {
+  const { plan, deps, task, lane, launch, outcome, fail } = input;
+  const forgetPane = () => {
+    delete outcome.paneId;
+    deps.store.updateLane(lane.id, { paneId: undefined });
+  };
+  const started = await startNativeAgent({
+    deps,
+    laneId: lane.id,
+    cwd: plan.cwd,
+    launch,
+    onPaneCreated: (paneId) => {
+      outcome.paneId = paneId;
+      outcome.state = "pane-created";
+      deps.store.updateLane(lane.id, { paneId, state: "pane-created" });
+    },
+  });
+  if (!started.ok) {
+    // A confirmed close forgets the pane; an unconfirmed one stays on record as an orphan.
+    if (outcome.paneId && started.pane?.closed !== false) {
+      const paneId = outcome.paneId;
+      forgetPane();
+      if (input.watchQuota && started.quota) {
+        return { kind: "quota", reason: started.quota, paneId };
+      }
+    }
+    fail(started.error);
+    return { kind: "failed" };
+  }
+  const { paneId, agentName } = started;
+  outcome.agentName = agentName;
+  outcome.state = "agent-started";
+  deps.store.updateLane(lane.id, { agentName, state: "agent-started" });
+  const refuseLane = async (error: string) => {
+    const closed = await closeCreatedPane(deps.herdr, paneId);
+    if (closed) forgetPane();
+    fail(error + orphanNote(paneId, closed));
+  };
+  let identity: BoundIdentity | undefined;
+  if (plan.access === "write") {
+    const bound = await bindWriterIdentity(deps, { paneId, agentName, cwd: plan.cwd });
+    if (!bound.ok) {
+      await refuseLane(bound.error);
+      return { kind: "failed" };
+    }
+    identity = bound.identity;
+    deps.store.updateLane(lane.id, { sessionId: identity.sessionId, sessionCwd: identity.cwd });
+  }
+  if (input.beforeSend) {
+    const allowed = await input.beforeSend({
+      laneId: lane.id,
+      paneId,
+      agentName,
+      ...(identity ? { identity } : {}),
+    });
+    if (!allowed.ok) {
+      await refuseLane(allowed.error);
+      return { kind: "failed" };
+    }
+  }
+  const text = input.laneText
+    ? input.laneText(lane, task)
+    : laneText(plan, task, lane, input.prompt);
+  let sent: DispatchAttempt;
+  try {
+    sent = await sendOnce({
+      deps,
+      lane: deps.store.getLane(lane.id)!,
+      agentName,
+      text,
+      purpose: "initial",
+      ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+      ...(input.onAttemptBegun
+        ? {
+            onBegin: (begun: DispatchAttempt) => input.onAttemptBegun!({ laneId: lane.id }, begun),
+          }
+        : {}),
+    });
+  } catch (error) {
+    const message = guardMessage(error);
+    if (!message) throw error;
+    fail(`${message} The agent in pane ${paneId} was left running and was not prompted.`);
+    return { kind: "failed" };
+  }
+  outcome.attempt = {
+    id: sent.id,
+    state: sent.state,
+    ...(sent.evidence ? { evidence: sent.evidence } : {}),
+  };
+  outcome.state = "prompted";
+  deps.store.updateLane(lane.id, { state: "prompted" });
+  // Only a prompt known to have reached the CLI is watched; `unknown` stays for `recover`.
+  if (input.watchQuota && (sent.state === "working" || sent.state === "sent")) {
+    const quota = await watchForQuota(deps, {
+      paneId,
+      kind: launch.kind,
+      sent: text,
+      started: sent.state === "working",
+    });
+    if (quota) {
+      const closed = await closeCreatedPane(deps.herdr, paneId);
+      if (!closed) {
+        fail(`${quota}; no fallback was launched.${orphanNote(paneId, false)}`);
+        return { kind: "failed" };
+      }
+      forgetPane();
+      delete outcome.attempt;
+      return { kind: "quota", reason: quota, paneId, attemptId: sent.id };
+    }
+  }
+  return { kind: "prompted" };
 }
 
 export type ReviseResult =

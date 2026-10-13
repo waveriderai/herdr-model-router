@@ -44,6 +44,28 @@ export interface DispatchLane {
   sessionCwd?: string;
   state: LaneState;
   error?: string;
+  /** Models this lane left for its role's fallback order, oldest first. */
+  skipped?: SkippedModel[];
+}
+
+/** A model a lane did not finish on, and why (see `# fallback:` in the rules file). */
+export interface SkippedModel {
+  descriptor: string;
+  reason: string;
+  /** The pane that model ran in, when it was launched. */
+  paneId?: string;
+  /** The prompt attempt that model received, when one was sent. */
+  attemptId?: string;
+  at: string;
+}
+
+/** The model a lane moves to: one entry of its role's fallback order. */
+export interface LaneModel {
+  descriptor: string;
+  provider: string;
+  model: string;
+  effort: string | null;
+  argv: string[];
 }
 
 export interface DispatchAttempt {
@@ -150,6 +172,7 @@ interface LaneRow {
   session_cwd: string | null;
   state: LaneState;
   error: string | null;
+  skipped_json: string | null;
 }
 
 interface AttemptRow {
@@ -196,6 +219,9 @@ function lane(row: LaneRow): DispatchLane {
     ...(row.session_cwd === null ? {} : { sessionCwd: row.session_cwd }),
     state: row.state,
     ...(row.error === null ? {} : { error: row.error }),
+    ...(row.skipped_json === null
+      ? {}
+      : { skipped: JSON.parse(row.skipped_json) as SkippedModel[] }),
   };
 }
 
@@ -409,6 +435,54 @@ export class DispatchRepository {
         this.now(),
         id,
       );
+  }
+
+  /** Appends a model to the lane's skip log. Only the log changes; the lane keeps its model. */
+  recordSkipped(id: string, skipped: Omit<SkippedModel, "at">): void {
+    const record = this.db.transaction(() => {
+      const current = this.getLane(id);
+      if (!current) throw new Error(`Unknown lane ${id}`);
+      const entry: SkippedModel = { ...skipped, at: this.now() };
+      this.db
+        .prepare("update dispatch_lanes set skipped_json = ?, updated_at = ? where id = ?")
+        .run(JSON.stringify([...(current.skipped ?? []), entry]), entry.at, id);
+    });
+    record.immediate();
+  }
+
+  /**
+   * Moves a lane to the next model in its role's fallback order: the lane forgets the old
+   * model's pane, agent and session and starts again from `planned`. Refused for a closed
+   * task, or a writer task that no longer owns its worktree, so no new pane is opened for it.
+   */
+  switchLaneModel(id: string, next: LaneModel): DispatchLane {
+    const change = this.db.transaction(() => {
+      const current = this.getLane(id);
+      if (!current) throw new Error(`Unknown lane ${id}`);
+      const task = this.getTask(current.taskId)!;
+      if (CLOSED_STATUSES.includes(task.status)) throw new TaskClosedError(task);
+      if (task.access === "write") {
+        const owner = this.ownerOf(task.worktreeId);
+        if (owner?.taskId !== task.id) throw new NotOwnerError(task, owner);
+      }
+      this.db
+        .prepare(
+          `update dispatch_lanes set descriptor = ?, provider = ?, model = ?, effort = ?, argv_json = ?,
+             agent_name = null, pane_id = null, session_id = null, session_cwd = null,
+             state = 'planned', error = null, updated_at = ? where id = ?`,
+        )
+        .run(
+          next.descriptor,
+          next.provider,
+          next.model,
+          next.effort,
+          JSON.stringify(next.argv),
+          this.now(),
+          id,
+        );
+    });
+    change.immediate();
+    return this.getLane(id)!;
   }
 
   /**

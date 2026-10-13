@@ -44,6 +44,11 @@ export interface RoutePlan {
   policySha256?: string;
   cwd: string;
   lanes: PlannedLane[];
+  /**
+   * A single-lane role's `# fallback:` order, already checked against the project policy.
+   * Dispatch launches the next one only after the running model hits a quota or usage limit.
+   */
+  fallbacks: PlannedLane[];
   notes: string[];
 }
 
@@ -251,6 +256,15 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
   if (input.bypassPermissions) {
     notes.push("permission bypass opted in for this run: the CLI skips its approvals and sandbox");
   }
+  const fallbacks = planFallbacks({
+    found,
+    role,
+    lanes: launched,
+    parent,
+    allowed,
+    pins: pinsFor(input.policy, found.names),
+    notes,
+  });
 
   return {
     ok: true,
@@ -266,8 +280,71 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),
     cwd: input.cwd,
     lanes: launched,
+    fallbacks,
     notes: [...notes, ...collapseNotes],
   };
+}
+
+/**
+ * The role's fallback order as launchable lanes. An entry is dropped, with a note saying why,
+ * when it cannot be launched, the project policy would refuse it, or it repeats a model
+ * already in the order. A panel runs every lane already, so it has no fallback order.
+ */
+function planFallbacks(input: {
+  found: RoleRule;
+  role: string;
+  lanes: PlannedLane[];
+  parent: NativeDescriptor | undefined;
+  allowed: string[] | undefined;
+  pins: { key: string; pin: string[] }[];
+  notes: string[];
+}): PlannedLane[] {
+  const entries = input.found.fallbacks ?? [];
+  if (entries.length === 0) return [];
+  if (input.lanes.length !== 1) {
+    input.notes.push(
+      `the fallback order on line ${entries[0]!.line} is ignored: role "${input.role}" is a panel, and every panel lane already runs`,
+    );
+    return [];
+  }
+  const fallbacks: PlannedLane[] = [];
+  const seen = new Set([input.lanes[0]!.descriptor]);
+  for (const [position, entry] of entries.entries()) {
+    const skip = (why: string) =>
+      input.notes.push(`fallback ${position + 1} (${entry.selector}) skipped: ${why}`);
+    if (!entry.ok) {
+      skip(entry.error);
+      continue;
+    }
+    let descriptor: NativeDescriptor;
+    let from: PlannedLane["from"] = "rule";
+    if (entry.lane.kind === "parent") {
+      if (!input.parent) {
+        skip(`${entry.lane.alias} needs --parent provider:model@effort`);
+        continue;
+      }
+      descriptor = input.parent;
+      from = "parent";
+    } else {
+      descriptor = entry.lane.descriptor;
+    }
+    if (seen.has(descriptor.canonical)) {
+      skip(`${descriptor.canonical} is already earlier in this role's order`);
+      continue;
+    }
+    if (input.allowed && !input.allowed.includes(descriptor.provider)) {
+      skip(`project policy allows ${input.allowed.join(", ")}, not ${descriptor.provider}`);
+      continue;
+    }
+    const pinned = input.pins.find(({ pin }) => !pin.includes(descriptor.canonical));
+    if (pinned) {
+      skip(`project policy pin "${pinned.key}" requires ${pinned.pin.join(", ")}`);
+      continue;
+    }
+    seen.add(descriptor.canonical);
+    fallbacks.push(toLane(0, descriptor, from, entry.selector));
+  }
+  return fallbacks;
 }
 
 function toLane(

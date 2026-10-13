@@ -163,6 +163,47 @@ export function detectDialog(text: string): { dialog: string; evidence: string }
   return menu ? { dialog: "interactive menu", evidence: "numbered selection" } : undefined;
 }
 
+/**
+ * What the native CLIs print when an account is out of quota or past its usage limit, in
+ * compact form (see compactScreen). Each is an exhausted limit, never a warning such as
+ * "approaching usage limit", and never a context-window limit.
+ */
+const QUOTA_PATTERNS: { label: string; pattern: string | RegExp }[] = [
+  // Claude Code: "Claude usage limit reached", "5-hour limit reached ∙ resets 3pm".
+  { label: "limit reached", pattern: /(?:usage|hour|daily|weekly|monthly|session)limitreached/ },
+  // Claude Code "You've hit your limit"; Codex and Cursor "You've hit your usage limit".
+  { label: "hit your limit", pattern: /hityour(?:usage|rate)?limit/ },
+  // OpenAI and xAI API errors surfaced by Codex and grok.
+  { label: "quota exceeded", pattern: /quotaexceeded|exceededyourcurrentquota|insufficient_quota/ },
+  { label: "rate limit exceeded", pattern: "ratelimitexceeded" },
+  { label: "out of credits", pattern: /(?:outof|runoutof|nomore)credits/ },
+  // Codex after its own retries: "exceeded retry limit, last status: 429 Too Many Requests".
+  { label: "HTTP 429 after retries", pattern: "laststatus:429" },
+];
+
+/**
+ * The CLI's own quota or usage-limit message on this screen, as a short label, if any. `sent`
+ * is the prompt the router typed: the pane echoes it, so its text is removed first and a task
+ * that merely mentions a usage limit is not mistaken for one.
+ */
+export function detectQuota(text: string, sent?: string): string | undefined {
+  let compact = compactScreen(text);
+  if (sent) {
+    const echoes = [sent, ...sent.split("\n")]
+      .map(compactScreen)
+      .filter((echo) => echo.length >= 6)
+      .sort((a, b) => b.length - a.length);
+    for (const echo of echoes) compact = compact.split(echo).join(" ");
+  }
+  return QUOTA_PATTERNS.find(({ pattern }) =>
+    typeof pattern === "string" ? compact.includes(pattern) : pattern.test(compact),
+  )?.label;
+}
+
+export function quotaReason(kind: string, label: string): string {
+  return `${kind} reported a quota or usage-limit error ("${label}")`;
+}
+
 const RULE_LINE = /^\s*─{8,}\s*$/;
 
 /**
