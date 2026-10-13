@@ -341,6 +341,7 @@ function verifierPrompt(input: {
   return [
     `HMR workflow ${input.workflowId}: read-only verification lane ${input.laneId} for role "${input.role}". Do not modify any file.`,
     `Verify the worktree at revision head ${input.revision.head}, content ${input.revision.content} (check with \`hmr workflow fingerprint\`).`,
+    "Review the diff against the acceptance items. The writer's recorded checks are the test evidence. Do not re-run a check that result already marks pass. Re-run a command only when no recorded pass covers that item.",
     "Brief (JSON):",
     canonicalJson(input.brief),
     ...(sources

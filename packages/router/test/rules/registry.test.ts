@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseNativeDescriptor } from "../../src/rules/descriptor.js";
+import { formatPlan } from "../../src/commands/rules-commands.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
 import { ADAPTED_PROVIDERS, nativeLaunch } from "../../src/rules/native-argv.js";
 import { BUILTIN_READ_ONLY_ROLES, planRoute } from "../../src/rules/plan.js";
@@ -140,5 +141,34 @@ describe("read-only roles", () => {
     expect(result.ok && result.forcedReadOnly).toBe(true);
     const writer = plan(rules, "bug-fix", { readOnly: true });
     expect(writer.ok && writer.forcedReadOnly).toBe(false);
+  });
+
+  it("keeps a collapsed panel read-only and a forced role read-only after parent dedupe", () => {
+    const text =
+      "review gate: inherit-parent, codex:gpt-6.1-sol@high\ncopies: inherit-parent, grok:grok-4.7@high\n";
+    const gate = plan(text, "review gate", { parent: "codex:gpt-6.1-sol@high" });
+    expect(gate.ok && [gate.kind, gate.access, gate.forcedReadOnly]).toEqual([
+      "single",
+      "read",
+      true,
+    ]);
+    expect(gate.ok && gate.notes).toEqual([
+      'role "review gate" is read-only globally',
+      "skipped inherit-parent (codex:gpt-6.1-sol@high): that model is already in this panel",
+    ]);
+    const copies = plan(text, "copies", { parent: "grok:grok-4.7@high" });
+    expect(copies.ok && [copies.kind, copies.access]).toEqual(["single", "read"]);
+    const writer = plan(text, "copies", {
+      parent: "grok:grok-4.7@high",
+      policy: { version: 1, writerRoles: ["copies"] },
+    });
+    expect(!writer.ok && writer.code).toBe("panel-writer-conflict");
+  });
+
+  it("prints each plan note once", () => {
+    const result = plan("review gate: codex:gpt-6.1-sol@high", "review gate");
+    if (!result.ok) throw new Error(result.error);
+    const out = formatPlan(result, "footer");
+    expect(out.match(/read-only globally/g)).toHaveLength(1);
   });
 });

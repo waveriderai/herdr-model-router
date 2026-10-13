@@ -83,14 +83,14 @@ export async function executeRulesRun(
   });
   if (!preview.ok) return preview.result;
   const plan = { ...preview.plan, notes: [...preview.plan.notes, ...notes] };
-  const noteLines = plan.notes.map((note) => `Note: ${note}`);
+  // formatPlan prints plan.notes (classification notes included) once.
   if (request.dryRun) {
     const footer =
       effects.length > 0
         ? "Dry run: TypeSafe was called once to classify the role; no model, pane, credential store, or router state was touched."
         : PREVIEW_FOOTER;
     return {
-      output: [formatPlan(plan, footer), ...noteLines].join("\n"),
+      output: [formatPlan(plan, footer)].join("\n"),
       json: planJson(plan, { dryRun: true, effects, dispatch: "not-started" }),
       code: 0,
     };
@@ -133,7 +133,6 @@ export async function executeRulesRun(
     return {
       output: [
         formatPlan(plan, `Task: ${result.task.id} (${result.task.status})`),
-        ...noteLines,
         ...result.lanes.map(formatLaneOutcome),
         summary,
       ].join("\n"),

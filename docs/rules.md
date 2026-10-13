@@ -44,8 +44,11 @@ and `--parent`; write the full model id, such as `claude-opus-5-5`.
 
 ## Access
 
-- More than one lane: a **panel**. Every lane runs, in order, read-only. A panel never takes
-  writer ownership.
+- More than one lane: a **panel**. The lanes that remain run, in order, read-only. A panel never
+  takes writer ownership. A `parent` / `auto` / `inherit-parent` lane that resolves to a model
+  already in the panel is not launched: a second copy of the same model does not add a review,
+  and it does not re-run tests the writer already recorded. A selector written twice still runs
+  twice. The rules file is not rewritten.
 - One lane: a **writer** unless `--read-only` is given, or the project policy lists
   `writerRoles` and this role is not in it.
 - A policy that lists a panel role as a writer is refused.
@@ -183,8 +186,9 @@ start -> dispatched -> result (receipt) -> verify -> reviewed -> accept -> deliv
   `classification` (`bounded-small-fix` only when the coordinator says so). `workflow start`
   records it privately with the workflow id, the baseline revision, the writer's exact
   descriptor, and the `--parent` descriptor if one resolved parent aliases; its SHA-256 is the
-  brief identity. Verification plans its roles with the same parent, keeping every lane and
-  duplicate in order. The rules file is never rewritten.
+  brief identity. Verification plans its roles with the same parent. A parent alias that
+  resolves to a model already in the panel is not launched. A selector written twice still
+  runs twice. The rules file is never rewritten.
 - **One step at a time.** Each coordinator step takes the workflow's operation slot in one
   transaction before it waits on anything, and every state change it makes checks it still
   holds the slot. A second step on the same workflow is refused (`operation-in-progress`)
