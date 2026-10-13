@@ -3,7 +3,17 @@ import type { Provider } from "./descriptor.js";
 import type { Access } from "./plan.js";
 
 /** Herdr `agent start --kind` values for each provider; `grok` is Herdr's native grok kind. */
-export const HERDR_KIND: Record<Provider, "grok" | "codex" | "claude" | "cursor" | "opencode"> = {
+export type HerdrKind = "grok" | "codex" | "claude" | "cursor" | "opencode";
+
+/** Providers with a launch adapter in this file. A registry entry without one cannot launch. */
+export const ADAPTED_PROVIDERS = ["grok", "codex", "claude", "cursor", "opencode"] as const;
+type Adapted = (typeof ADAPTED_PROVIDERS)[number];
+
+export function hasAdapter(provider: Provider): provider is Adapted {
+  return (ADAPTED_PROVIDERS as readonly string[]).includes(provider);
+}
+
+export const HERDR_KIND: Record<Adapted, HerdrKind> = {
   grok: "grok",
   codex: "codex",
   claude: "claude",
@@ -16,13 +26,25 @@ export const HERDR_KIND: Record<Provider, "grok" | "codex" | "claude" | "cursor"
  * and starts exactly that file. Cursor is `cursor-agent`: a bare `agent` on PATH can be
  * another vendor's CLI (the grok installer ships one).
  */
-export const PROVIDER_EXECUTABLE: Record<Provider, string> = {
+export const PROVIDER_EXECUTABLE: Record<Adapted, string> = {
   grok: "grok",
   codex: "codex",
   claude: "claude",
   cursor: "cursor-agent",
   opencode: "opencode",
 };
+
+/** The Herdr kind for a provider. Throws for a provider without an adapter (nativeLaunch gates first). */
+export function herdrKindOf(provider: Provider): HerdrKind {
+  if (!hasAdapter(provider)) throw new Error(`provider "${provider}" has no launch adapter`);
+  return HERDR_KIND[provider];
+}
+
+/** The executable name for a provider. Throws for a provider without an adapter. */
+export function executableOf(provider: Provider): string {
+  if (!hasAdapter(provider)) throw new Error(`provider "${provider}" has no launch adapter`);
+  return PROVIDER_EXECUTABLE[provider];
+}
 
 /** Flags that skip approvals or sandboxes. The router never passes any of them. */
 export const BYPASS_FLAGS = [
@@ -38,7 +60,7 @@ export const BYPASS_FLAGS = [
 ];
 
 export interface NativeLaunch {
-  kind: (typeof HERDR_KIND)[Provider];
+  kind: HerdrKind;
   /** argv[0] is the executable name (`PROVIDER_EXECUTABLE`); a launch swaps in its absolute path. */
   argv: string[];
   /** Flags the installed CLI's --help must list before this argv may run. */
@@ -56,7 +78,14 @@ export function nativeLaunch(
 ): { ok: true; launch: NativeLaunch } | { ok: false; error: string } {
   const read = access === "read";
   const { model, effort } = lane;
-  switch (lane.provider) {
+  const provider = lane.provider;
+  if (!hasAdapter(provider)) {
+    return {
+      ok: false,
+      error: `provider "${provider}" is in the registry but has no launch adapter in native-argv.ts`,
+    };
+  }
+  switch (provider) {
     case "claude":
       return built("claude", [
         ["--model", model],
@@ -95,7 +124,7 @@ export function nativeLaunch(
 }
 
 function built(
-  provider: Provider,
+  provider: Adapted,
   groups: string[][],
   alsoRequired: string[] = [],
 ): { ok: true; launch: NativeLaunch } {

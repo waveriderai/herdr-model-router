@@ -12,7 +12,7 @@ import {
   type DispatchDeps,
   type ResolvedLaunch,
 } from "../rules/dispatch.js";
-import { HERDR_KIND } from "../rules/native-argv.js";
+import { herdrKindOf } from "../rules/native-argv.js";
 import type { PlannedLane, RoutePlan } from "../rules/plan.js";
 import type { ReadinessKind } from "../rules/readiness.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
@@ -551,7 +551,7 @@ async function collabPreflight(
       `agent-collab capabilities ${capabilities.kind}: ${capabilities.error}. This agent-collab cannot take a ${ROUTE_CONTRACT} writer route; nothing was started.`,
     );
   }
-  const kind = HERDR_KIND[input.lane.provider];
+  const kind = herdrKindOf(input.lane.provider);
   const kinds = capabilities.value.writer_kinds["rules-route"] ?? [];
   if (!capabilities.value.route_contracts.includes(ROUTE_CONTRACT) || !kinds.includes(kind)) {
     return fail(
@@ -636,7 +636,7 @@ export function rulesRoute(input: {
   return {
     version: ROUTE_CONTRACT,
     provider: input.lane.provider,
-    kind: HERDR_KIND[input.lane.provider],
+    kind: herdrKindOf(input.lane.provider),
     model: input.lane.model,
     effort: input.lane.effort,
     descriptor: input.lane.descriptor,

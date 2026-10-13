@@ -387,3 +387,22 @@ runs: with no coordinator role, `start` refuses.
 file. The key comes from `config.json` `typesafe.apiKeyRef` or `TYPESAFE_API_KEY`, and is looked
 up only in this mode. The answer must be a role name and nothing else; anything outside the
 role list is refused. The chosen role is then planned exactly like an explicit one.
+
+## Read-only roles
+
+`design consultant` and `review gate` are always read-only: they launch with each CLI's
+enforced read-only mode (`--sandbox read-only`, `--permission-mode plan`, `--mode plan`).
+Mark more roles read-only in the rules file with a directive comment (older parsers ignore it):
+
+    # hmr: readonly coordinator, arch reviewer
+
+A project `.model-router/policy.json` can only tighten access. Listing a globally read-only
+role in `writerRoles` refuses the plan (`readonly-writer-conflict`).
+
+## Provider registry
+
+`packages/router/config/providers.json` lists every provider a descriptor may name, with
+metadata only: id, display name, agent CLI name, supported efforts, capabilities, cost tier and
+fallback eligibility. It holds no launch commands or flags. To add a coding agent, add a registry
+entry and a launch adapter in `packages/router/src/rules/native-argv.ts`. A registered provider
+without an adapter fails closed at launch. Auto-failover is not implemented yet.

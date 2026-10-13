@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "claude",
+      "displayName": "Claude Code",
+      "agentCli": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "capabilities": ["code", "review", "design", "read-only-mode"],
+      "costTier": "high",
+      "fallbackEligible": true
+    },
+    {
+      "id": "codex",
+      "displayName": "OpenAI Codex",
+      "agentCli": "codex",
+      "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "capabilities": ["code", "review", "design", "read-only-mode"],
+      "costTier": "medium",
+      "fallbackEligible": true
+    },
+    {
+      "id": "grok",
+      "displayName": "xAI grok CLI",
+      "agentCli": "grok",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "capabilities": ["code", "review", "read-only-mode"],
+      "costTier": "low",
+      "fallbackEligible": true
+    },
+    {
+      "id": "cursor",
+      "displayName": "Cursor agent",
+      "agentCli": "cursor-agent",
+      "efforts": [],
+      "capabilities": ["code", "review", "read-only-mode"],
+      "costTier": "medium",
+      "fallbackEligible": true
+    },
+    {
+      "id": "opencode",
+      "displayName": "OpenCode",
+      "agentCli": "opencode",
+      "efforts": [],
+      "capabilities": ["code"],
+      "costTier": "low",
+      "fallbackEligible": false
+    }
+  ]
+}
