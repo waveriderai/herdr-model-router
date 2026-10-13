@@ -240,9 +240,15 @@ const COMPOSER_START: Partial<Record<string, RegExp>> = {
 };
 const MAX_BARE_MESSAGE_LINES = 3;
 
-/** One word of when a limit resets: `3pm`, `4 days`, `tomorrow`, `(America/Los_Angeles)`. */
-const TIME_WORD = String.raw`(?:\d[\d:./]*(?:\s?(?:am|pm)|[dhms]\b)?|am|pm|utc|gmt|[pmce][sd]?t|today|tomorrow|tonight|later|soon|midnight|noon|(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|days?|hours?|hrs?|minutes?|mins?|seconds?|secs?|weeks?|a few|a moment|an? (?:hour|minute|day|week)|\([\w/ :+-]*\))`;
-const TIMES = String.raw`${TIME_WORD}(?:(?:\s*,\s*|\s+(?:and\s+)?)${TIME_WORD})*`;
+/** A time zone: an IANA name (`America/Los_Angeles`), UTC or GMT with an offset, or `PT`. */
+const ZONE = String.raw`(?:(?:africa|america|antarctica|asia|atlantic|australia|europe|indian|pacific|etc)(?:/[a-z_+-]+)+|(?:utc|gmt)(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{1,2}(?::?\d{2})?|[pmce][sd]?t)`;
+
+/**
+ * One word of when a limit resets: `3pm`, `4 days`, `tomorrow`, `Oct 14`, or a time zone,
+ * bare or in parentheses (`(America/Los_Angeles)`). Nothing else may stand in parentheses.
+ */
+const TIME_WORD = String.raw`(?:\d[\d:./]*(?:\s?(?:am|pm)|[dhms]\b)?|am|pm|today|tomorrow|tonight|later|soon|midnight|noon|(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?|days?|hours?|hrs?|minutes?|mins?|seconds?|secs?|weeks?|a few|a moment|an? (?:hour|minute|day|week)|${ZONE}|\(${ZONE}\))`;
+const TIMES = String.raw`${TIME_WORD}(?:(?:\s*,\s*|\s+(?:(?:and|at|on)\s+)?)${TIME_WORD})*`;
 
 /**
  * The CLI's own advice after a quota message, each item whole: when the limit resets, to try

@@ -276,6 +276,13 @@ describe("quota detection", () => {
         grok,
       ),
     ).toBe("hit your limit");
+    for (const message of [
+      "You've hit your limit · resets 3pm (America/Los_Angeles)",
+      "Rate limit exceeded. Try again at 5pm (UTC+2).",
+      "Rate limit exceeded. Resets Oct 14 at 9am PT.",
+    ]) {
+      expect(detectQuota(grokTurn(message), grok)).toBeDefined();
+    }
     // Advice is read whole: anything after it is the model's text.
     for (const [turn, opts] of [
       [cursorTurn, cursor],
@@ -286,6 +293,10 @@ describe("quota detection", () => {
         "Rate limit exceeded. Retry later now works.",
         "Rate limit exceeded. Try again in 3 retries is the new policy.",
         "You've hit your usage limit for everyone is handled.",
+        // Parentheses hold only a time zone, never the model's words.
+        "Rate limit exceeded. Try again later (now shown with a countdown).",
+        "Rate limit exceeded. Try again later (and/or retry).",
+        "Rate limit exceeded. Retry after marketing.",
       ]) {
         expect(detectQuota(turn(summary), opts)).toBeUndefined();
       }
@@ -797,6 +808,8 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
     ["cursor", "Rate limit exceeded. Try again later is now shown with a countdown."],
     ["grok", "Rate limit exceeded is now retried."],
     ["grok", "Rate limit exceeded. Try again later is now shown with a countdown."],
+    ["cursor", "Rate limit exceeded. Try again later (now shown with a countdown)."],
+    ["grok", "Rate limit exceeded. Try again later (now shown with a countdown)."],
   ])("keeps a %s writer whose whole turn is the summary %j", async (kind, summary) => {
     const herdr: FakeHerdr = fakeHerdr({
       prompt: (target) => {
