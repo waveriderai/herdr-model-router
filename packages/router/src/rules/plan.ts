@@ -29,6 +29,8 @@ export interface RoutePlan {
   /** `panel`: more than one lane. Every lane runs; it is not a fallback list. */
   kind: "single" | "panel";
   access: Access;
+  /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
+  forcedReadOnly: boolean;
   rulesSource: RulesSource;
   policySource?: string;
   /** SHA-256 of the policy text this plan was made from. */
@@ -209,6 +211,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     roleNames: found.names,
     kind,
     access,
+    forcedReadOnly,
     rulesSource: input.rulesSource,
     ...(input.policySource ? { policySource: input.policySource } : {}),
     ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),

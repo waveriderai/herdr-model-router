@@ -121,4 +121,24 @@ describe("read-only roles", () => {
       expect.arrayContaining(["--sandbox", "read-only"]),
     );
   });
+
+  it("ignores a trailing comment on the directive and refuses unknown directives", () => {
+    const parsed = parseRules(
+      "# hmr: readonly auditor # inspection only\nauditor: codex:gpt-6.1-sol@high",
+    );
+    expect(parsed.ok && parsed.rules.readOnlyRoles).toEqual(["auditor"]);
+    const result = plan(
+      "# hmr: readonly auditor # note\nauditor: codex:gpt-6.1-sol@high",
+      "auditor",
+    );
+    expect(result.ok && result.access).toBe("read");
+    expect(parseRules("# hmr: writable auditor").ok).toBe(false);
+  });
+
+  it("marks globally read-only plans so callers cannot launch them writable", () => {
+    const result = plan(rules, "review gate");
+    expect(result.ok && result.forcedReadOnly).toBe(true);
+    const writer = plan(rules, "bug-fix", { readOnly: true });
+    expect(writer.ok && writer.forcedReadOnly).toBe(false);
+  });
 });

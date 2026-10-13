@@ -28,7 +28,8 @@ export interface RuleSet {
 export type ParseRulesResult = { ok: true; rules: RuleSet } | { ok: false; error: string };
 
 /** `# hmr: readonly design consultant, review gate` (case-insensitive keyword). */
-const READONLY_DIRECTIVE = /^\s*#\s*hmr:\s*readonly\s+(.+?)\s*$/i;
+const HMR_DIRECTIVE = /^\s*#\s*hmr:/i;
+const READONLY_BODY = /^readonly\s+(.+)$/i;
 
 /** Role names compare case-insensitively with collapsed whitespace. */
 export function normalizeRoleName(name: string): string {
@@ -60,8 +61,18 @@ export function parseRules(text: string): ParseRulesResult {
   const readOnlyRoles = new Set<string>();
   for (let index = start; index < lines.length; index += 1) {
     const lineNumber = index + 1;
-    const directive = READONLY_DIRECTIVE.exec(lines[index]!);
-    if (directive) {
+    if (HMR_DIRECTIVE.test(lines[index]!)) {
+      // Drop a trailing `# comment` first, so it never becomes part of a role name.
+      const body = lines[index]!.replace(HMR_DIRECTIVE, "")
+        .replace(/\s+#.*$/, "")
+        .trim();
+      const directive = READONLY_BODY.exec(body);
+      if (!directive) {
+        return {
+          ok: false,
+          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]"`,
+        };
+      }
       const names = directive[1]!.split(",").map(normalizeRoleName);
       if (names.some((name) => name === "")) {
         return { ok: false, error: `line ${lineNumber}: empty role name in readonly directive` };

@@ -103,6 +103,19 @@ export function parseNativeDescriptor(
   const value = raw.trim();
   const legacy = LEGACY_SELECTORS[value];
   if (legacy) {
+    // The registry is the only source of providers and efforts, legacy selectors included.
+    if (!providerIds().includes(legacy.provider)) {
+      return {
+        ok: false,
+        error: `legacy selector "${value}" maps to provider "${legacy.provider}", which is not in the provider registry`,
+      };
+    }
+    if (!providerEfforts(legacy.provider).includes(legacy.effort)) {
+      return {
+        ok: false,
+        error: `legacy selector "${value}" maps to effort "${legacy.effort}", which ${legacy.provider} does not support in the registry`,
+      };
+    }
     const canonical = canonicalDescriptor(legacy.provider, legacy.model, legacy.effort);
     return {
       ok: true,
