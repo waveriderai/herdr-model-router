@@ -33,6 +33,8 @@ npx vitest --run <path> # one test file
 - Keep rules-mode previews free of processes, network, credential reads, and database writes.
 - Never add a permission-bypass flag to a launch by default. The only path to one is the
   explicit per-run `hmr run --dangerously-bypass-permissions` opt-in for a writer. Never fall
-  back to another model or an API key when a route is unavailable.
+  back to another model or an API key when a route is unavailable. The one exception is a
+  role's own `# fallback:` order, followed only after the launched model reports a quota or
+  usage-limit error.
 - Do not deploy the coordinator or publish packages.
 - Write code, docs, and commit messages in English.

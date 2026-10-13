@@ -1,4 +1,5 @@
 import { parseLaneSelector, type LaneSelector } from "./descriptor.js";
+import { providerIds } from "./provider-registry.js";
 
 /**
  * One entry of a role's `# fallback:` order, in order. An entry that is not a lane selector
@@ -25,6 +26,20 @@ export interface InvalidRole {
   error: string;
 }
 
+/**
+ * Which account (provider CLI) runs a model, from `# hmr:` directives. Every field is optional:
+ * without them the router picks, among the accounts able to run a lane's model, the one with
+ * the most remaining quota.
+ */
+export interface AccountRules {
+  /** `# hmr: first-version cursor`: a writer's first version runs here while it has quota. */
+  firstVersion?: string;
+  /** `# hmr: fix-accounts claude, grok`: `--phase fix` writers run on the one with most quota. */
+  fixAccounts?: string[];
+  /** `# hmr: review-only codex`: these accounts never run a writer (coding) lane. */
+  reviewOnly: string[];
+}
+
 export interface RuleSet {
   roles: RoleRule[];
   /**
@@ -32,6 +47,7 @@ export interface RuleSet {
    * Plain comments to older parsers, so the annotation is backward compatible.
    */
   readOnlyRoles: string[];
+  accounts?: AccountRules;
   /** Entries whose lanes could not be parsed. Planning such a role fails with this error. */
   invalid: InvalidRole[];
 }
@@ -41,6 +57,7 @@ export type ParseRulesResult = { ok: true; rules: RuleSet } | { ok: false; error
 /** `# hmr: readonly design consultant, review gate` (case-insensitive keyword). */
 const HMR_DIRECTIVE = /^\s*#\s*hmr:/i;
 const READONLY_BODY = /^readonly\s+(.+)$/i;
+const ACCOUNT_BODY = /^(first-version|fix-accounts|review-only)\s+(.+)$/i;
 /**
  * `fallback: a, then b` at the start of a comment, or after a sentence in it
  * (`# UI code from the spec. fallback: a, then b`). `Gate fallback stays ...` is prose.
@@ -94,6 +111,7 @@ export function parseRules(text: string): ParseRulesResult {
   const invalid: InvalidRole[] = [];
   const definedAt = new Map<string, number>();
   const readOnlyRoles = new Set<string>();
+  const accounts: AccountRules = { reviewOnly: [] };
   /** The entry the next `# fallback:` comment belongs to, until another entry starts. */
   let current: { role?: RoleRule; fallbackLine?: number } = {};
   const attachFallback = (selectors: string[], lineNumber: number) => {
@@ -124,11 +142,40 @@ export function parseRules(text: string): ParseRulesResult {
       const body = lines[index]!.replace(HMR_DIRECTIVE, "")
         .replace(/\s+#.*$/, "")
         .trim();
+      const account = ACCOUNT_BODY.exec(body);
+      if (account) {
+        const keyword = account[1]!.toLowerCase();
+        const ids = account[2]!.split(",").map((id) => id.trim().toLowerCase());
+        const unknown = ids.find((id) => !providerIds().includes(id));
+        if (unknown !== undefined) {
+          return {
+            ok: false,
+            error: `line ${lineNumber}: unknown account "${unknown}" in ${keyword}; use one of ${providerIds().join(", ")}`,
+          };
+        }
+        if (keyword === "first-version") {
+          if (ids.length !== 1 || accounts.firstVersion !== undefined) {
+            return {
+              ok: false,
+              error: `line ${lineNumber}: first-version names exactly one account, once per file`,
+            };
+          }
+          accounts.firstVersion = ids[0]!;
+        } else if (keyword === "fix-accounts") {
+          if (accounts.fixAccounts !== undefined) {
+            return { ok: false, error: `line ${lineNumber}: fix-accounts is set twice` };
+          }
+          accounts.fixAccounts = ids;
+        } else {
+          ids.forEach((id) => accounts.reviewOnly.includes(id) || accounts.reviewOnly.push(id));
+        }
+        continue;
+      }
       const directive = READONLY_BODY.exec(body);
       if (!directive) {
         return {
           ok: false,
-          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]"`,
+          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]", "# hmr: first-version <account>", "# hmr: fix-accounts <account>[, account]" or "# hmr: review-only <account>[, account]"`,
         };
       }
       const names = directive[1]!.split(",").map(normalizeRoleName);
@@ -186,5 +233,5 @@ export function parseRules(text: string): ParseRulesResult {
     const selectors = trailing === undefined ? undefined : fallbackSelectors(trailing);
     if (selectors) attachFallback(selectors, lineNumber);
   }
-  return { ok: true, rules: { roles, invalid, readOnlyRoles: [...readOnlyRoles] } };
+  return { ok: true, rules: { roles, invalid, readOnlyRoles: [...readOnlyRoles], accounts } };
 }

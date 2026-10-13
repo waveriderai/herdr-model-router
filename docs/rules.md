@@ -19,6 +19,12 @@ name[, alias...]: lane[, lane...]   # trailing comments after whitespace are ign
   error for the whole file.
 - A lane that cannot be parsed marks that entry invalid. `roles` shows it; planning that role
   fails with the parse error. Other roles stay usable.
+- `# fallback: a, then b` (also `a, b` or `a then b`) is the role's fallback order. It belongs
+  to the role entry above it: as that entry's trailing comment, or on a comment line before
+  the next entry. It may follow a sentence in the comment (`# UI code. fallback: a, then b`).
+  Prose such as `fallback stays per policy` (no colon) declares nothing. A second fallback line
+  for one role marks that role invalid. An entry that is not a lane (`cursor Auto`) is kept
+  and skipped at plan time with a note.
 
 ### Lanes
 
@@ -431,6 +437,78 @@ file. The key comes from `config.json` `typesafe.apiKeyRef` or `TYPESAFE_API_KEY
 up only in this mode. The answer must be a role name and nothing else; anything outside the
 role list is refused. The chosen role is then planned exactly like an explicit one.
 
+## Fallback on quota
+
+A single-lane role's fallback order is checked when it is planned: entries that cannot be
+launched, that repeat an earlier model, that need `--parent` without one, or that the project
+policy refuses (`allowedProviders`, a pin) are dropped with a note. `plan` lists the rest as
+`Fallback N on quota or usage limit`. A panel ignores its fallback line; every lane runs anyway.
+
+At launch, `run` watches for the CLI's own quota or usage-limit message:
+
+- on the new pane's screen before the prompt (Claude Code shows a menu with it), and
+- for 20 seconds after the prompt, while the turn ends: when the agent goes idle, the screen,
+  minus the prompt text the router typed, is checked again. A long turn is left alone after the
+  window. The watch runs only when the role has a fallback order.
+
+Matched messages are exhausted limits only: `usage limit reached`, `5-hour limit reached`,
+`hit your (usage) limit`, `quota exceeded`, `insufficient_quota`, `rate limit exceeded`,
+`out of credits`, and Codex's `last status: 429` after its own retries. A warning such as
+`approaching usage limit` and a context-window limit are not.
+
+On a match the router closes that pane, records the model as skipped on the lane (descriptor,
+reason, pane, and the attempt it received), and starts the next entry in a new pane with the
+same prompt. A fallback whose CLI is missing or lacks a required flag is skipped the same way.
+The task keeps its id and, for a writer, its worktree; `task revise` goes to the model that
+took over. `task status` lists every skipped model.
+
+The router does not fall back when:
+
+- the closed pane's close is not confirmed (the old CLI may still run; the lane fails and the
+  worktree stays held),
+- the prompt's delivery is `unknown` (record it with `task recover` first),
+- the task belongs to a coordinator workflow, which binds its writer once.
+
+When the order runs out, the lane fails with every skipped model and its reason. No API key
+or unlisted model is tried. A writer whose every model hit its limit has no CLI left running,
+so its worktree is released with that evidence.
+
+## Accounts
+
+The router picks the model first, from the rules, then the account (provider CLI) that runs
+it. `packages/router/config/model-accounts.json` lists the same model on different accounts
+with each CLI's exact id, copied from that CLI's own model list:
+
+| Model                       | Accounts                                                              |
+| --------------------------- | --------------------------------------------------------------------- |
+| Claude Opus 5.5, Sonnet 5.5 | `claude:<model>@<effort>` or `cursor:<model>-<effort>`                |
+| Grok 4.7                    | `grok:grok-4.7@<effort>` or `cursor:grok-4.7-<effort>` (low to xhigh) |
+| GPT models (Sol, Astra)     | `codex` only                                                          |
+| anything else               | only the account the rules file names                                 |
+
+Remaining quota per account comes from the usage collector (see
+[Configuration](configuration.md#usage-numbers)). Among the accounts that can run a lane's
+model and that the project policy allows, the one with the most remaining quota wins. An
+account with no reading ranks below every account with one. Without a usage file, the lane
+runs where the rules file puts it. `plan` notes the account, every candidate's quota, and the
+snapshot time. A role with a policy pin keeps its pinned descriptors.
+
+Directives in the rules file change the choice for writers:
+
+| Directive                         | Effect                                                                                                                                                                                  |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `# hmr: first-version <account>`  | A writer's first version (`--phase first`, the default) runs on this account while it has at least 20% left, or no reading. Below 20%, the account with the most remaining quota wins.  |
+| `# hmr: fix-accounts <a>[, <b>]`  | `--phase fix` (a fix after review) runs on whichever of these has more quota, with the first model in the role's order (line, then fallbacks) that account can run.                     |
+| `# hmr: review-only <account>[,]` | This account never runs a writer lane. A writer role whose model only it runs is refused (`review-only-account`); fallback entries on it are skipped. Read-only roles may still use it. |
+
+For a single lane, the fallback order becomes: in a fix, the other fix accounts; then the same
+model on its other accounts, by remaining quota; then each `# fallback:` model, on its accounts
+by remaining quota. A fix falls back only to fix accounts. An older router reports these
+directives as unknown, so update every router that reads the file.
+
+`--phase fix` starts a new writer task on the fix account. `task revise` still goes to the
+same session, model, and account.
+
 ## Read-only roles
 
 `design consultant` and `review gate` are always read-only: they launch with each CLI's
@@ -448,4 +526,5 @@ role in `writerRoles` refuses the plan (`readonly-writer-conflict`).
 metadata only: id, display name, agent CLI name, supported efforts, capabilities, cost tier and
 fallback eligibility. It holds no launch commands or flags. To add a coding agent, add a registry
 entry and a launch adapter in `packages/router/src/rules/native-argv.ts`. A registered provider
-without an adapter fails closed at launch. Auto-failover is not implemented yet.
+without an adapter fails closed at launch. Failover follows only a role's own `# fallback:`
+order, after a quota or usage-limit error (see [Fallback on quota](#fallback-on-quota)).

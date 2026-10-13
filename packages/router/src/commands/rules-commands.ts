@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
+import { assignAccounts, type Phase } from "../rules/accounts.js";
 import { parseRules, type RuleSet } from "../rules/mdc-parser.js";
+import { readUsage } from "../rules/usage-snapshot.js";
 import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
 import {
   planRoute,
@@ -33,6 +35,8 @@ export interface RulesLocation {
   home: string;
   /** --rules */
   rulesFlag?: string;
+  /** The usage collector's usage.json (see usage-snapshot.ts); unset reads no quota numbers. */
+  usageFile?: string;
 }
 
 export interface LoadedRules {
@@ -140,6 +144,8 @@ export interface PlanRequest {
   readOnly?: boolean;
   /** The per-run opt-in to the CLI's full permission bypass (`run` only). */
   bypassPermissions?: boolean;
+  /** A writer's first version (default) or its fix after review; picks the account. */
+  phase?: Phase;
 }
 
 /** The pure route preview behind `plan` and `run --dry-run` in rules mode. */
@@ -176,7 +182,15 @@ export function previewPlan(
     ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   if (!plan.ok) return { ok: false, result: refusal(plan) };
-  return { ok: true, plan, loaded: loaded.loaded };
+  // The model is chosen; now the account that runs it. Reads the usage file only.
+  const placed = assignAccounts(plan, {
+    ...(loaded.loaded.rules.accounts ? { accounts: loaded.loaded.rules.accounts } : {}),
+    phase: request.phase ?? "first",
+    usage: location.usageFile ? readUsage(location.usageFile) : undefined,
+    ...(loaded.loaded.policy ? { policy: loaded.loaded.policy } : {}),
+  });
+  if (!placed.ok) return { ok: false, result: refusal(placed) };
+  return { ok: true, plan: placed, loaded: loaded.loaded };
 }
 
 export function refusal(plan: PlanRefusal): CommandResult {

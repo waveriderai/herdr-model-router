@@ -55,3 +55,36 @@ README. When `false`, phases always open a new pane and `router effort` reports 
 `MODEL_ROUTER_COORDINATOR_URL` overrides the file URL.
 Coordinator URLs must use HTTPS; HTTP is accepted only for `localhost`, `127.0.0.1`, or
 `[::1]` during local development.
+
+## Usage numbers
+
+Rules mode chooses the account for a lane's model by remaining quota (see
+[Accounts](rules.md#accounts)). It reads the usage collector's snapshot (AGENT-197,
+`tools/usage-collector/collect.py`), which runs every 5 minutes and writes
+`~/hmr-usage/usage.json`. Set `HMR_USAGE_FILE` to read another path.
+
+```json
+{
+  "updated": "2026-10-13T08:25:20+00:00",
+  "ok": true,
+  "rows": [
+    { "provider": "claude", "window": "Weekly", "used_pct": 23, "resets_at": "...", "error": null },
+    { "provider": "cursor", "window": "Total", "used_pct": 0, "resets_at": "...", "error": null },
+    { "provider": "grok", "window": null, "used_pct": null, "error": "TimeoutExpired: 120s" }
+  ]
+}
+```
+
+- `provider` is the account: the provider id from the rules (`claude`, `cursor`, `grok`,
+  `codex`).
+- An account's remaining quota is `100 - used_pct` of its most-used window.
+- A row with `error` and no `used_pct` gives that account no reading. An account with no
+  reading ranks below every account with one.
+- A file older than 30 minutes, or one that does not parse, is not used. `plan` says why.
+  Without numbers, each lane runs on the account the rules file names.
+- The router reads this file only, also for `plan` and `--dry-run`. It runs no collector and
+  reads no credential.
+
+An account is **low** below 20% remaining (the collector alerts at 80% used). A
+`first-version` account that is low gives the first version to the account with the most
+remaining quota. No account is assumed low or high without a reading.

@@ -1,4 +1,5 @@
 import { isHerdrEnv } from "../launch/readiness.js";
+import type { Phase } from "../rules/accounts.js";
 import type { Provider } from "../rules/descriptor.js";
 import { dispatchPlan, type DispatchDeps, type LaneOutcome } from "../rules/dispatch.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
@@ -23,6 +24,8 @@ export interface RulesRunRequest {
   readOnly?: boolean;
   /** The explicit per-run opt-in to each CLI's full permission bypass. */
   bypassPermissions?: boolean;
+  /** A writer's first version (default) or its fix after review; picks the account. */
+  phase?: Phase;
   dryRun: boolean;
 }
 
@@ -83,6 +86,7 @@ export async function executeRulesRun(
     ...(request.parent !== undefined ? { parent: request.parent } : {}),
     ...(request.readOnly ? { readOnly: true } : {}),
     ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
+    ...(request.phase ? { phase: request.phase } : {}),
   });
   if (!preview.ok) return preview.result;
   const plan = { ...preview.plan, notes: [...preview.plan.notes, ...notes] };

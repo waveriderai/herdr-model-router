@@ -20,6 +20,7 @@ import { WorkflowRepository } from "../store/workflow-repository.js";
 import { CoordinatorRepository } from "../store/coordinator-repository.js";
 import { userHome } from "./rules-commands.js";
 import type { RulesRunDeps } from "./rules-run.js";
+import { defaultUsagePath } from "../rules/usage-snapshot.js";
 import { previewPlan } from "./rules-commands.js";
 import {
   createAgentCollab,
@@ -116,6 +117,7 @@ export function createRulesRunDeps(
   return {
     cwd,
     home: userHome(env),
+    usageFile: defaultUsagePath(env, userHome(env)),
     ...(rulesFlag ? { rulesFlag } : {}),
     env,
     // Semantic mode is the only path that looks for a TypeSafe key, and only when asked.
@@ -148,7 +150,12 @@ export function openWorkflowDeps(
   const dispatch = openDispatchDeps(env, overrides);
   const home = loadConfig({ env }).home;
   const collabExecutable = resolveExecutable("agent-collab", env.PATH);
-  const location = { cwd, home: userHome(env), ...(rulesFlag ? { rulesFlag } : {}) };
+  const location = {
+    cwd,
+    home: userHome(env),
+    usageFile: defaultUsagePath(env, userHome(env)),
+    ...(rulesFlag ? { rulesFlag } : {}),
+  };
   return {
     workflows: dispatch.workflows,
     coordinators: dispatch.coordinators,
