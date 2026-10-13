@@ -159,7 +159,17 @@ describe("offline rules preview (AE1, AE2)", () => {
         ok: true,
         index: 1,
         kind: "codex",
-        argv: ["codex", "--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'],
+        argv: [
+          "codex",
+          "--model",
+          "gpt-6.1-sol",
+          "-c",
+          'model_reasoning_effort="high"',
+          "--sandbox",
+          "workspace-write",
+          "--ask-for-approval",
+          "on-request",
+        ],
       },
     ]);
     expect(result.out).not.toContain("ts-ambient-key");
@@ -183,9 +193,9 @@ describe("offline rules preview (AE1, AE2)", () => {
       "Lane 3: claude:claude-opus-5-5@high [rule]",
     ]);
     expect(result.out.match(/^ {2}argv: .*$/gm)).toEqual([
-      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan",
-      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only',
-      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan",
+      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
+      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --search',
+      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
     ]);
     expect(result.out).toContain(
       "Preview only: no model, pane, network, credential, or router state was touched.",
@@ -246,7 +256,7 @@ describe("offline rules preview (AE1, AE2)", () => {
       "note: skipped inherit-parent (claude:claude-opus-5-5@max): that model is already in this panel",
     );
     expect(result.out).toContain(
-      "  argv: grok --model grok-4.7 --reasoning-effort xhigh --permission-mode plan",
+      "  argv: grok --model grok-4.7 --reasoning-effort xhigh --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write",
     );
     expect(result.out).toContain(
       "  note: legacy Cursor selector grok-4.7-xhigh-fast mapped to native grok:grok-4.7@xhigh; Cursor's fast variant has no native grok equivalent",
@@ -326,6 +336,83 @@ describe("offline rules preview (AE1, AE2)", () => {
       cwd: box.project,
     });
     expect(out.join("")).toMatch(/^Usage: hmr /);
+  });
+});
+
+describe("per-role permission defaults (AGENT-198)", () => {
+  it("previews a writer with edits in its worktree and the sandbox on, never a bypass", async () => {
+    const box = sandbox();
+    const result = await cli(box, ["run", "Fix it", "--role", "explorer", "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("access: writer; permissions: writer");
+    expect(result.out).toContain(
+      "  argv: grok --model grok-4.7 --reasoning-effort medium --sandbox workspace --allow Edit(./**)",
+    );
+    expect(result.out).not.toContain("--always-approve");
+    expectNoEffects(box, result);
+  });
+
+  it("passes the full bypass only with the explicit per-run opt-in, and says so", async () => {
+    const box = sandbox();
+    const result = await cli(box, [
+      "run",
+      "Fix it",
+      "--role",
+      "bug-fix",
+      "--dangerously-bypass-permissions",
+      "--dry-run",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out);
+    expect(json).toMatchObject({ access: "write", permissions: "bypass" });
+    expect(json.launches[0].argv).toEqual([
+      "claude",
+      "--model",
+      "claude-opus-5-5",
+      "--effort",
+      "xhigh",
+      "--dangerously-skip-permissions",
+    ]);
+    expect(json.notes).toContain(
+      "permission bypass opted in for this run: the CLI skips its approvals and sandbox",
+    );
+    expectNoEffects(box, result);
+  });
+
+  it("refuses the opt-in for a read-only run instead of loosening it", async () => {
+    const box = sandbox();
+    for (const args of [
+      ["--role", "reviewers"],
+      ["--role", "bug-fix", "--read-only"],
+    ]) {
+      const result = await cli(box, [
+        "run",
+        "Review it",
+        ...args,
+        "--dangerously-bypass-permissions",
+        "--dry-run",
+      ]);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain("Refused (bypass-read-only)");
+      expectNoEffects(box, result);
+    }
+  });
+
+  it("keeps the opt-in out of quota mode", async () => {
+    const box = sandbox();
+    const result = await cli(box, [
+      "run",
+      "Do it",
+      "--routing-mode",
+      "quota",
+      "--dangerously-bypass-permissions",
+      "--dry-run",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain(
+      "--dangerously-bypass-permissions apply to rules and semantic modes",
+    );
   });
 });
 

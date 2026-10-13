@@ -1,16 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { BYPASS_FLAGS, missingCapabilities, nativeLaunch } from "../../src/rules/native-argv.js";
+import {
+  BYPASS_FLAGS,
+  missingCapabilities,
+  nativeLaunch,
+  permissionProfile,
+  type PermissionProfile,
+} from "../../src/rules/native-argv.js";
 
 function argv(
   provider: Parameters<typeof nativeLaunch>[0]["provider"],
   model: string,
   effort: Parameters<typeof nativeLaunch>[0]["effort"],
-  access: "read" | "write",
+  profile: PermissionProfile,
 ) {
-  const built = nativeLaunch({ provider, model, effort }, access);
+  const built = nativeLaunch({ provider, model, effort }, profile);
   if (!built.ok) throw new Error(built.error);
   return built.launch;
 }
+
+const CLAUDE_READ = [
+  "--permission-mode",
+  "plan",
+  "--allowedTools",
+  "Read,Grep,Glob,WebFetch,WebSearch",
+];
+/** Written out, not imported: a missing key in the source must fail this test. */
+const CLAUDE_WRITER_SETTINGS_JSON =
+  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}';
+const GROK_READ = [
+  "--sandbox",
+  "read-only",
+  "--allow",
+  "Read",
+  "--allow",
+  "Grep",
+  "--allow",
+  "WebFetch",
+  "--allow",
+  "WebSearch",
+  "--deny",
+  "Edit",
+  "--deny",
+  "Write",
+];
 
 describe("native argv", () => {
   it.each([
@@ -18,31 +50,51 @@ describe("native argv", () => {
       "claude",
       "claude-opus-5-5",
       "xhigh",
-      "write",
+      "writer",
       "claude",
-      ["claude", "--model", "claude-opus-5-5", "--effort", "xhigh"],
+      [
+        "claude",
+        "--model",
+        "claude-opus-5-5",
+        "--effort",
+        "xhigh",
+        "--permission-mode",
+        "acceptEdits",
+        "--settings",
+        CLAUDE_WRITER_SETTINGS_JSON,
+      ],
     ],
     [
       "claude",
       "claude-opus-5-5",
       "high",
-      "read",
+      "read-only",
       "claude",
-      ["claude", "--model", "claude-opus-5-5", "--effort", "high", "--permission-mode", "plan"],
+      ["claude", "--model", "claude-opus-5-5", "--effort", "high", ...CLAUDE_READ],
     ],
     [
       "codex",
       "gpt-6.1-sol",
       "high",
-      "write",
+      "writer",
       "codex",
-      ["codex", "--model", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'],
+      [
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "-c",
+        'model_reasoning_effort="high"',
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "on-request",
+      ],
     ],
     [
       "codex",
       "gpt-6.1-sol",
       "xhigh",
-      "read",
+      "read-only",
       "codex",
       [
         "codex",
@@ -52,30 +104,48 @@ describe("native argv", () => {
         'model_reasoning_effort="xhigh"',
         "--sandbox",
         "read-only",
+        "--search",
       ],
     ],
     [
       "grok",
       "grok-4.7",
       "xhigh",
-      "write",
+      "writer",
       "grok",
-      ["grok", "--model", "grok-4.7", "--reasoning-effort", "xhigh"],
+      [
+        "grok",
+        "--model",
+        "grok-4.7",
+        "--reasoning-effort",
+        "xhigh",
+        "--sandbox",
+        "workspace",
+        "--allow",
+        "Edit(./**)",
+      ],
     ],
     [
       "grok",
       "grok-4.7",
       "medium",
-      "read",
+      "read-only",
       "grok",
-      ["grok", "--model", "grok-4.7", "--reasoning-effort", "medium", "--permission-mode", "plan"],
+      ["grok", "--model", "grok-4.7", "--reasoning-effort", "medium", ...GROK_READ],
     ],
-    ["cursor", "composer-2", null, "write", "cursor", ["cursor-agent", "--model", "composer-2"]],
     [
       "cursor",
       "composer-2",
       null,
-      "read",
+      "writer",
+      "cursor",
+      ["cursor-agent", "--model", "composer-2", "--sandbox", "enabled"],
+    ],
+    [
+      "cursor",
+      "composer-2",
+      null,
+      "read-only",
       "cursor",
       ["cursor-agent", "--model", "composer-2", "--mode", "plan"],
     ],
@@ -83,47 +153,142 @@ describe("native argv", () => {
       "opencode",
       "anthropic/claude-x",
       null,
-      "write",
+      "writer",
       "opencode",
       ["opencode", "--model", "anthropic/claude-x"],
     ],
-  ] as const)("%s %s@%s %s", (provider, model, effort, access, kind, expected) => {
-    const launch = argv(provider, model, effort, access);
+  ] as const)("%s %s@%s %s", (provider, model, effort, profile, kind, expected) => {
+    const launch = argv(provider, model, effort, profile);
     expect(launch.kind).toBe(kind);
     expect(launch.argv).toEqual(expected);
     expect(launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
   });
 
-  it("fails closed for a read-only lane on a CLI without an enforceable read-only mode", () => {
-    expect(nativeLaunch({ provider: "opencode", model: "x/y", effort: null }, "read")).toEqual({
-      ok: false,
-      error:
-        "opencode has no read-only mode the router can enforce; a read-only lane cannot run on it",
+  it("makes a writer Claude exit, not run unsandboxed, when its sandbox cannot start", () => {
+    const launch = argv("claude", "m", "high", "writer");
+    const settings = launch.argv[launch.argv.indexOf("--settings") + 1];
+    expect(JSON.parse(settings ?? "")).toEqual({
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        autoAllowBashIfSandboxed: false,
+        allowUnsandboxedCommands: false,
+      },
     });
   });
 
-  it("lists the flags each argv needs from the installed CLI's help", () => {
-    expect(argv("claude", "m", "high", "read").requiredHelp).toEqual([
+  it("gives a read-only Grok lane enforced rules, never the plan mode Grok ignores", () => {
+    const launch = argv("grok", "grok-4.7", "high", "read-only");
+    expect(launch.argv).not.toContain("--permission-mode");
+    expect(launch.argv).not.toContain("plan");
+    expect(launch.requiredHelp).toEqual([
       "--model",
-      "--effort",
-      "--permission-mode",
-      "plan",
-    ]);
-    expect(argv("codex", "m", "high", "read").requiredHelp).toEqual([
-      "--model",
-      "-c",
+      "--reasoning-effort",
       "--sandbox",
-      "read-only",
+      "--allow",
+      "--deny",
     ]);
   });
 
-  it("matches flags as whole words in help text", () => {
-    const help = `Options:\n  -m, --model <MODEL>\n  --permission-mode <mode>  (choices: "acceptEdits", "plan")\n  -c, --config <key=value>`;
-    expect(missingCapabilities(help, ["--model", "--permission-mode", "plan", "-c"])).toEqual([]);
-    expect(missingCapabilities(help, ["--effort", "--mode", "read-only"])).toEqual([
+  it("launches a coordinator with the CLI's ordinary permissions only", () => {
+    expect(argv("claude", "m", "high", "control").argv).toEqual([
+      "claude",
+      "--model",
+      "m",
+      "--effort",
+      "high",
+    ]);
+    expect(argv("codex", "m", null, "control").argv).toEqual(["codex", "--model", "m"]);
+    expect(argv("grok", "m", null, "control").argv).toEqual(["grok", "--model", "m"]);
+    expect(argv("cursor", "m", null, "control").argv).toEqual(["cursor-agent", "--model", "m"]);
+  });
+
+  it.each([
+    ["claude", "--dangerously-skip-permissions"],
+    ["codex", "--dangerously-bypass-approvals-and-sandbox"],
+    ["grok", "--always-approve"],
+    ["cursor", "--force"],
+  ] as const)("passes %s's full bypass only for the bypass profile", (provider, flag) => {
+    const bypass = argv(provider, "m", null, "bypass");
+    expect(bypass.argv.filter((arg) => BYPASS_FLAGS.includes(arg))).toEqual([flag]);
+    expect(bypass.requiredHelp).toContain(flag);
+    // The bypass replaces the writer's own permission flags instead of mixing with them.
+    expect(bypass.argv).not.toContain("--sandbox");
+    expect(bypass.argv).not.toContain("--permission-mode");
+    for (const profile of ["read-only", "writer", "control"] as const) {
+      const launch = nativeLaunch({ provider, model: "m", effort: null }, profile);
+      if (launch.ok)
+        expect(launch.launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
+    }
+  });
+
+  it("fails closed for a read-only lane on a CLI without an enforceable read-only mode", () => {
+    expect(nativeLaunch({ provider: "opencode", model: "x/y", effort: null }, "read-only")).toEqual(
+      {
+        ok: false,
+        error:
+          "opencode has no read-only mode the router can enforce; a read-only lane cannot run on it",
+      },
+    );
+  });
+
+  it("refuses a bypass on a CLI without a known bypass flag", () => {
+    expect(nativeLaunch({ provider: "opencode", model: "x/y", effort: null }, "bypass")).toEqual({
+      ok: false,
+      error: "opencode has no permission-bypass flag the router knows; it was not launched",
+    });
+  });
+
+  it("derives the profile from a plan's access and override", () => {
+    expect(permissionProfile({ access: "read" })).toBe("read-only");
+    expect(permissionProfile({ access: "read", permissions: "bypass" })).toBe("read-only");
+    expect(permissionProfile({ access: "write" })).toBe("writer");
+    expect(permissionProfile({ access: "write", permissions: "control" })).toBe("control");
+    expect(permissionProfile({ access: "write", permissions: "bypass" })).toBe("bypass");
+  });
+
+  it("lists the flags and values each argv needs from the installed CLI's help", () => {
+    expect(argv("claude", "m", "high", "read-only").requiredHelp).toEqual([
+      "--model",
+      "--effort",
+      "--permission-mode",
+      "--allowedTools",
+      "plan",
+    ]);
+    expect(argv("claude", "m", "high", "writer").requiredHelp).toEqual([
+      "--model",
+      "--effort",
+      "--permission-mode",
+      "--settings",
+      "acceptEdits",
+    ]);
+    expect(argv("codex", "m", "high", "read-only").requiredHelp).toEqual([
+      "--model",
+      "-c",
+      "--sandbox",
+      "--search",
+      "read-only",
+    ]);
+    expect(argv("codex", "m", "high", "writer").requiredHelp).toEqual([
+      "--model",
+      "-c",
+      "--sandbox",
+      "--ask-for-approval",
+      "workspace-write",
+      "on-request",
+    ]);
+  });
+
+  it("matches flags and values as whole words in help text", () => {
+    const help = `Options:\n  -m, --model <MODEL>\n  --permission-mode <mode>  (choices: "acceptEdits", "plan")\n  -c, --config <key=value>\n  - on-request: The model decides`;
+    expect(
+      missingCapabilities(help, ["--model", "--permission-mode", "plan", "-c", "on-request"]),
+    ).toEqual([]);
+    expect(missingCapabilities(help, ["--effort", "--mode", "read-only", "request"])).toEqual([
       "--effort",
       "--mode",
       "read-only",
+      "request",
     ]);
   });
 });

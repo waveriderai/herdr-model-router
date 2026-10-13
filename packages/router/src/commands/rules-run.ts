@@ -21,6 +21,8 @@ export interface RulesRunRequest {
   role?: string;
   parent?: string;
   readOnly?: boolean;
+  /** The explicit per-run opt-in to each CLI's full permission bypass. */
+  bypassPermissions?: boolean;
   dryRun: boolean;
 }
 
@@ -80,6 +82,7 @@ export async function executeRulesRun(
     ...(role ? { role } : {}),
     ...(request.parent !== undefined ? { parent: request.parent } : {}),
     ...(request.readOnly ? { readOnly: true } : {}),
+    ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   if (!preview.ok) return preview.result;
   const plan = { ...preview.plan, notes: [...preview.plan.notes, ...notes] };

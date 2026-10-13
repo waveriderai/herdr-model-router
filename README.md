@@ -135,9 +135,22 @@ hmr task complete <task-id> --evidence "tests pass at <commit>"
 `run` needs `HERDR_ENV=1` (a Herdr pane). Before creating anything it finds each CLI on your
 `PATH` as an absolute path (Cursor is always `cursor-agent`, never a bare `agent`) and checks
 that file's own `--help` for the flags it is about to pass, and stops if one is missing.
-Read-only lanes use each CLI's enforced read-only mode: `claude --permission-mode plan`,
-`codex --sandbox read-only`, `grok --permission-mode plan`, Cursor `--mode plan`. The router
-never passes a bypass or auto-approve flag.
+Each lane gets the permission defaults of its role
+([details](docs/rules.md#permission-defaults)):
+
+- **Read-only lanes** auto-approve file reads and web fetches only, and cannot edit:
+  `claude --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`,
+  `codex --sandbox read-only --search`,
+  `grok --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write`,
+  Cursor `--mode plan`.
+- **Writers** auto-approve edits inside their own working directory (the worktree), with the
+  CLI's sandbox on: `claude --permission-mode acceptEdits` with Bash sandboxed (a writer
+  Claude that cannot start its sandbox exits instead of running unsandboxed),
+  `codex --sandbox workspace-write --ask-for-approval on-request`,
+  `grok --sandbox workspace --allow 'Edit(./**)'`, Cursor `--sandbox enabled`.
+- **Full bypass** (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
+  `--always-approve`, Cursor `--force`) is never a default. Only
+  `hmr run ... --dangerously-bypass-permissions` passes it, for that one writer run.
 
 Each lane starts in a new pane: the router types one fixed command into the pane's shell, which
 `exec`s the absolute CLI through `/usr/bin/env -i` with a short variable allowlist. Whatever your

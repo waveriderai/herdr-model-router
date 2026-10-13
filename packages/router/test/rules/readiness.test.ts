@@ -81,4 +81,19 @@ describe("screen readiness", () => {
       reason: "the router has no verified ready-prompt evidence for opencode",
     });
   });
+
+  it("reads Claude's bypass footer as a mode, but its startup warning as a dialog", () => {
+    const ready = screen("claude-ready");
+    const bypassOn = ready.replace("⏸ plan mode on", "⏵⏵ bypass permissions on");
+    expect(screenVerdict("claude", extractPaneText(bypassOn))).toEqual({ state: "ready" });
+    const warning = [
+      "WARNING: Claude Code running in Bypass Permissions mode",
+      "❯ 1. No, exit",
+      "  2. Yes, I accept",
+    ].join("\n");
+    expect(screenVerdict("claude", extractPaneText(warning))).toMatchObject({
+      state: "dialog",
+      dialog: "permission or confirmation",
+    });
+  });
 });

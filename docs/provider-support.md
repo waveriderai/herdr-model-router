@@ -6,13 +6,18 @@ Rules mode builds each lane's argv from the descriptor and checks it against the
 CLI's `--help` before every launch. Versions checked locally for this release (help text only;
 no live launch):
 
-| Provider   | CLI checked                                     | argv (writer / read-only extra)                                                |
-| ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------ |
-| `claude`   | Claude Code 2.1.295                             | `claude --model <id> [--effort <e>]` / `--permission-mode plan`                |
-| `codex`    | codex-cli 0.161.0                               | `codex --model <id> [-c model_reasoning_effort="<e>"]` / `--sandbox read-only` |
-| `grok`     | grok 1.0.50 (native xAI CLI, Herdr kind `grok`) | `grok --model <id> [--reasoning-effort <e>]` / `--permission-mode plan`        |
-| `cursor`   | Cursor Agent 2026.10.01 (`cursor-agent`)        | `cursor-agent --model <id>` / `--mode plan`                                    |
-| `opencode` | not installed here                              | `opencode --model <provider/model>`; read-only lanes refused                   |
+| Provider   | CLI checked                                     | argv (before the permission flags)                     |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------ |
+| `claude`   | Claude Code 2.1.295                             | `claude --model <id> [--effort <e>]`                   |
+| `codex`    | codex-cli 0.161.0                               | `codex --model <id> [-c model_reasoning_effort="<e>"]` |
+| `grok`     | grok 1.0.50 (native xAI CLI, Herdr kind `grok`) | `grok --model <id> [--reasoning-effort <e>]`           |
+| `cursor`   | Cursor Agent 2026.10.01 (`cursor-agent`)        | `cursor-agent --model <id>`                            |
+| `opencode` | not installed here                              | `opencode --model <provider/model>`                    |
+
+The permission flags each lane adds for its role are listed in
+[Permission defaults](rules.md#permission-defaults). Every read-only, writer and bypass flag
+and value was checked against the installed `--help` of `claude`, `codex`, `grok` and
+`cursor-agent` on this machine; no lane was launched with them.
 
 The router starts the absolute executable it resolved on `PATH` inside the new pane (through
 `env -i`, see [Rules mode](rules.md#launch)), requires Herdr to detect the matching agent kind,

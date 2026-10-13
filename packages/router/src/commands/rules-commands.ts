@@ -3,7 +3,7 @@ import os from "node:os";
 import { parseRules, type RuleSet } from "../rules/mdc-parser.js";
 import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
 import { planRoute, roleNames, type PlanRefusal, type RoutePlan } from "../rules/plan.js";
-import { nativeLaunch } from "../rules/native-argv.js";
+import { nativeLaunch, permissionProfile } from "../rules/native-argv.js";
 import {
   findProjectRoot,
   locateRules,
@@ -112,6 +112,8 @@ export interface PlanRequest {
   role?: string;
   parent?: string;
   readOnly?: boolean;
+  /** The per-run opt-in to the CLI's full permission bypass (`run` only). */
+  bypassPermissions?: boolean;
 }
 
 /** The pure route preview behind `plan` and `run --dry-run` in rules mode. */
@@ -145,6 +147,7 @@ export function previewPlan(
         }
       : {}),
     ...(request.readOnly ? { readOnly: true } : {}),
+    ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   if (!plan.ok) return { ok: false, result: refusal(plan) };
   return { ok: true, plan, loaded: loaded.loaded };
@@ -163,7 +166,7 @@ export function refusal(plan: PlanRefusal): CommandResult {
 /** Each lane's exact native argv, or why it cannot run. */
 export function laneLaunches(plan: RoutePlan) {
   return plan.lanes.map((lane) => {
-    const launch = nativeLaunch(lane, plan.access);
+    const launch = nativeLaunch(lane, permissionProfile(plan));
     return launch.ok
       ? { ok: true as const, index: lane.index, kind: launch.launch.kind, argv: launch.launch.argv }
       : { ok: false as const, index: lane.index, error: launch.error };
@@ -174,7 +177,7 @@ export function formatPlan(plan: RoutePlan, footer: string): string {
   const launches = laneLaunches(plan);
   return [
     `Role: ${plan.role}${plan.roleNames.length > 1 ? ` (names: ${plan.roleNames.join(", ")})` : ""}`,
-    `Kind: ${plan.kind === "panel" ? `panel, ${plan.lanes.length} lanes, every lane runs` : "single lane"}; access: ${plan.access === "read" ? "read-only" : "writer"}`,
+    `Kind: ${plan.kind === "panel" ? `panel, ${plan.lanes.length} lanes, every lane runs` : "single lane"}; access: ${plan.access === "read" ? "read-only" : "writer"}; permissions: ${permissionProfile(plan)}`,
     `Rules: ${plan.rulesSource.path} (${plan.rulesSource.origin})`,
     `Policy: ${plan.policySource ?? "none"}`,
     `Working directory: ${plan.cwd}`,
