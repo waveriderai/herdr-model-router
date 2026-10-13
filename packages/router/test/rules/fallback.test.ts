@@ -267,6 +267,29 @@ describe("quota detection", () => {
         cursor,
       ),
     ).toBe("hit your limit");
+    expect(detectQuota(cursorTurn("  You've hit your usage limit for this cycle."), cursor)).toBe(
+      "hit your limit",
+    );
+    expect(
+      detectQuota(
+        grokTurn("You've hit your usage limit. Upgrade to Pro, or try again in 4 days 12 hours."),
+        grok,
+      ),
+    ).toBe("hit your limit");
+    // Advice is read whole: anything after it is the model's text.
+    for (const [turn, opts] of [
+      [cursorTurn, cursor],
+      [grokTurn, grok],
+    ] as const) {
+      for (const summary of [
+        "Rate limit exceeded. Try again later is now shown with a countdown.",
+        "Rate limit exceeded. Retry later now works.",
+        "Rate limit exceeded. Try again in 3 retries is the new policy.",
+        "You've hit your usage limit for everyone is handled.",
+      ]) {
+        expect(detectQuota(turn(summary), opts)).toBeUndefined();
+      }
+    }
     // The review gate's case: a normal one-line summary that starts with the phrase.
     expect(detectQuota(grokTurn("Rate limit exceeded is now retried."), grok)).toBeUndefined();
     expect(
@@ -404,17 +427,26 @@ const CURSOR_RULES = `${RULES}first version: cursor:claude-opus-5-5-high
 # fallback: claude:claude-opus-5-5@high
 `;
 
+/** A grok fix that falls back to Claude Code. */
+const GROK_RULES = `${RULES}fix: grok:grok-4.7@high
+# fallback: claude:claude-opus-5-5@high
+`;
+
 /**
  * After a prompt to a pane whose CLI is in `limited`, that CLI ends its turn on its own
  * quota message; the pane echoes the prompt above it, as a real pane does.
  */
-function quotaAfterPrompt(herdr: () => FakeHerdr, limited: string[]) {
+function quotaAfterPrompt(
+  herdr: () => FakeHerdr,
+  limited: string[],
+  messages: Record<string, string> = QUOTA,
+) {
   return (target: string) => {
     const pane = [...herdr().panes.values()].find((entry) => entry.name === target);
     if (pane?.kind && limited.includes(pane.kind)) {
       const sent = herdr().prompts.at(-1)!.text;
       // The screen it showed before the prompt scrolls up above the echo.
-      pane.history = `${pane.history ?? ""}${pane.screen ?? ""}> ${sent}\n\n${QUOTA[pane.kind as keyof typeof QUOTA]}`;
+      pane.history = `${pane.history ?? ""}${pane.screen ?? ""}> ${sent}\n\n${messages[pane.kind]}`;
       if (pane.kind === "cursor") pane.screen = CURSOR_COMPOSER;
       pane.status = "idle";
     }
@@ -702,11 +734,8 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
   it("hands a grok writer that hit its limit after the prompt to the next model", async () => {
     const herdr: FakeHerdr = fakeHerdr({ prompt: quotaAfterPrompt(() => herdr, ["grok"]) });
     const { deps: d } = deps(herdr);
-    const grokRules = `${RULES}fix: grok:grok-4.7@high
-# fallback: claude:claude-opus-5-5@high
-`;
     const result = await dispatchPlan({
-      plan: plan("fix", { rules: rules(grokRules) }),
+      plan: plan("fix", { rules: rules(GROK_RULES) }),
       prompt: "Address the review",
       worktreeId: "/work/project",
       deps: d,
@@ -763,32 +792,72 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
     expect(herdr.calls.filter((call) => call[1] === "close")).toEqual([]);
   });
 
-  it("keeps a Cursor writer whose whole turn is a one-line summary starting with the phrase", async () => {
+  it.each([
+    ["cursor", "Rate limit exceeded is now retried."],
+    ["cursor", "Rate limit exceeded. Try again later is now shown with a countdown."],
+    ["grok", "Rate limit exceeded is now retried."],
+    ["grok", "Rate limit exceeded. Try again later is now shown with a countdown."],
+  ])("keeps a %s writer whose whole turn is the summary %j", async (kind, summary) => {
     const herdr: FakeHerdr = fakeHerdr({
       prompt: (target) => {
         const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
         const sent = herdr.prompts.at(-1)!.text;
-        pane.history = `${pane.screen}> ${sent}\n\n  Rate limit exceeded is now retried.\n\n`;
-        pane.screen = CURSOR_COMPOSER;
+        pane.history = `${pane.screen}> ${sent}\n\n  ${summary}\n\n`;
+        if (kind === "cursor") pane.screen = CURSOR_COMPOSER;
         pane.status = "idle";
         return undefined;
       },
     });
     const { deps: d } = deps(herdr);
+    const role = kind === "cursor" ? "first version" : "fix";
     const result = await dispatchPlan({
-      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      plan: plan(role, { rules: rules(kind === "cursor" ? CURSOR_RULES : GROK_RULES) }),
       prompt: "Retry provider errors.",
       worktreeId: "/work/project",
       deps: d,
     });
     expect(result.ok && result.lanes[0]).toMatchObject({
-      descriptor: "cursor:claude-opus-5-5-high",
+      descriptor: kind === "cursor" ? "cursor:claude-opus-5-5-high" : "grok:grok-4.7@high",
       state: "prompted",
       paneId: "w1:p1",
     });
     expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
+    // The prompt went out once, and the finished writer's pane was not closed.
     expect(herdr.prompts).toHaveLength(1);
     expect(herdr.calls.filter((call) => call[1] === "close")).toEqual([]);
+  });
+
+  it("hands a Cursor writer that hit its limit for this cycle after the prompt to the next model", async () => {
+    // The message from the account-choice fixture, now after the prompt.
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: quotaAfterPrompt(() => herdr, ["cursor"], {
+        cursor: "  You've hit your usage limit for this cycle.\n",
+      }),
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      prompt: "Write the first version",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.lanes[0]).toMatchObject({
+      descriptor: "claude:claude-opus-5-5@high",
+      state: "prompted",
+      paneId: "w1:p2",
+      skipped: [
+        {
+          descriptor: "cursor:claude-opus-5-5-high",
+          reason: 'cursor reported a quota or usage-limit error ("hit your limit")',
+        },
+      ],
+    });
+    expect(herdr.calls.filter((call) => call[1] === "close").map((call) => call[2])).toEqual([
+      "w1:p1",
+    ]);
+    expect(herdr.prompts).toHaveLength(2);
+    expect(herdr.prompts[0]!.text).toBe(herdr.prompts[1]!.text);
   });
 
   it("keeps a writer whose real echo scrolled off while its summary quotes the prompt", async () => {
