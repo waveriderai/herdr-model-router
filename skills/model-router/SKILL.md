@@ -38,6 +38,8 @@ router usage refresh --source browser --dry-run
 
 A rules-mode panel role launches every lane, read-only. A writer task owns its worktree until `router task complete <id> --evidence "..."`; send changes with `router task revise`, never a new `run`. An idle pane is not completion. If a prompt attempt is `unknown`, do not resend: show the user `router task status <id>`.
 
+Never add `--dangerously-bypass-permissions` on your own. It passes the CLI's full approval and sandbox bypass for that one writer run; use it only when the user asked for a bypass for this run.
+
 `router run` without `--dry-run` still requires `HERDR_ENV=1` and should wait for user confirmation before any launch that would consume subscription quota.
 
 Quota-mode `router run` reads local-session quota caches. Add `--usage` for official CLI/API and browser collectors. Personal accounts stay eligible without known quota. Shared accounts still need known usage.

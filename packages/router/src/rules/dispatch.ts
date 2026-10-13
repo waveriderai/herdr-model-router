@@ -29,6 +29,7 @@ import {
   missingCapabilities,
   nativeLaunch,
   herdrKindOf,
+  permissionProfile,
   type NativeLaunch,
 } from "./native-argv.js";
 import type { RoutePlan } from "./plan.js";
@@ -113,7 +114,7 @@ export async function preflightLaunches(
   const launches: ResolvedLaunch[] = [];
   const help = new Map<Provider, { executable: string; text: string | undefined }>();
   for (const lane of plan.lanes) {
-    const built = nativeLaunch(lane, plan.access);
+    const built = nativeLaunch(lane, permissionProfile(plan));
     if (!built.ok)
       return { ok: false, code: "launch-unsupported", error: `lane ${lane.index}: ${built.error}` };
     if (!hasReadinessEvidence(built.launch.kind)) {

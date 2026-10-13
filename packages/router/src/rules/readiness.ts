@@ -142,7 +142,8 @@ const DIALOG_RULES: DialogRule[] = [
       "pressentertocontinue",
       "pressanykey",
       "permissionrequired",
-      "bypasspermissions",
+      // Claude's startup warning. Its footer "bypass permissions on" is a mode, not a dialog.
+      "bypasspermissionsmode",
     ],
   },
 ];

@@ -46,7 +46,11 @@ export function executableOf(provider: Provider): string {
   return PROVIDER_EXECUTABLE[provider];
 }
 
-/** Flags that skip approvals or sandboxes. The router never passes any of them. */
+/**
+ * Flags that skip approvals or sandboxes. The router passes one of them only for a lane with
+ * the `bypass` profile, which nothing but the explicit per-run opt-in
+ * (`hmr run --dangerously-bypass-permissions`) sets.
+ */
 export const BYPASS_FLAGS = [
   "--dangerously-skip-permissions",
   "--dangerously-bypass-approvals-and-sandbox",
@@ -59,24 +63,69 @@ export const BYPASS_FLAGS = [
   "--full-auto",
 ];
 
+/**
+ * What a launched CLI may do without asking.
+ * - `read-only`: reads files and fetches from the web without a prompt; never edits.
+ * - `writer`: also edits inside its own working directory (its worktree), with the CLI's
+ *   sandbox on.
+ * - `control`: the CLI's ordinary interactive permissions, for a coordinator.
+ * - `bypass`: the CLI's own full bypass. Only the explicit per-run opt-in sets it.
+ */
+export type PermissionProfile = "read-only" | "writer" | "control" | "bypass";
+
+/** The profile for a plan: its access, unless a coordinator or the per-run opt-in overrides it. */
+export function permissionProfile(plan: {
+  access: Access;
+  permissions?: "control" | "bypass";
+}): PermissionProfile {
+  if (plan.access === "read") return "read-only";
+  return plan.permissions ?? "writer";
+}
+
+/**
+ * Claude Code settings for a writer: Bash runs in Claude's sandbox, is not auto-approved for
+ * being sandboxed, and may not ask to leave the sandbox.
+ */
+export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
+  sandbox: { enabled: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false },
+});
+
+/** Tools a read-only Claude lane may use without a prompt. Plan mode still blocks edits. */
+const CLAUDE_READ_TOOLS = "Read,Grep,Glob,WebFetch,WebSearch";
+
+/**
+ * Grok permission rules. Grok accepts `--permission-mode plan` and ignores it, so read-only
+ * Grok lanes use explicit rules plus Grok's OS sandbox instead. `deny` always wins in Grok.
+ */
+export const GROK_READ_RULES = [
+  ["--allow", "Read"],
+  ["--allow", "Grep"],
+  ["--allow", "WebFetch"],
+  ["--allow", "WebSearch"],
+  ["--deny", "Edit"],
+  ["--deny", "Write"],
+];
+/** `./**` is rooted at the session's working directory in Grok's rule matcher. */
+export const GROK_WRITER_RULES = [["--allow", "Edit(./**)"]];
+
 export interface NativeLaunch {
   kind: HerdrKind;
   /** argv[0] is the executable name (`PROVIDER_EXECUTABLE`); a launch swaps in its absolute path. */
   argv: string[];
-  /** Flags the installed CLI's --help must list before this argv may run. */
+  /** Flags and values the installed CLI's --help must list before this argv may run. */
   requiredHelp: string[];
 }
 
 /**
- * Builds the exact native argv for one lane. Read-only lanes use each CLI's own enforced
- * read-only mode; a provider without one fails closed instead of running unrestricted.
- * Every value is a separate argv element: nothing is ever passed through a shell.
+ * Builds the exact native argv for one lane. Every profile maps to flags the CLI itself
+ * enforces; a provider without an enforceable mode for a profile fails closed instead of
+ * running with less restriction. Every value is a separate argv element: nothing is ever
+ * passed through a shell.
  */
 export function nativeLaunch(
   lane: { provider: Provider; model: string; effort: ReasoningEffort | null },
-  access: Access,
+  profile: PermissionProfile,
 ): { ok: true; launch: NativeLaunch } | { ok: false; error: string } {
-  const read = access === "read";
   const { model, effort } = lane;
   const provider = lane.provider;
   if (!hasAdapter(provider)) {
@@ -85,50 +134,96 @@ export function nativeLaunch(
       error: `provider "${provider}" is in the registry but has no launch adapter in native-argv.ts`,
     };
   }
+  const pick = (byProfile: Record<PermissionProfile, Permission>): Permission => byProfile[profile];
   switch (provider) {
     case "claude":
-      return built("claude", [
-        ["--model", model],
-        effort ? ["--effort", effort] : [],
-        read ? ["--permission-mode", "plan"] : [],
-      ]);
+      return built(
+        "claude",
+        [["--model", model], effort ? ["--effort", effort] : []],
+        pick({
+          "read-only": {
+            args: ["--permission-mode", "plan", "--allowedTools", CLAUDE_READ_TOOLS],
+            values: ["plan"],
+          },
+          writer: {
+            args: ["--permission-mode", "acceptEdits", "--settings", CLAUDE_WRITER_SETTINGS],
+            values: ["acceptEdits"],
+          },
+          control: NONE,
+          bypass: { args: ["--dangerously-skip-permissions"] },
+        }),
+      );
     case "codex":
       // `-c` is always required: a launch also sets the pane's Herdr context with it.
       return built(
         "codex",
-        [
-          ["--model", model],
-          effort ? ["-c", `model_reasoning_effort="${effort}"`] : [],
-          read ? ["--sandbox", "read-only"] : [],
-        ],
+        [["--model", model], effort ? ["-c", `model_reasoning_effort="${effort}"`] : []],
+        pick({
+          "read-only": { args: ["--sandbox", "read-only", "--search"], values: ["read-only"] },
+          writer: {
+            args: ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"],
+            values: ["workspace-write", "on-request"],
+          },
+          control: NONE,
+          bypass: { args: ["--dangerously-bypass-approvals-and-sandbox"] },
+        }),
         ["-c"],
       );
     case "grok":
-      return built("grok", [
-        ["--model", model],
-        effort ? ["--reasoning-effort", effort] : [],
-        read ? ["--permission-mode", "plan"] : [],
-      ]);
+      return built(
+        "grok",
+        [["--model", model], effort ? ["--reasoning-effort", effort] : []],
+        pick({
+          "read-only": { args: ["--sandbox", "read-only", ...GROK_READ_RULES.flat()] },
+          writer: { args: ["--sandbox", "workspace", ...GROK_WRITER_RULES.flat()] },
+          control: NONE,
+          bypass: { args: ["--always-approve"] },
+        }),
+      );
     case "cursor":
-      return built("cursor", [["--model", model], read ? ["--mode", "plan"] : []]);
+      return built(
+        "cursor",
+        [["--model", model]],
+        pick({
+          "read-only": { args: ["--mode", "plan"], values: ["plan"] },
+          writer: { args: ["--sandbox", "enabled"], values: ["enabled"] },
+          control: NONE,
+          bypass: { args: ["--force"] },
+        }),
+      );
     case "opencode":
-      if (read) {
+      if (profile === "read-only") {
         return {
           ok: false,
           error:
             "opencode has no read-only mode the router can enforce; a read-only lane cannot run on it",
         };
       }
-      return built("opencode", [["--model", model]]);
+      if (profile === "bypass") {
+        return {
+          ok: false,
+          error: "opencode has no permission-bypass flag the router knows; it was not launched",
+        };
+      }
+      return built("opencode", [["--model", model]], NONE);
   }
 }
+
+/** A profile's argv and the enum values in it that the CLI's --help must also list. */
+interface Permission {
+  args: string[];
+  values?: string[];
+}
+
+const NONE: Permission = { args: [] };
 
 function built(
   provider: Adapted,
   groups: string[][],
+  permission: Permission,
   alsoRequired: string[] = [],
 ): { ok: true; launch: NativeLaunch } {
-  const args = groups.flat();
+  const args = [...groups.flat(), ...permission.args];
   return {
     ok: true,
     launch: {
@@ -137,8 +232,8 @@ function built(
       requiredHelp: [
         ...new Set(
           args
-            .filter((arg) => arg.startsWith("-"))
-            .concat(args.filter((arg) => arg === "plan" || arg === "read-only"))
+            .filter((arg) => /^--?[A-Za-z]/.test(arg))
+            .concat(permission.values ?? [])
             .concat(alsoRequired),
         ),
       ],
@@ -146,10 +241,13 @@ function built(
   };
 }
 
-/** The flags from `requiredHelp` that the installed CLI's help text does not mention. */
+/**
+ * The flags and values from `requiredHelp` that the installed CLI's help text does not
+ * mention as a whole word. A value may end in `:`, as in a help line `- on-request: ...`.
+ */
 export function missingCapabilities(helpText: string, required: readonly string[]): string[] {
   return required.filter((flag) => {
     const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return !new RegExp(`(^|[\\s,"'\\[(])${escaped}(?=$|[\\s,=<"'\\])])`, "m").test(helpText);
+    return !new RegExp(`(^|[\\s,"'\\[(])${escaped}(?=$|[\\s,=:<"'\\])])`, "m").test(helpText);
   });
 }

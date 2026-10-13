@@ -29,13 +29,15 @@ name[, alias...]: lane[, lane...]   # trailing comments after whitespace are ign
 | `parent`, `auto`, `inherit-parent` | The descriptor passed with `--parent`                                                                 |
 | `grok-4.7-xhigh-fast`              | Legacy Cursor selector, read as `grok:grok-4.7@xhigh`; Cursor's fast variant has no native equivalent |
 
-| Provider   | CLI             | Efforts                                 | Read-only mode                    |
-| ---------- | --------------- | --------------------------------------- | --------------------------------- |
-| `claude`   | `claude`        | low, medium, high, xhigh, max           | `--permission-mode plan`          |
-| `codex`    | `codex`         | low, medium, high, xhigh, max, ultra    | `--sandbox read-only`             |
-| `grok`     | `grok` (native) | low, medium, high, xhigh                | `--permission-mode plan`          |
-| `cursor`   | Cursor agent    | none (encode reasoning in the model id) | `--mode plan`                     |
-| `opencode` | `opencode`      | none                                    | none: read-only lanes are refused |
+| Provider   | CLI             | Efforts                                 |
+| ---------- | --------------- | --------------------------------------- |
+| `claude`   | `claude`        | low, medium, high, xhigh, max           |
+| `codex`    | `codex`         | low, medium, high, xhigh, max, ultra    |
+| `grok`     | `grok` (native) | low, medium, high, xhigh                |
+| `cursor`   | Cursor agent    | none (encode reasoning in the model id) |
+| `opencode` | `opencode`      | none                                    |
+
+Each lane's permission flags follow its access; see [Permission defaults](#permission-defaults).
 
 Model ids must match `[A-Za-z0-9][A-Za-z0-9._/-]*`. Each value is one argv element; nothing is
 passed through a shell. Rolling or automatic aliases (`default`, `best`, `auto`, `fable`,
@@ -52,6 +54,41 @@ and `--parent`; write the full model id, such as `claude-opus-5-5`.
 - One lane: a **writer** unless `--read-only` is given, or the project policy lists
   `writerRoles` and this role is not in it.
 - A policy that lists a panel role as a writer is refused.
+
+## Permission defaults
+
+Each lane launches with the permission profile of its access. Every flag is one the CLI itself
+enforces, and the router checks it in the installed CLI's `--help` before launching.
+
+| Profile   | Auto-approved                                                      | Who gets it                                                |
+| --------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
+| read-only | File reads and web fetches; never edits                            | Panels, `--read-only`, globally read-only roles, verifiers |
+| writer    | Also edits inside its working directory (the worktree); sandbox on | Single-lane writers                                        |
+| control   | Nothing beyond the CLI's ordinary prompts                          | The coordinator (`hmr start`)                              |
+| bypass    | Everything: the CLI's full approval and sandbox bypass             | Only a writer run with `--dangerously-bypass-permissions`  |
+
+| Provider   | read-only                                                                                                   | writer                                                    | bypass                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
+| `claude`   | `--permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`                                   | `--permission-mode acceptEdits --settings <sandbox JSON>` | `--dangerously-skip-permissions`             |
+| `codex`    | `--sandbox read-only --search`                                                                              | `--sandbox workspace-write --ask-for-approval on-request` | `--dangerously-bypass-approvals-and-sandbox` |
+| `grok`     | `--sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write` | `--sandbox workspace --allow 'Edit(./**)'`                | `--always-approve`                           |
+| `cursor`   | `--mode plan`                                                                                               | `--sandbox enabled`                                       | `--force`                                    |
+| `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                  | refused: no known bypass flag                |
+
+- Claude's writer settings are
+  `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}`:
+  Bash runs in Claude's sandbox, still asks, and cannot ask to leave the sandbox. `acceptEdits`
+  covers the working directory only.
+- Grok accepts `--permission-mode plan` but ignores it, so read-only Grok lanes use `--allow`
+  and `--deny` rules (a `deny` always wins in Grok) plus Grok's `read-only` OS sandbox. A writer's
+  `Edit(./**)` is rooted at its working directory, and the `workspace` sandbox lets it write
+  only there, `~/.grok`, and temp directories.
+- Anything not auto-approved still prompts in the pane. The router never answers a prompt.
+- `--dangerously-bypass-permissions` applies to one `hmr run` in rules or semantic mode. It is
+  refused for a read-only plan (`bypass-read-only`), and on `opencode`. The plan notes the
+  opt-in, and `--dry-run` shows the exact argv. Workflows and coordinators never take it. Claude
+  shows a one-time confirmation for its bypass mode; the router does not answer it, so accept it
+  yourself once in a separate session first.
 
 ## Project policy
 
@@ -395,7 +432,7 @@ role list is refused. The chosen role is then planned exactly like an explicit o
 ## Read-only roles
 
 `design consultant` and `review gate` are always read-only: they launch with each CLI's
-enforced read-only mode (`--sandbox read-only`, `--permission-mode plan`, `--mode plan`).
+read-only [permission defaults](#permission-defaults).
 Mark more roles read-only in the rules file with a directive comment (older parsers ignore it):
 
     # hmr: readonly coordinator, arch reviewer

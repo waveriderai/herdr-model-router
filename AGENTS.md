@@ -31,7 +31,8 @@ npx vitest --run <path> # one test file
 - Do not read, print, or store credentials. Do not add personal rules files, account names,
   absolute home paths, runtime databases, or generated logs.
 - Keep rules-mode previews free of processes, network, credential reads, and database writes.
-- Never add a permission-bypass flag to a launch, and never fall back to another model or an
-  API key when a route is unavailable.
+- Never add a permission-bypass flag to a launch by default. The only path to one is the
+  explicit per-run `hmr run --dangerously-bypass-permissions` opt-in for a writer. Never fall
+  back to another model or an API key when a route is unavailable.
 - Do not deploy the coordinator or publish packages.
 - Write code, docs, and commit messages in English.

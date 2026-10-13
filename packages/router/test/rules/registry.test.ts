@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseNativeDescriptor } from "../../src/rules/descriptor.js";
 import { formatPlan } from "../../src/commands/rules-commands.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
-import { ADAPTED_PROVIDERS, nativeLaunch } from "../../src/rules/native-argv.js";
+import { ADAPTED_PROVIDERS, nativeLaunch, permissionProfile } from "../../src/rules/native-argv.js";
 import { BUILTIN_READ_ONLY_ROLES, planRoute } from "../../src/rules/plan.js";
 import { parseProviderRegistry, providerRegistry } from "../../src/rules/provider-registry.js";
 import type { RulesSource } from "../../src/rules/rules-source.js";
@@ -58,7 +58,7 @@ describe("provider registry", () => {
   });
 
   it("fails closed for a provider without an adapter", () => {
-    const result = nativeLaunch({ provider: "acme", model: "m", effort: null }, "write");
+    const result = nativeLaunch({ provider: "acme", model: "m", effort: null }, "writer");
     expect(result.ok).toBe(false);
   });
 });
@@ -117,7 +117,7 @@ describe("read-only roles", () => {
   it("launches a forced read-only codex lane with the read-only sandbox", () => {
     const result = plan(rules, "design consultant");
     if (!result.ok) throw new Error(result.error);
-    const launch = nativeLaunch(result.lanes[0]!, result.access);
+    const launch = nativeLaunch(result.lanes[0]!, permissionProfile(result));
     expect(launch.ok && launch.launch.argv).toEqual(
       expect.arrayContaining(["--sandbox", "read-only"]),
     );

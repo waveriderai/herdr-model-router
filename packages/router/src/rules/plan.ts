@@ -29,6 +29,11 @@ export interface RoutePlan {
   /** `panel`: more than one lane. The lanes that remain all run; it is not a fallback list. */
   kind: "single" | "panel";
   access: Access;
+  /**
+   * Overrides the writer profile: `control` for a coordinator, `bypass` only from the explicit
+   * per-run opt-in. A read-only plan never carries one.
+   */
+  permissions?: "control" | "bypass";
   /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
   forcedReadOnly: boolean;
   /** The rules file lists more than one lane, even if parent-alias copies were skipped. */
@@ -56,7 +61,8 @@ export type PlanRefusalCode =
   | "provider-not-allowed"
   | "pin-conflict"
   | "panel-writer-conflict"
-  | "readonly-writer-conflict";
+  | "readonly-writer-conflict"
+  | "bypass-read-only";
 
 export interface PlanRefusal {
   ok: false;
@@ -82,6 +88,11 @@ export interface PlanInput {
   policySha256?: string;
   /** Force a single-lane role to run read-only. */
   readOnly?: boolean;
+  /**
+   * The per-run opt-in to the CLI's full permission bypass. Never a default, and refused for
+   * a read-only plan.
+   */
+  bypassPermissions?: boolean;
 }
 
 export function roleNames(rules: RuleSet): string[] {
@@ -230,7 +241,16 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     (writerRoles !== undefined && !namedWriter)
       ? "read"
       : "write";
+  if (input.bypassPermissions && access === "read") {
+    return refuse(
+      "bypass-read-only",
+      `role "${role}" runs read-only here, and a permission bypass applies only to a writer; nothing was planned`,
+    );
+  }
   const notes = forcedReadOnly ? [`role "${role}" is read-only globally`] : [];
+  if (input.bypassPermissions) {
+    notes.push("permission bypass opted in for this run: the CLI skips its approvals and sandbox");
+  }
 
   return {
     ok: true,
@@ -238,6 +258,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     roleNames: found.names,
     kind,
     access,
+    ...(input.bypassPermissions ? { permissions: "bypass" as const } : {}),
     forcedReadOnly,
     definedAsPanel,
     rulesSource: input.rulesSource,

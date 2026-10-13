@@ -17,11 +17,13 @@ export const failed = (stdout: string, stderr = ""): CommandResult => ({
 });
 
 export const HELP: Record<string, string> = {
-  claude: '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "plan")',
+  claude:
+    '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "acceptEdits", "plan")\n--allowedTools, --allowed-tools <tools...>\n--settings <file-or-json>',
   codex:
-    "-m, --model <MODEL>\n-c, --config <k=v>\n-s, --sandbox <MODE> [possible values: read-only, workspace-write]",
-  grok: "-m, --model <MODEL>\n--reasoning-effort <E>\n--permission-mode <MODE> [possible values: default, plan]",
-  "cursor-agent": '--model <model>\n--mode <mode> (choices: "plan", "ask")',
+    "-m, --model <MODEL>\n-c, --config <k=v>\n-s, --sandbox <MODE> [possible values: read-only, workspace-write]\n-a, --ask-for-approval <POLICY>\n  - on-request: The model decides\n--search",
+  grok: "-m, --model <MODEL>\n--reasoning-effort <E>\n--allow <RULE>\n--deny <RULE>\n--sandbox <PROFILE>",
+  "cursor-agent":
+    '--model <model>\n--mode <mode> (choices: "plan", "ask")\n--sandbox <mode> (choices: "enabled", "disabled")',
 };
 
 export const KIND_BY_EXECUTABLE: Record<string, string> = {

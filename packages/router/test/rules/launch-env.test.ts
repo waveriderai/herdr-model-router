@@ -23,6 +23,8 @@ import {
 } from "../../src/rules/launch-script.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
 import { planRoute } from "../../src/rules/plan.js";
+import { CLAUDE_WRITER_SETTINGS } from "../../src/rules/native-argv.js";
+import { HELP } from "../helpers/fake-herdr.js";
 
 const ok = (stdout = ""): CommandResult => ({ ok: true, code: 0, stdout, stderr: "" });
 
@@ -153,10 +155,7 @@ describe("native CLI launch environment (process level)", () => {
       const opened = openDispatchDeps(routerEnv, {
         createHerdr: () => herdr,
         createHerdrPane: () => pane as HerdrPaneClient,
-        createProcessAdapter: () => async (argv) =>
-          argv[1] === "--help"
-            ? ok('--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "plan")')
-            : ok(),
+        createProcessAdapter: () => async (argv) => (argv[1] === "--help" ? ok(HELP.claude) : ok()),
       });
 
       const rules = parseRules("bug-fix: claude:claude-opus-5-5@xhigh\n");
@@ -183,6 +182,10 @@ describe("native CLI launch environment (process level)", () => {
         "arg=claude-opus-5-5",
         "arg=--effort",
         "arg=xhigh",
+        "arg=--permission-mode",
+        "arg=acceptEdits",
+        "arg=--settings",
+        `arg=${CLAUDE_WRITER_SETTINGS}`,
       ]);
       expect(lines[0]).toBe(`cwd=${realpathSync(project)}`);
       const env = Object.fromEntries(

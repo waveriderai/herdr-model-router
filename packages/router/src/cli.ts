@@ -244,6 +244,11 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     )
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--read-only", "Run a single-lane role read-only", false)
+    .option(
+      "--dangerously-bypass-permissions",
+      "For this run only, launch a writer with its CLI's full approval and sandbox bypass (rules and semantic modes)",
+      false,
+    )
     .option("--dry-run", "Print the route without launching", false)
     .option("--json", "Emit JSON for plugins", false)
     .option("--session <id>", "Route the next phase of an earlier router session (quota mode)")
@@ -273,6 +278,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           parent?: string;
           rules?: string;
           readOnly?: boolean;
+          dangerouslyBypassPermissions?: boolean;
         },
       ) => {
         const mode = (flags.routingMode ?? "rules") as RoutingModeFlag;
@@ -303,6 +309,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
                   ...(flags.role ? { role: flags.role } : {}),
                   ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
                   ...(flags.readOnly ? { readOnly: true } : {}),
+                  ...(flags.dangerouslyBypassPermissions ? { bypassPermissions: true } : {}),
                 },
                 createRulesRunDeps(env, cwd, flags.rules, options.rulesOverrides),
               ),
@@ -310,9 +317,15 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           );
           return;
         }
-        if (flags.role || flags.parent !== undefined || flags.rules || flags.readOnly) {
+        if (
+          flags.role ||
+          flags.parent !== undefined ||
+          flags.rules ||
+          flags.readOnly ||
+          flags.dangerouslyBypassPermissions
+        ) {
           stderr.write(
-            "--role, --parent, --rules and --read-only apply to rules and semantic modes\n",
+            "--role, --parent, --rules, --read-only and --dangerously-bypass-permissions apply to rules and semantic modes\n",
           );
           program.exitCode = 2;
           return;

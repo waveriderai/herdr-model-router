@@ -212,7 +212,7 @@ export function coordinatorPrompt(input: {
 function controlPlan(plan: RoutePlan): RoutePlan {
   if (plan.forcedReadOnly || plan.definedAsPanel)
     throw new Error(`role "${plan.role}" is read-only globally`);
-  return { ...plan, access: "write" };
+  return { ...plan, access: "write", permissions: "control" };
 }
 
 /**

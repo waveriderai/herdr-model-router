@@ -11,6 +11,12 @@ and released under a single tag.
 
 ### Added
 
+- Per-role permission defaults (AGENT-198). Read-only lanes auto-approve file reads and web
+  fetches only; writers auto-approve edits inside their own worktree with the CLI's sandbox on;
+  the coordinator keeps the CLI's ordinary permissions. `hmr run --dangerously-bypass-permissions`
+  is the only way to pass a CLI's full bypass, for one writer run; it is refused for read-only
+  plans and on `opencode`.
+
 - agent-collab writers chosen by the rules file: Claude, Codex, or Grok. HMR checks agent-collab's
   read-only `capabilities` (`hmr.rules-route/v1`) before any pane exists and hands it a frozen
   route (provider, kind, model, effort, role, exact directory, rules, policy and brief digests).
@@ -75,6 +81,11 @@ and released under a single tag.
   before it runs and finishes in the same database transaction as the router's own change.
   `router workflow recover` settles an interrupted call from read-only backend status, and only
   when that status names the exact run, native session, pane, and attempt.
+
+### Fixed
+
+- Read-only Grok lanes passed `--permission-mode plan`, which Grok accepts and ignores, so they
+  were not read-only. They now use `--allow`/`--deny` rules and Grok's `read-only` sandbox.
 
 ### Changed
 
