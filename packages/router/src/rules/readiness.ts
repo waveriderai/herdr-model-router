@@ -213,14 +213,17 @@ function quotaLine(line: string, next = ""): string | undefined {
 /** The line where the pane echoes what was typed: `> `, `› ` or `❯ `, maybe inside a box. */
 const INPUT_MARKER = /^\s*(?:│\s*)?[>›❯]\s?/;
 /** Lines a CLI draws for the model's turn or its own events: never a continued prompt echo. */
-const OUTPUT_MARKER = /^\s*[⏺●•■⎿]/;
+const OUTPUT_MARKER = /^\s*[⏺●•■⎿⬢]/;
+/** Claude Code's placeholder for a long pasted prompt. */
+const PASTED = /^\[pastedtext#\d+/;
+/** How much of a prompt's tail must show when its start scrolled off the top of the pane. */
+const MIN_ECHO_TAIL = 40;
 
 /**
  * Where each CLI prints its own error, as opposed to the model's output. Codex draws an error
  * event as `■ <message>` (model messages and tool calls start with `•`). Claude Code attaches
  * an API error to the user's message as `⎿ <message>` (model text and tool calls start with
- * `⏺`, and a tool result's `⎿` only ever follows a tool call). The grok CLI and Cursor agent
- * have no verified error line, so a quota error after a prompt is never read from them.
+ * `⏺`, and a tool result's `⎿` only ever follows a tool call).
  */
 const ERROR_MARKER: Partial<Record<string, RegExp>> = {
   codex: /^\s*■\s+/,
@@ -228,13 +231,65 @@ const ERROR_MARKER: Partial<Record<string, RegExp>> = {
 };
 
 /**
+ * The grok CLI and the Cursor agent have no error glyph of their own. For them the screen must
+ * show the turn was nothing but the message: it sits alone between the echo of the prompt and
+ * the composer the CLI draws again once the turn ends (grok's token line or `│ ❯ │` box,
+ * Cursor's `→` line), in at most this many lines (the message wrapped, plus one hint line).
+ */
+const COMPOSER_START: Partial<Record<string, RegExp>> = {
+  grok: /^\s*(?:[\d.]+[KM]? \/ [\d.]+[KM]?\b|╭)|│\s*❯/,
+  cursor: /^\s*(?:[│┌]\s*)?→/,
+};
+const MAX_BARE_MESSAGE_LINES = 3;
+
+/**
+ * The index of the last line of the pane's echo of `sent`, or undefined when the screen does
+ * not show it. The echo is the first input line that opens the prompt and goes on to its whole
+ * text (or Claude Code's `[Pasted text #N]` placeholder); a later line that quotes part or all
+ * of the prompt, as a writer's summary may, never moves it. A prompt taller than the pane
+ * shows only its tail, from the top of the screen.
+ */
+function promptEchoEnd(lines: string[], sent: string): number | undefined {
+  const prompt = compactScreen(sent);
+  if (prompt === "") return undefined;
+  const grow = (start: number, first: string, fits: (echo: string) => boolean) => {
+    let echo = compactScreen(first);
+    let end = start;
+    for (let index = start + 1; index < lines.length; index += 1) {
+      const line = lines[index]!;
+      const compact = compactScreen(line);
+      if (compact === "") continue;
+      if (OUTPUT_MARKER.test(line) || !fits(echo + compact)) break;
+      echo += compact;
+      end = index;
+    }
+    return { echo, end };
+  };
+  for (const [index, line] of lines.entries()) {
+    const input = INPUT_MARKER.exec(line);
+    if (!input) continue;
+    const content = line.slice(input[0].length);
+    const compact = compactScreen(content);
+    if (PASTED.test(compact)) return index;
+    if (compact === "" || !prompt.startsWith(compact)) continue;
+    const { echo, end } = grow(index, content, (text) => prompt.startsWith(text));
+    if (echo === prompt) return end;
+  }
+  const top = lines.findIndex((line) => compactScreen(line) !== "");
+  if (top < 0 || INPUT_MARKER.test(lines[top]!)) return undefined;
+  const { echo, end } = grow(top, lines[top]!, (text) => prompt.includes(text));
+  return echo.length >= MIN_ECHO_TAIL && prompt.endsWith(echo) ? end : undefined;
+}
+
+/**
  * The CLI's own quota or usage-limit error on this screen, as a short label, if any.
  *
  * Without `after` (a new pane, before any prompt, so no model output exists yet) any line may
- * carry it. After a prompt, the evidence must show the model never ran: the first line after
- * the pane's echo of the prompt (or Claude Code's `[Pasted text #N]` placeholder) is that
- * CLI's own error line, carrying the quota message. Any model output first, a CLI without a
- * verified error line, or a screen without the echo is never read as a quota error.
+ * carry it. After a prompt, the evidence must show the model never ran, counted from the
+ * pane's echo of the prompt: for Codex and Claude Code the first line after it is that CLI's
+ * own error line carrying the message; for grok and Cursor the message is the whole turn,
+ * alone before the composer. Any model output first, a screen without the echo, or a CLI with
+ * neither rule is never read as a quota error.
  */
 export function detectQuota(
   text: string,
@@ -249,33 +304,28 @@ export function detectQuota(
     return undefined;
   }
   const marker = ERROR_MARKER[after.kind];
-  if (!marker) return undefined;
-  const prompt = compactScreen(after.sent);
-  const echoed = (content: string) => {
-    const compact = compactScreen(content);
-    return /^\[pastedtext#\d+/.test(compact) || (compact.length >= 6 && prompt.includes(compact));
-  };
-  let anchor = -1;
-  lines.forEach((line, index) => {
-    const input = INPUT_MARKER.exec(line);
-    if (!input) return;
-    const content = line.slice(input[0].length);
-    const compact = compactScreen(content);
-    // The echo's first line may be short ("Fix it"): it must then open the prompt.
-    if (echoed(content) || (compact !== "" && prompt.startsWith(compact))) anchor = index;
-  });
-  if (anchor < 0) return undefined;
-  let next = anchor + 1;
-  // Skip blank lines and the wrapped rest of the echo.
-  while (
-    next < lines.length &&
-    (lines[next]!.trim() === "" || (!OUTPUT_MARKER.test(lines[next]!) && echoed(lines[next]!)))
-  ) {
-    next += 1;
+  const composer = COMPOSER_START[after.kind];
+  if (!marker && !composer) return undefined;
+  const echoEnd = promptEchoEnd(lines, after.sent);
+  if (echoEnd === undefined) return undefined;
+  const rest = lines.slice(echoEnd + 1);
+  if (marker) {
+    const next = rest.findIndex((line) => line.trim() !== "");
+    const first = rest[next];
+    if (first === undefined || !marker.test(first)) return undefined;
+    return quotaLine(first.replace(marker, ""), rest[next + 1]);
   }
-  const first = lines[next];
-  if (first === undefined || !marker.test(first)) return undefined;
-  return quotaLine(first.replace(marker, ""), lines[next + 1]);
+  const stop = rest.findIndex((line) => composer!.test(line));
+  if (stop < 0) return undefined;
+  const turn = rest.slice(0, stop).filter((line) => compactScreen(line) !== "");
+  if (
+    turn.length === 0 ||
+    turn.length > MAX_BARE_MESSAGE_LINES ||
+    turn.some((line) => OUTPUT_MARKER.test(line) || INPUT_MARKER.test(line))
+  ) {
+    return undefined;
+  }
+  return quotaLine(turn[0]!, turn[1]);
 }
 
 export function quotaReason(kind: string, label: string): string {

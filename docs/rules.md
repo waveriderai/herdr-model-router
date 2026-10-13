@@ -452,20 +452,24 @@ At launch, `run` watches for the CLI's own quota or usage-limit message:
   role has a fallback order.
 
 Before the prompt, no model output exists yet, so any screen line that starts with the
-message counts. After the prompt, the evidence must show that the model never ran: the first
-line after the pane's echo of the prompt (or Claude Code's `[Pasted text #N]` placeholder)
-must be the CLI's own error line carrying the message:
+message counts. After the prompt, the evidence must show that the model never ran, counted
+from the pane's echo of the prompt. The echo is the first input line (`>`, `›`, `❯`) that
+opens the prompt and goes on to its whole text, or Claude Code's `[Pasted text #N]`
+placeholder; a prompt taller than the pane anchors on its tail at the top of the screen. A
+later line that quotes the prompt, as a writer's summary may, never moves the anchor.
 
-| CLI          | Its own error line | Model output (never read) |
-| ------------ | ------------------ | ------------------------- |
-| Codex        | `■ <message>`      | `• ...`                   |
-| Claude Code  | `⎿ <message>`      | `⏺ ...`                   |
-| grok, Cursor | none verified      | (not read after a prompt) |
+| CLI          | Evidence after the echo                                                           | Model output (never read) |
+| ------------ | --------------------------------------------------------------------------------- | ------------------------- |
+| Codex        | the next line is its own error line, `■ <message>`                                | `• ...`                   |
+| Claude Code  | the next line is its own error line, `⎿ <message>`                                | `⏺ ...`                   |
+| grok, Cursor | the message is the whole turn: at most 3 lines, alone before the composer is back | anything else             |
 
-A writer that ran, even briefly, prints model output or a tool call first, so quoting a quota
-message in its summary is never read as a quota error. A screen without the echo is not read
-either. grok and Cursor are checked only on their startup screen, until their error lines are
-verified.
+grok and Cursor draw no error glyph of their own, so for them the turn must hold nothing but
+the message: it opens the turn, takes at most three lines (the message wrapped, plus a hint),
+carries no tool call or other output, and is followed directly by the composer the CLI draws
+again when the turn ends (grok's token line or `│ ❯ │` box, Cursor's `→` line). A writer that
+ran, even briefly, prints a tool call or more output first, so quoting a quota message in its
+summary is never read as a quota error. A screen without the echo is not read either.
 
 Matched messages are exhausted limits only: `usage limit reached`, `5-hour limit reached`,
 `you've hit your (usage) limit`, `quota exceeded`, `insufficient_quota`,
