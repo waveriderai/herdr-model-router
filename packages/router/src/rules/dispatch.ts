@@ -418,7 +418,7 @@ export function orphanNote(paneId: string, closed: boolean): string {
  */
 export async function watchForQuota(
   deps: Pick<DispatchDeps, "pane" | "sleep" | "pollMs" | "quotaWatchMs">,
-  input: { paneId: string; kind: string; sent: string; started: boolean },
+  input: { paneId: string; kind: string; sent: string; before: string; started: boolean },
 ): Promise<string | undefined> {
   const windowMs = deps.quotaWatchMs ?? DEFAULT_QUOTA_WATCH_MS;
   const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
@@ -436,7 +436,9 @@ export async function watchForQuota(
     if (info?.status === "idle") {
       const text = await readScreen(deps, input.paneId);
       const quota =
-        text === undefined ? undefined : detectQuota(text, { sent: input.sent, kind: input.kind });
+        text === undefined
+          ? undefined
+          : detectQuota(text, { sent: input.sent, kind: input.kind, before: input.before });
       if (quota) return quotaReason(input.kind, quota);
       // The turn started and ended without a quota error: the model is answering.
       if (started) return undefined;
@@ -853,6 +855,8 @@ async function runLane(input: {
   const text = input.laneText
     ? input.laneText(lane, task)
     : laneText(plan, task, lane, input.prompt);
+  // What the pane shows before the prompt: a quota error after it is read only below this.
+  const before = input.watchQuota ? await readScreen(deps, paneId) : undefined;
   let sent: DispatchAttempt;
   try {
     sent = await sendOnce({
@@ -882,11 +886,16 @@ async function runLane(input: {
   outcome.state = "prompted";
   deps.store.updateLane(lane.id, { state: "prompted" });
   // Only a prompt known to have reached the CLI is watched; `unknown` stays for `recover`.
-  if (input.watchQuota && (sent.state === "working" || sent.state === "sent")) {
+  if (
+    input.watchQuota &&
+    before !== undefined &&
+    (sent.state === "working" || sent.state === "sent")
+  ) {
     const quota = await watchForQuota(deps, {
       paneId,
       kind: launch.kind,
       sent: text,
+      before,
       started: sent.state === "working",
     });
     if (quota) {

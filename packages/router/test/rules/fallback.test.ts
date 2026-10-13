@@ -154,6 +154,13 @@ describe("fallback order in a plan", () => {
   });
 });
 
+/** What a pane shows above its first prompt: the CLI's banner, as it was before the prompt. */
+const BANNER = "  Welcome to the CLI\n  cwd: /work/project\n\n";
+const after = (kind: string, sent: string) => ({ sent, kind, before: BANNER });
+
+/** The composer Cursor draws again when a turn ends (its banner is not repeated). */
+const CURSOR_COMPOSER = "  → Add a follow-up\n  Plan (shift+tab to cycle)\n";
+
 describe("quota detection", () => {
   it("recognizes each CLI's exhausted-limit message, wrapped or not", () => {
     expect(detectQuota("⏺ Claude usage limit reached. Your limit will reset at 5pm")).toBe(
@@ -183,28 +190,31 @@ describe("quota detection", () => {
     expect(detectQuota("Context limit reached · /compact or /clear to continue")).toBeUndefined();
     expect(detectQuota(READY_SCREEN.claude!)).toBeUndefined();
     const sent = "When Codex says You've hit your usage limit, switch models.\nAdd tests.";
-    const codex = { sent, kind: "codex" };
+    const codex = after("codex", sent);
     // The pane wraps and indents the echoed prompt.
     const echoed =
       "› When Codex says You've hit your\n  usage limit, switch models.\n  Add tests.\n";
-    expect(detectQuota(echoed, codex)).toBeUndefined();
+    expect(detectQuota(`${BANNER}${echoed}`, codex)).toBeUndefined();
     expect(
-      detectQuota(`${echoed}\n■ You've hit your usage\n  limit. Try again in 2 hours.`, codex),
+      detectQuota(
+        `${BANNER}${echoed}\n■ You've hit your usage\n  limit. Try again in 2 hours.`,
+        codex,
+      ),
     ).toBe("hit your limit");
     // A long prompt that Claude Code collapses still anchors the check.
     expect(
-      detectQuota("> [Pasted text #1 +40 lines]\n  ⎿  Claude usage limit reached.", {
-        sent: "x\n".repeat(40),
-        kind: "claude",
-      }),
+      detectQuota(
+        `${BANNER}> [Pasted text #1 +40 lines]\n  ⎿  Claude usage limit reached.`,
+        after("claude", "x\n".repeat(40)),
+      ),
     ).toBe("limit reached");
     // No echo of the prompt on screen: never read as a quota error.
-    expect(detectQuota("■ You've hit your usage limit.", codex)).toBeUndefined();
+    expect(detectQuota(`${BANNER}■ You've hit your usage limit.`, codex)).toBeUndefined();
   });
 
   it("after a prompt, reads only the CLI's own error line, first after the echo", () => {
     const sent = "Handle provider errors in the client.";
-    const claude = { sent, kind: "claude" };
+    const claude = after("claude", sent);
     // Codex's case: a writer runs a tool, then its short summary starts with the phrase.
     const shortSummary = [
       `> ${sent}`,
@@ -213,38 +223,42 @@ describe("quota detection", () => {
       "  ⎿  Wrote 20 lines to src/client.ts",
       "⏺ Rate limit exceeded is now handled with retries.",
     ].join("\n");
-    expect(detectQuota(shortSummary, claude)).toBeUndefined();
+    expect(detectQuota(`${BANNER}${shortSummary}`, claude)).toBeUndefined();
     // Even the model's first line, with no tool call, is model output (⏺), not a CLI error.
-    expect(detectQuota(`> ${sent}\n⏺ Rate limit exceeded is now handled.`, claude)).toBeUndefined();
+    expect(
+      detectQuota(`${BANNER}> ${sent}\n⏺ Rate limit exceeded is now handled.`, claude),
+    ).toBeUndefined();
     // A tool result that prints the phrase follows its tool call, never the echo itself.
     expect(
-      detectQuota(`> ${sent}\n⏺ Bash(curl api)\n  ⎿  Rate limit exceeded`, claude),
+      detectQuota(`${BANNER}> ${sent}\n⏺ Bash(curl api)\n  ⎿  Rate limit exceeded`, claude),
     ).toBeUndefined();
     // Codex model output is `•`; only `■` is Codex's own error.
     expect(
-      detectQuota(`› ${sent}\n• You've hit your usage limit is handled now.`, {
-        sent,
-        kind: "codex",
-      }),
+      detectQuota(
+        `${BANNER}› ${sent}\n• You've hit your usage limit is handled now.`,
+        after("codex", sent),
+      ),
     ).toBeUndefined();
     // The CLI's own error, first after the echo, is.
-    expect(detectQuota(`> ${sent}\n  ⎿  You've hit your limit · resets 3pm`, claude)).toBe(
+    expect(detectQuota(`${BANNER}> ${sent}\n  ⎿  You've hit your limit · resets 3pm`, claude)).toBe(
       "hit your limit",
     );
     // A CLI with neither an error line nor a composer rule is never read after a prompt.
     expect(
-      detectQuota(`> ${sent}\nError: Rate limit exceeded\n> `, { sent, kind: "opencode" }),
+      detectQuota(`${BANNER}> ${sent}\nError: Rate limit exceeded\n> `, after("opencode", sent)),
     ).toBeUndefined();
   });
 
-  it("reads grok's and Cursor's quota message when it is the whole turn, before the composer", () => {
+  it("reads grok's and Cursor's own quota message when it is the whole turn", () => {
     const sent = "Handle provider errors in the client.";
-    const grok = { sent, kind: "grok" };
-    const cursor = { sent, kind: "cursor" };
-    const grokTurn = (turn: string) => `> ${sent}\n\n${turn}\n${READY_SCREEN.grok}`;
-    const cursorTurn = (turn: string) =>
-      `> ${sent}\n\n${turn}\n\n  → Add a follow-up\n  Plan (shift+tab to cycle)\n`;
+    const grok = after("grok", sent);
+    const cursor = after("cursor", sent);
+    const grokTurn = (turn: string) => `${BANNER}> ${sent}\n\n${turn}\n${READY_SCREEN.grok}`;
+    const cursorTurn = (turn: string) => `${BANNER}> ${sent}\n\n${turn}\n\n${CURSOR_COMPOSER}`;
     expect(detectQuota(grokTurn("Error: Rate limit exceeded for grok-4.7."), grok)).toBe(
+      "rate limit exceeded",
+    );
+    expect(detectQuota(grokTurn("Rate limit exceeded (429). Try again in 30 seconds."), grok)).toBe(
       "rate limit exceeded",
     );
     expect(
@@ -253,82 +267,102 @@ describe("quota detection", () => {
         cursor,
       ),
     ).toBe("hit your limit");
-    // The model ran first (a tool call, or more output than a message): not a quota error.
+    // The review gate's case: a normal one-line summary that starts with the phrase.
+    expect(detectQuota(grokTurn("Rate limit exceeded is now retried."), grok)).toBeUndefined();
     expect(
-      detectQuota(
-        cursorTurn("  ⬢ Read src/client.ts\n  Rate limit exceeded is now retried."),
-        cursor,
-      ),
+      detectQuota(cursorTurn("  Rate limit exceeded is now retried."), cursor),
     ).toBeUndefined();
     expect(
-      detectQuota(
-        grokTurn(
-          "Rate limit exceeded is now retried.\nThe client backs off for 2s.\nTests cover it.\nDone.",
-        ),
-        grok,
-      ),
+      detectQuota(cursorTurn("  You've hit your usage limit handling is in place."), cursor),
+    ).toBeUndefined();
+    expect(
+      detectQuota(grokTurn("Rate limit exceeded. Now retried with backoff."), grok),
+    ).toBeUndefined();
+    // The model ran first (a tool call, or more output than a message): not a quota error.
+    expect(
+      detectQuota(cursorTurn("  ⬢ Read src/client.ts\n  You've hit your usage limit"), cursor),
     ).toBeUndefined();
     // The message must open the turn, and the composer must be back.
     expect(
       detectQuota(grokTurn("Done. The client handles:\nRate limit exceeded"), grok),
     ).toBeUndefined();
-    expect(detectQuota(`> ${sent}\n\nError: Rate limit exceeded`, grok)).toBeUndefined();
+    expect(detectQuota(`${BANNER}> ${sent}\n\nError: Rate limit exceeded`, grok)).toBeUndefined();
   });
 
   it("anchors on the pane's echo of the prompt, never on a later line that quotes it", () => {
     const sent = "Handle provider errors in the client.";
     // The review gate's reproduction: the writer finished, and its summary quotes the task and
     // then the error it now handles.
-    const summary = [
-      "> Handle provider errors in the client.",
-      "You've hit your usage limit.",
-    ].join("\n");
-    const finished = (kind: string, output: string, composer: string) =>
-      `> ${sent}\n\n${output}\n${summary}\n\n${composer}`;
+    const summary = `> ${sent}\nYou've hit your usage limit.`;
     expect(
-      detectQuota(finished("cursor", "  Updated src/client.ts.", "  → Add a follow-up\n"), {
-        sent,
-        kind: "cursor",
-      }),
-    ).toBeUndefined();
-    expect(
-      detectQuota(finished("grok", "Updated src/client.ts.", READY_SCREEN.grok!), {
-        sent,
-        kind: "grok",
-      }),
-    ).toBeUndefined();
-    // Even a quote followed by a line that looks like the CLI's own error.
-    expect(
-      detectQuota(`> ${sent}\n⏺ Updated src/client.ts.\n  > ${sent}\n  ⎿  You've hit your limit`, {
-        sent,
-        kind: "claude",
-      }),
+      detectQuota(
+        `${BANNER}> ${sent}\n\n  Updated src/client.ts.\n${summary}\n\n${CURSOR_COMPOSER}`,
+        after("cursor", sent),
+      ),
     ).toBeUndefined();
     expect(
       detectQuota(
-        `› ${sent}\n• Updated src/client.ts.\n› ${sent}\n■ You've hit your usage limit.`,
-        {
-          sent,
-          kind: "codex",
-        },
+        `${BANNER}> ${sent}\n\nUpdated src/client.ts.\n${summary}\n\n${READY_SCREEN.grok}`,
+        after("grok", sent),
+      ),
+    ).toBeUndefined();
+    // Even a quote followed by a line that looks like the CLI's own error.
+    expect(
+      detectQuota(
+        `${BANNER}> ${sent}\n⏺ Updated src/client.ts.\n  > ${sent}\n  ⎿  You've hit your limit`,
+        after("claude", sent),
+      ),
+    ).toBeUndefined();
+    expect(
+      detectQuota(
+        `${BANNER}› ${sent}\n• Updated src/client.ts.\n› ${sent}\n■ You've hit your usage limit.`,
+        after("codex", sent),
       ),
     ).toBeUndefined();
     // A quote of part of the prompt is not its echo either.
     expect(
-      detectQuota(`> errors in the client.\n\nError: Rate limit exceeded\n${READY_SCREEN.grok}`, {
-        sent,
-        kind: "grok",
-      }),
+      detectQuota(
+        `${BANNER}> errors in the client.\n\nError: Rate limit exceeded\n${READY_SCREEN.grok}`,
+        after("grok", sent),
+      ),
     ).toBeUndefined();
-    // A prompt taller than the pane: its tail at the top of the screen still anchors.
-    const long = `${"Line of the brief that explains the task in detail.\n".repeat(60)}Add tests.`;
-    const tail = "  Line of the brief that explains the task in detail.\n  Add tests.\n";
+  });
+
+  it("makes no quota decision once the real echo has scrolled off the screen", () => {
+    const sent = "Handle provider errors in the client.";
+    // The review gate's case: the writer's output pushed the banner and the real echo off the
+    // pane; its summary quotes the whole prompt and then a quota message.
+    const scrolled = (kind: string, error: string, composer: string) =>
+      [
+        "  backoff.ts: added jittered retries",
+        "  client.ts: wraps provider calls",
+        `> ${sent}`,
+        error,
+        "",
+        composer,
+      ].join("\n");
     expect(
-      detectQuota(`${tail}\nError: Rate limit exceeded\n${READY_SCREEN.grok}`, {
-        sent: long,
-        kind: "grok",
-      }),
-    ).toBe("rate limit exceeded");
+      detectQuota(
+        scrolled("cursor", "  You've hit your usage limit.", CURSOR_COMPOSER),
+        after("cursor", sent),
+      ),
+    ).toBeUndefined();
+    expect(
+      detectQuota(
+        scrolled("grok", "Error: Rate limit exceeded", READY_SCREEN.grok!),
+        after("grok", sent),
+      ),
+    ).toBeUndefined();
+    expect(
+      detectQuota(scrolled("claude", "  ⎿  You've hit your limit", ""), after("claude", sent)),
+    ).toBeUndefined();
+    // The quoted prompt as the very first line of the screen, with nothing above it, either.
+    expect(
+      detectQuota(
+        `> ${sent}\n\nError: Rate limit exceeded\n${READY_SCREEN.grok}`,
+        after("grok", sent),
+      ),
+    ).toBeUndefined();
   });
 
   it("does not mistake a writer that finished and quotes a quota error for one", () => {
@@ -347,13 +381,13 @@ describe("quota detection", () => {
       "  You've hit your usage limit",
       "",
     ].join("\n");
-    expect(detectQuota(finished, { sent, kind: "claude" })).toBeUndefined();
+    expect(detectQuota(`${BANNER}${finished}`, after("claude", sent))).toBeUndefined();
     // Quoted in prose, even right after the prompt, it does not start a line.
     expect(
-      detectQuota(`> ${sent}\n⏺ Retries now cover "Rate limit exceeded" replies.`, {
-        sent,
-        kind: "claude",
-      }),
+      detectQuota(
+        `${BANNER}> ${sent}\n⏺ Retries now cover "Rate limit exceeded" replies.`,
+        after("claude", sent),
+      ),
     ).toBeUndefined();
   });
 });
@@ -365,8 +399,10 @@ const QUOTA = {
   cursor: "  You've hit your usage limit\n  Switch to Auto or upgrade to continue.\n",
 };
 
-/** The composer Cursor draws again when a turn ends (its banner is not repeated). */
-const CURSOR_COMPOSER = "  → Add a follow-up\n  Plan (shift+tab to cycle)\n";
+/** A Cursor first version that falls back to Claude Code. */
+const CURSOR_RULES = `${RULES}first version: cursor:claude-opus-5-5-high
+# fallback: claude:claude-opus-5-5@high
+`;
 
 /**
  * After a prompt to a pane whose CLI is in `limited`, that CLI ends its turn on its own
@@ -377,7 +413,8 @@ function quotaAfterPrompt(herdr: () => FakeHerdr, limited: string[]) {
     const pane = [...herdr().panes.values()].find((entry) => entry.name === target);
     if (pane?.kind && limited.includes(pane.kind)) {
       const sent = herdr().prompts.at(-1)!.text;
-      pane.history = `${pane.history ?? ""}> ${sent}\n\n${QUOTA[pane.kind as keyof typeof QUOTA]}`;
+      // The screen it showed before the prompt scrolls up above the echo.
+      pane.history = `${pane.history ?? ""}${pane.screen ?? ""}> ${sent}\n\n${QUOTA[pane.kind as keyof typeof QUOTA]}`;
       if (pane.kind === "cursor") pane.screen = CURSOR_COMPOSER;
       pane.status = "idle";
     }
@@ -564,6 +601,7 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       prompt: (target) => {
         const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
         pane.history = [
+          pane.screen,
           // The review gate's reproduction: a tool call, then a short summary.
           `> ${herdr.prompts.at(-1)!.text}`,
           "",
@@ -599,7 +637,7 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       prompt: (target) => {
         const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
         // The pane echoes the task, which talks about usage limits, and the turn goes on.
-        pane.history = `> ${herdr.prompts.at(-1)!.text}\n`;
+        pane.history = `${pane.screen}> ${herdr.prompts.at(-1)!.text}\n`;
         return undefined;
       },
     });
@@ -632,11 +670,8 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
   it("hands a Cursor first version that hit its limit after the prompt to the next model", async () => {
     const herdr: FakeHerdr = fakeHerdr({ prompt: quotaAfterPrompt(() => herdr, ["cursor"]) });
     const { deps: d } = deps(herdr);
-    const cursorRules = `${RULES}first version: cursor:claude-opus-5-5-high
-# fallback: claude:claude-opus-5-5@high
-`;
     const result = await dispatchPlan({
-      plan: plan("first version", { rules: rules(cursorRules) }),
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
       prompt: "Fix the crash",
       worktreeId: "/work/project",
       deps: d,
@@ -698,6 +733,7 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
         const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
         const sent = herdr.prompts.at(-1)!.text;
         pane.history = [
+          pane.screen,
           `> ${sent}`,
           "",
           "  Updated src/client.ts. As asked:",
@@ -711,11 +747,8 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       },
     });
     const { deps: d } = deps(herdr);
-    const cursorRules = `${RULES}first version: cursor:claude-opus-5-5-high
-# fallback: claude:claude-opus-5-5@high
-`;
     const result = await dispatchPlan({
-      plan: plan("first version", { rules: rules(cursorRules) }),
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
       prompt: "Handle provider errors in the client.",
       worktreeId: "/work/project",
       deps: d,
@@ -724,6 +757,68 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       descriptor: "cursor:claude-opus-5-5-high",
       state: "prompted",
       paneId: "w1:p1",
+    });
+    expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
+    expect(herdr.prompts).toHaveLength(1);
+    expect(herdr.calls.filter((call) => call[1] === "close")).toEqual([]);
+  });
+
+  it("keeps a Cursor writer whose whole turn is a one-line summary starting with the phrase", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: (target) => {
+        const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
+        const sent = herdr.prompts.at(-1)!.text;
+        pane.history = `${pane.screen}> ${sent}\n\n  Rate limit exceeded is now retried.\n\n`;
+        pane.screen = CURSOR_COMPOSER;
+        pane.status = "idle";
+        return undefined;
+      },
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      prompt: "Retry provider errors.",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    expect(result.ok && result.lanes[0]).toMatchObject({
+      descriptor: "cursor:claude-opus-5-5-high",
+      state: "prompted",
+      paneId: "w1:p1",
+    });
+    expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
+    expect(herdr.prompts).toHaveLength(1);
+    expect(herdr.calls.filter((call) => call[1] === "close")).toEqual([]);
+  });
+
+  it("keeps a writer whose real echo scrolled off while its summary quotes the prompt", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: (target) => {
+        const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
+        const sent = herdr.prompts.at(-1)!.text;
+        // Only the end of a long turn is on screen: no banner, no real echo.
+        pane.history = [
+          "  backoff.ts: added jittered retries",
+          "  client.ts: wraps provider calls",
+          `> ${sent}`,
+          "  You've hit your usage limit.",
+          "",
+        ].join("\n");
+        pane.screen = CURSOR_COMPOSER;
+        pane.status = "idle";
+        return undefined;
+      },
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      prompt: "Handle provider errors in the client.",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    expect(result.ok && result.lanes[0]).toMatchObject({
+      descriptor: "cursor:claude-opus-5-5-high",
+      state: "prompted",
     });
     expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
     expect(herdr.prompts).toHaveLength(1);

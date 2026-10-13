@@ -216,8 +216,6 @@ const INPUT_MARKER = /^\s*(?:│\s*)?[>›❯]\s?/;
 const OUTPUT_MARKER = /^\s*[⏺●•■⎿⬢]/;
 /** Claude Code's placeholder for a long pasted prompt. */
 const PASTED = /^\[pastedtext#\d+/;
-/** How much of a prompt's tail must show when its start scrolled off the top of the pane. */
-const MIN_ECHO_TAIL = 40;
 
 /**
  * Where each CLI prints its own error, as opposed to the model's output. Codex draws an error
@@ -231,10 +229,10 @@ const ERROR_MARKER: Partial<Record<string, RegExp>> = {
 };
 
 /**
- * The grok CLI and the Cursor agent have no error glyph of their own. For them the screen must
- * show the turn was nothing but the message: it sits alone between the echo of the prompt and
- * the composer the CLI draws again once the turn ends (grok's token line or `│ ❯ │` box,
- * Cursor's `→` line), in at most this many lines (the message wrapped, plus one hint line).
+ * The grok CLI and the Cursor agent have no error glyph of their own. For them the turn must
+ * be the CLI's error message and nothing else: it sits alone between the echo of the prompt
+ * and the composer the CLI draws again once the turn ends (grok's token line or `│ ❯ │` box,
+ * Cursor's `→` line), in at most this many lines, and reads as {@link BARE_QUOTA_MESSAGE}.
  */
 const COMPOSER_START: Partial<Record<string, RegExp>> = {
   grok: /^\s*(?:[\d.]+[KM]? \/ [\d.]+[KM]?\b|╭)|│\s*❯/,
@@ -243,42 +241,71 @@ const COMPOSER_START: Partial<Record<string, RegExp>> = {
 const MAX_BARE_MESSAGE_LINES = 3;
 
 /**
- * The index of the last line of the pane's echo of `sent`, or undefined when the screen does
- * not show it. The echo is the first input line that opens the prompt and goes on to its whole
- * text (or Claude Code's `[Pasted text #N]` placeholder); a later line that quotes part or all
- * of the prompt, as a writer's summary may, never moves it. A prompt taller than the pane
- * shows only its tail, from the top of the screen.
+ * A whole quota error as a CLI prints it, lowercased with its lines joined: an optional
+ * `Error:` prefix, the exhausted-limit phrase, an optional model or HTTP 429 qualifier, and
+ * then only the CLI's own advice (when the limit resets, to try again, upgrade, or switch
+ * models). A sentence that merely starts with the phrase, such as a writer's summary
+ * "Rate limit exceeded is now retried.", is not one.
  */
-function promptEchoEnd(lines: string[], sent: string): number | undefined {
+const BARE_QUOTA_MESSAGE = new RegExp(
+  "^(?:error:\\s*)?" +
+    "(?:(?:usage|\\d+-hour|session|daily|weekly|monthly) limit reached" +
+    "|you'?ve hit your (?:usage |rate )?limit" +
+    "|quota exceeded|you exceeded your current quota|insufficient_quota" +
+    "|rate limit exceeded" +
+    "|(?:you have )?(?:run out of|no more|out of) credits)" +
+    "(?: for (?:model )?[\\w.@:/-]+)?" +
+    "(?:\\s*\\(?(?:http |status )?429\\)?)?" +
+    "[.!]?" +
+    "(?:\\s*[·∙,;-]?\\s*(?:" +
+    "(?:your limit )?resets? (?:at|in|on)\\b" +
+    "|(?:please )?try again (?:in|later|at|after|tomorrow)\\b" +
+    "|(?:please )?retry (?:in|later|after)\\b" +
+    "|upgrade (?:to|your)\\b" +
+    "|switch to (?:auto|a different model|another model)\\b" +
+    "|get cursor pro\\b" +
+    "|your limit will reset\\b" +
+    ").*)?$",
+);
+
+/**
+ * The index of the last line of the pane's echo of `sent`, or undefined when the screen does
+ * not show it where the real echo must be. The echo is an input line that opens the prompt and
+ * goes on to its whole text (or Claude Code's `[Pasted text #N]` placeholder), and every line
+ * above it was already on the pane's screen just before the prompt (`before`), with at least
+ * one of them showing. A line that quotes the prompt in the model's output has output above it,
+ * and once the real echo scrolls off, nothing on the screen is taken as the echo.
+ */
+function promptEchoEnd(lines: string[], sent: string, before: string): number | undefined {
   const prompt = compactScreen(sent);
   if (prompt === "") return undefined;
-  const grow = (start: number, first: string, fits: (echo: string) => boolean) => {
-    let echo = compactScreen(first);
-    let end = start;
-    for (let index = start + 1; index < lines.length; index += 1) {
-      const line = lines[index]!;
-      const compact = compactScreen(line);
-      if (compact === "") continue;
-      if (OUTPUT_MARKER.test(line) || !fits(echo + compact)) break;
-      echo += compact;
-      end = index;
-    }
-    return { echo, end };
-  };
+  const earlier = new Set(before.split("\n").map(compactScreen));
+  let above = 0;
   for (const [index, line] of lines.entries()) {
+    const compact = compactScreen(line);
     const input = INPUT_MARKER.exec(line);
-    if (!input) continue;
-    const content = line.slice(input[0].length);
-    const compact = compactScreen(content);
-    if (PASTED.test(compact)) return index;
-    if (compact === "" || !prompt.startsWith(compact)) continue;
-    const { echo, end } = grow(index, content, (text) => prompt.startsWith(text));
-    if (echo === prompt) return end;
+    if (input && above > 0) {
+      const content = compactScreen(line.slice(input[0].length));
+      if (PASTED.test(content)) return index;
+      if (content !== "" && prompt.startsWith(content)) {
+        let echo = content;
+        let end = index;
+        for (let next = index + 1; next < lines.length; next += 1) {
+          const more = compactScreen(lines[next]!);
+          if (more === "") continue;
+          if (OUTPUT_MARKER.test(lines[next]!) || !prompt.startsWith(echo + more)) break;
+          echo += more;
+          end = next;
+        }
+        if (echo === prompt) return end;
+      }
+    }
+    if (compact === "") continue;
+    // Anything above the echo that was not on the screen before the prompt is model output.
+    if (!earlier.has(compact)) return undefined;
+    above += 1;
   }
-  const top = lines.findIndex((line) => compactScreen(line) !== "");
-  if (top < 0 || INPUT_MARKER.test(lines[top]!)) return undefined;
-  const { echo, end } = grow(top, lines[top]!, (text) => prompt.includes(text));
-  return echo.length >= MIN_ECHO_TAIL && prompt.endsWith(echo) ? end : undefined;
+  return undefined;
 }
 
 /**
@@ -286,14 +313,15 @@ function promptEchoEnd(lines: string[], sent: string): number | undefined {
  *
  * Without `after` (a new pane, before any prompt, so no model output exists yet) any line may
  * carry it. After a prompt, the evidence must show the model never ran, counted from the
- * pane's echo of the prompt: for Codex and Claude Code the first line after it is that CLI's
- * own error line carrying the message; for grok and Cursor the message is the whole turn,
- * alone before the composer. Any model output first, a screen without the echo, or a CLI with
- * neither rule is never read as a quota error.
+ * pane's echo of the prompt below the screen it showed before (`after.before`): for Codex and
+ * Claude Code the first line after the echo is that CLI's own error line carrying the message;
+ * for grok and Cursor the whole turn is the CLI's quota message, alone before the composer.
+ * Any model output first, a screen without the echo where it belongs, or a CLI with neither
+ * rule is never read as a quota error.
  */
 export function detectQuota(
   text: string,
-  after?: { sent: string; kind: string },
+  after?: { sent: string; kind: string; before: string },
 ): string | undefined {
   const lines = text.split("\n");
   if (!after) {
@@ -306,7 +334,7 @@ export function detectQuota(
   const marker = ERROR_MARKER[after.kind];
   const composer = COMPOSER_START[after.kind];
   if (!marker && !composer) return undefined;
-  const echoEnd = promptEchoEnd(lines, after.sent);
+  const echoEnd = promptEchoEnd(lines, after.sent, after.before);
   if (echoEnd === undefined) return undefined;
   const rest = lines.slice(echoEnd + 1);
   if (marker) {
@@ -325,7 +353,16 @@ export function detectQuota(
   ) {
     return undefined;
   }
-  return quotaLine(turn[0]!, turn[1]);
+  const message = turn
+    .map((line) =>
+      line
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .join(" ")
+    .toLowerCase();
+  return BARE_QUOTA_MESSAGE.test(message) ? quotaLine(turn[0]!, turn[1]) : undefined;
 }
 
 export function quotaReason(kind: string, label: string): string {

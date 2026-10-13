@@ -453,23 +453,28 @@ At launch, `run` watches for the CLI's own quota or usage-limit message:
 
 Before the prompt, no model output exists yet, so any screen line that starts with the
 message counts. After the prompt, the evidence must show that the model never ran, counted
-from the pane's echo of the prompt. The echo is the first input line (`>`, `›`, `❯`) that
-opens the prompt and goes on to its whole text, or Claude Code's `[Pasted text #N]`
-placeholder; a prompt taller than the pane anchors on its tail at the top of the screen. A
-later line that quotes the prompt, as a writer's summary may, never moves the anchor.
+from the pane's echo of the prompt. `run` reads the pane's screen just before it sends the
+prompt; the echo is an input line (`>`, `›`, `❯`) that opens the prompt and goes on to its
+whole text, or Claude Code's `[Pasted text #N]` placeholder, with only that earlier screen
+above it (at least one line of it). A line that quotes the prompt in a writer's summary has
+the model's output above it, so it is never the anchor; once the real echo scrolls off the
+pane, or the prompt is taller than the pane, no quota decision is made after the prompt.
 
-| CLI          | Evidence after the echo                                                           | Model output (never read) |
-| ------------ | --------------------------------------------------------------------------------- | ------------------------- |
-| Codex        | the next line is its own error line, `■ <message>`                                | `• ...`                   |
-| Claude Code  | the next line is its own error line, `⎿ <message>`                                | `⏺ ...`                   |
-| grok, Cursor | the message is the whole turn: at most 3 lines, alone before the composer is back | anything else             |
+| CLI          | Evidence after the echo                                                   | Model output (never read) |
+| ------------ | ------------------------------------------------------------------------- | ------------------------- |
+| Codex        | the next line is its own error line, `■ <message>`                        | `• ...`                   |
+| Claude Code  | the next line is its own error line, `⎿ <message>`                        | `⏺ ...`                   |
+| grok, Cursor | the whole turn is the quota message, at most 3 lines, before the composer | anything else             |
 
-grok and Cursor draw no error glyph of their own, so for them the turn must hold nothing but
-the message: it opens the turn, takes at most three lines (the message wrapped, plus a hint),
-carries no tool call or other output, and is followed directly by the composer the CLI draws
-again when the turn ends (grok's token line or `│ ❯ │` box, Cursor's `→` line). A writer that
-ran, even briefly, prints a tool call or more output first, so quoting a quota message in its
-summary is never read as a quota error. A screen without the echo is not read either.
+grok and Cursor draw no error glyph of their own, so for them the turn must be the CLI's
+quota message and nothing else: it carries no tool call or other output, is followed directly
+by the composer the CLI draws again (grok's token line or `│ ❯ │` box, Cursor's `→` line), and
+reads as a whole message: an optional `Error:`, the limit phrase, an optional model or HTTP
+429 qualifier, and then only the CLI's own advice (the limit resets, try again, retry,
+upgrade, switch to Auto or another model). A one-line summary that merely starts with the
+phrase, such as `Rate limit exceeded is now retried.`, is not one. A writer that ran, even
+briefly, prints a tool call or more output first, so quoting a quota message in its summary
+is never read as a quota error.
 
 Matched messages are exhausted limits only: `usage limit reached`, `5-hour limit reached`,
 `you've hit your (usage) limit`, `quota exceeded`, `insufficient_quota`,
