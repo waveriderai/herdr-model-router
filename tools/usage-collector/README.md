@@ -18,6 +18,9 @@ crontab -e
 
 ## Known limits
 
-- Claude and Cursor are read through CodexBar's browser-cookie source; if those cookies expire the row shows an `error`.
+- The collector does not pass `--source`, so CodexBar picks the source from its own config (default `auto`). Claude can fall back to the CLI and Cursor can use local app auth, not only browser cookies. Each row's `source` field records what CodexBar used. Pin it in CodexBar's config if you need a fixed source.
+- A provider that fails (non-zero exit, JSON error, no usage windows, timeout) gets an `error` row and `ok: false`. Errors carry an exit code or error kind, never CodexBar's free-text message.
+- Runs are serialized by `~/hmr-usage/collect.lock`; a run that starts while the previous one is active exits without writing. Each provider call times out after 60s (240s worst case, inside the 5-minute interval).
+- `warn_state.json` is written atomically; if it is ever corrupt the collector resets it (a window above 80% may alert once more).
 - Posting `alerts.jsonl` to the room is not wired yet.
 - `gpt-*` "at capacity" errors are provider-side and do not show up here.
