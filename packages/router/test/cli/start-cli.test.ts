@@ -122,4 +122,18 @@ describe("hmr start (CLI)", () => {
     expect(result.err).toContain("HERDR_ENV=1");
     expectNoEffects(box, result);
   });
+
+  it("refuses to start a globally read-only role as a writable coordinator", async () => {
+    for (const [rules, role] of [
+      [RULES + "review gate: codex:gpt-6.1-sol@high\n", "review gate"],
+      [RULES + "design consultant: codex:gpt-6.1-sol@high\n", "design consultant"],
+      [RULES + "# hmr: readonly coordinator\n", "coordinator"],
+    ] as const) {
+      const box = sandbox(rules);
+      const result = await cli(box, ["start", "Inspect only.", "--role", role, "--dry-run"]);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain("read-only globally");
+      expectNoEffects(box, result);
+    }
+  });
 });

@@ -25,10 +25,10 @@ import {
   type ScreenVerdict,
 } from "./readiness.js";
 import {
-  HERDR_KIND,
+  executableOf,
   missingCapabilities,
   nativeLaunch,
-  PROVIDER_EXECUTABLE,
+  herdrKindOf,
   type NativeLaunch,
 } from "./native-argv.js";
 import type { RoutePlan } from "./plan.js";
@@ -123,7 +123,7 @@ export async function preflightLaunches(
         error: `lane ${lane.index}: the router cannot yet confirm that ${lane.provider} is at its ordinary prompt, so it will not launch or prompt it`,
       };
     }
-    const name = PROVIDER_EXECUTABLE[lane.provider];
+    const name = executableOf(lane.provider);
     if (!help.has(lane.provider)) {
       const executable = deps.resolveExecutable(name);
       if (!executable) {
@@ -753,7 +753,7 @@ export async function reviseTask(input: {
         `Nothing was sent. Release it with \`task release ${task.id} --stopped --evidence ...\` and start a new writer task.`,
     };
   }
-  const expectedKind = HERDR_KIND[lane.provider as Provider];
+  const expectedKind = herdrKindOf(lane.provider);
   let live;
   try {
     live = await deps.pane.getAgent(lane.paneId);

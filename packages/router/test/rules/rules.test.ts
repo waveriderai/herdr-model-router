@@ -231,6 +231,7 @@ describe("plan", () => {
       roleNames: ["feature", "refactoring"],
       kind: "single",
       access: "write",
+      forcedReadOnly: false,
       rulesSource: source,
       cwd: "/work/project",
       lanes: [

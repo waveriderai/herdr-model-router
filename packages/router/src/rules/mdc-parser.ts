@@ -16,11 +16,20 @@ export interface InvalidRole {
 
 export interface RuleSet {
   roles: RoleRule[];
+  /**
+   * Role names marked read-only by `# hmr: readonly role[, role...]` directives (normalized).
+   * Plain comments to older parsers, so the annotation is backward compatible.
+   */
+  readOnlyRoles: string[];
   /** Entries whose lanes could not be parsed. Planning such a role fails with this error. */
   invalid: InvalidRole[];
 }
 
 export type ParseRulesResult = { ok: true; rules: RuleSet } | { ok: false; error: string };
+
+/** `# hmr: readonly design consultant, review gate` (case-insensitive keyword). */
+const HMR_DIRECTIVE = /^\s*#\s*hmr:/i;
+const READONLY_BODY = /^readonly\s+(.+)$/i;
 
 /** Role names compare case-insensitively with collapsed whitespace. */
 export function normalizeRoleName(name: string): string {
@@ -49,8 +58,28 @@ export function parseRules(text: string): ParseRulesResult {
   const roles: RoleRule[] = [];
   const invalid: InvalidRole[] = [];
   const definedAt = new Map<string, number>();
+  const readOnlyRoles = new Set<string>();
   for (let index = start; index < lines.length; index += 1) {
     const lineNumber = index + 1;
+    if (HMR_DIRECTIVE.test(lines[index]!)) {
+      // Drop a trailing `# comment` first, so it never becomes part of a role name.
+      const body = lines[index]!.replace(HMR_DIRECTIVE, "")
+        .replace(/\s+#.*$/, "")
+        .trim();
+      const directive = READONLY_BODY.exec(body);
+      if (!directive) {
+        return {
+          ok: false,
+          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]"`,
+        };
+      }
+      const names = directive[1]!.split(",").map(normalizeRoleName);
+      if (names.some((name) => name === "")) {
+        return { ok: false, error: `line ${lineNumber}: empty role name in readonly directive` };
+      }
+      names.forEach((name) => readOnlyRoles.add(name));
+      continue;
+    }
     const line = lines[index]!.replace(/\s+#.*$/, "").trim();
     if (line === "" || line.startsWith("#")) continue;
     // The separator is the first colon followed by whitespace; descriptors use `provider:model`.
@@ -84,5 +113,5 @@ export function parseRules(text: string): ParseRulesResult {
     if (error) invalid.push({ line: lineNumber, names, error });
     else roles.push({ names, lanes, line: lineNumber });
   }
-  return { ok: true, rules: { roles, invalid } };
+  return { ok: true, rules: { roles, invalid, readOnlyRoles: [...readOnlyRoles] } };
 }

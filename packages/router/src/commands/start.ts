@@ -210,6 +210,7 @@ export function coordinatorPrompt(input: {
 
 /** The coordinator's own lane, launched with ordinary permissions: it must run HMR. */
 function controlPlan(plan: RoutePlan): RoutePlan {
+  if (plan.forcedReadOnly) throw new Error(`role "${plan.role}" is read-only globally`);
   return { ...plan, access: "write" };
 }
 
@@ -246,6 +247,12 @@ export async function executeStart(
     return refused(
       `Role "${plan.role}" is a ${plan.lanes.length}-lane panel; a coordinator is exactly one session.`,
       { code: "coordinator-panel" },
+    );
+  }
+  if (plan.forcedReadOnly) {
+    return refused(
+      `Role "${plan.role}" is read-only globally, but a coordinator must run with ordinary permissions. Nothing was started.`,
+      { code: "coordinator-read-only" },
     );
   }
   const lane = plan.lanes[0]!;

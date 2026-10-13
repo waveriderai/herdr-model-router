@@ -29,6 +29,8 @@ export interface RoutePlan {
   /** `panel`: more than one lane. Every lane runs; it is not a fallback list. */
   kind: "single" | "panel";
   access: Access;
+  /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
+  forcedReadOnly: boolean;
   rulesSource: RulesSource;
   policySource?: string;
   /** SHA-256 of the policy text this plan was made from. */
@@ -38,6 +40,12 @@ export interface RoutePlan {
   notes: string[];
 }
 
+/**
+ * Roles that are read-only everywhere, whatever the rules file or a project policy says: the
+ * design consultant writes specs, not code, and the review gate only judges.
+ */
+export const BUILTIN_READ_ONLY_ROLES = ["design consultant", "review gate"] as const;
+
 export type PlanRefusalCode =
   | "unknown-role"
   | "invalid-rule"
@@ -45,7 +53,8 @@ export type PlanRefusalCode =
   | "invalid-parent"
   | "provider-not-allowed"
   | "pin-conflict"
-  | "panel-writer-conflict";
+  | "panel-writer-conflict"
+  | "readonly-writer-conflict";
 
 export interface PlanRefusal {
   ok: false;
@@ -178,10 +187,23 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
       `project policy lists panel role "${role}" as a writer, but panels are read-only`,
     );
   }
+  const globalReadOnly = [...BUILTIN_READ_ONLY_ROLES, ...(input.rules.readOnlyRoles ?? [])];
+  const forcedReadOnly = found.names.some((name) => globalReadOnly.includes(name));
+  // A project policy only tightens: it cannot make a globally read-only role a writer.
+  if (forcedReadOnly && namedWriter) {
+    return refuse(
+      "readonly-writer-conflict",
+      `project policy lists role "${role}" as a writer, but it is read-only globally (rules file or built-in); a policy can only tighten access`,
+    );
+  }
   const access: Access =
-    kind === "panel" || input.readOnly || (writerRoles !== undefined && !namedWriter)
+    kind === "panel" ||
+    forcedReadOnly ||
+    input.readOnly ||
+    (writerRoles !== undefined && !namedWriter)
       ? "read"
       : "write";
+  const notes = forcedReadOnly ? [`role "${role}" is read-only globally`] : [];
 
   return {
     ok: true,
@@ -189,12 +211,13 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     roleNames: found.names,
     kind,
     access,
+    forcedReadOnly,
     rulesSource: input.rulesSource,
     ...(input.policySource ? { policySource: input.policySource } : {}),
     ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),
     cwd: input.cwd,
     lanes,
-    notes: [],
+    notes,
   };
 }
 

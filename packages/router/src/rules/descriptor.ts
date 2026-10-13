@@ -1,21 +1,28 @@
 import { z } from "zod";
 import type { ReasoningEffort } from "../domain/model-profile.js";
-
-/** Native CLIs a lane can run on. `grok` is xAI's own grok CLI, not Cursor's Grok selector. */
-export const ProviderSchema = z.enum(["grok", "codex", "claude", "cursor", "opencode"]);
-export type Provider = z.infer<typeof ProviderSchema>;
+import { providerEntry, providerIds } from "./provider-registry.js";
 
 /**
- * Efforts each native CLI accepts as a flag. Cursor and OpenCode have no effort flag (Cursor
- * encodes reasoning in the model id), so a descriptor for them carries no `@effort`.
+ * Native CLIs a lane can run on: every id in the provider registry (config/providers.json).
+ * `grok` is xAI's own grok CLI, not Cursor's Grok selector.
  */
-export const PROVIDER_EFFORTS: Record<Provider, readonly ReasoningEffort[]> = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "max", "ultra"],
-  grok: ["low", "medium", "high", "xhigh"],
-  cursor: [],
-  opencode: [],
-};
+export type Provider = string;
+
+export const ProviderSchema = z.string().refine((id) => providerIds().includes(id), {
+  message: "unknown provider; it must be listed in config/providers.json",
+});
+
+/**
+ * Efforts each native CLI accepts as a flag, from the registry. Cursor and OpenCode have no
+ * effort flag (Cursor encodes reasoning in the model id), so their descriptors carry no `@effort`.
+ */
+export function providerEfforts(provider: Provider): readonly ReasoningEffort[] {
+  return providerEntry(provider)?.efforts ?? [];
+}
+
+/** Efforts per registered provider, keyed by id (derived from the registry). */
+export const PROVIDER_EFFORTS: Readonly<Record<Provider, readonly ReasoningEffort[]>> =
+  Object.fromEntries(providerIds().map((id) => [id, providerEfforts(id)]));
 
 export const PARENT_ALIASES = ["parent", "auto", "inherit-parent"] as const;
 export type ParentAlias = (typeof PARENT_ALIASES)[number];
@@ -96,6 +103,19 @@ export function parseNativeDescriptor(
   const value = raw.trim();
   const legacy = LEGACY_SELECTORS[value];
   if (legacy) {
+    // The registry is the only source of providers and efforts, legacy selectors included.
+    if (!providerIds().includes(legacy.provider)) {
+      return {
+        ok: false,
+        error: `legacy selector "${value}" maps to provider "${legacy.provider}", which is not in the provider registry`,
+      };
+    }
+    if (!providerEfforts(legacy.provider).includes(legacy.effort)) {
+      return {
+        ok: false,
+        error: `legacy selector "${value}" maps to effort "${legacy.effort}", which ${legacy.provider} does not support in the registry`,
+      };
+    }
     const canonical = canonicalDescriptor(legacy.provider, legacy.model, legacy.effort);
     return {
       ok: true,
@@ -121,7 +141,7 @@ export function parseNativeDescriptor(
   if (!provider.success) {
     return {
       ok: false,
-      error: `unknown provider "${providerRaw}"; use one of ${ProviderSchema.options.join(", ")}`,
+      error: `unknown provider "${providerRaw}"; use one of ${providerIds().join(", ")}`,
     };
   }
   if (isRollingAlias(model!)) {
@@ -132,7 +152,7 @@ export function parseNativeDescriptor(
   }
   let effort: ReasoningEffort | null = null;
   if (effortRaw !== undefined) {
-    const supported = PROVIDER_EFFORTS[provider.data];
+    const supported = providerEfforts(provider.data);
     if (!(supported as readonly string[]).includes(effortRaw)) {
       return {
         ok: false,
