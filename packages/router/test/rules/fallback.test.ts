@@ -188,6 +188,38 @@ describe("quota detection", () => {
       "> When Codex says You've hit your\n  usage limit, switch models.\n  Add tests.\n";
     expect(detectQuota(echoed, sent)).toBeUndefined();
     expect(detectQuota(`${echoed}■ You've hit your usage limit.`, sent)).toBe("hit your limit");
+    // A long prompt that Claude Code collapses still anchors the check.
+    expect(
+      detectQuota(
+        "> [Pasted text #1 +40 lines]\n\n⏺ Claude usage limit reached.",
+        "x\n".repeat(40),
+      ),
+    ).toBe("limit reached");
+    // No echo of the prompt on screen: never read as a quota error.
+    expect(detectQuota("■ You've hit your usage limit.", sent)).toBeUndefined();
+  });
+
+  it("does not mistake a writer that finished and quotes a quota error for one", () => {
+    const sent = "Handle provider errors in the client.";
+    const finished = [
+      "> Handle provider errors in the client.",
+      "",
+      "⏺ Read(src/client.ts)",
+      "  ⎿  Read 120 lines",
+      "⏺ Update(src/client.ts)",
+      "  ⎿  Updated src/client.ts with 14 additions",
+      "⏺ Done. The client now retries when the API answers:",
+      "",
+      "  Rate limit exceeded",
+      "",
+      "  You've hit your usage limit",
+      "",
+    ].join("\n");
+    expect(detectQuota(finished, sent)).toBeUndefined();
+    // Quoted in prose, even right after the prompt, it does not start a line.
+    expect(
+      detectQuota(`> ${sent}\n⏺ Retries now cover "Rate limit exceeded" replies.`, sent),
+    ).toBeUndefined();
   });
 });
 
@@ -205,7 +237,8 @@ function quotaAfterPrompt(herdr: () => FakeHerdr, limited: string[]) {
   return (target: string) => {
     const pane = [...herdr().panes.values()].find((entry) => entry.name === target);
     if (pane?.kind && limited.includes(pane.kind)) {
-      pane.history = `${pane.history ?? ""}${QUOTA[pane.kind as keyof typeof QUOTA]}`;
+      const sent = herdr().prompts.at(-1)!.text;
+      pane.history = `${pane.history ?? ""}> ${sent}\n\n${QUOTA[pane.kind as keyof typeof QUOTA]}`;
       pane.status = "idle";
     }
     return undefined;
@@ -379,6 +412,43 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
     });
     expect(herdr.calls.filter((call) => call[1] === "split")).toHaveLength(1);
     expect(d.store.ownerOf("/work/project")?.taskId).toBe(result.task.id);
+  });
+
+  it("keeps a writer that finished normally and quotes a quota error in its summary", async () => {
+    const herdr: FakeHerdr = fakeHerdr({
+      prompt: (target) => {
+        const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
+        pane.history = [
+          `> ${herdr.prompts.at(-1)!.text}`,
+          "⏺ Update(src/client.ts)",
+          "  ⎿  Updated src/client.ts with 14 additions",
+          "⏺ Done. Requests that fail with",
+          "",
+          "  Rate limit exceeded",
+          "",
+          "  now retry with backoff.",
+          "",
+        ].join("\n");
+        pane.status = "idle";
+        return undefined;
+      },
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Retry provider errors",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    expect(result.ok && result.lanes[0]).toMatchObject({
+      descriptor: "claude:claude-opus-5-5@high",
+      state: "prompted",
+      paneId: "w1:p1",
+    });
+    expect(result.ok && result.lanes[0]?.skipped).toBeUndefined();
+    // The prompt went out once, and the finished writer's pane was not closed.
+    expect(herdr.prompts).toHaveLength(1);
+    expect(herdr.calls.filter((call) => call[1] === "close")).toEqual([]);
   });
 
   it("leaves a lane alone when its prompt only mentions a usage limit, or it has no fallback order", async () => {

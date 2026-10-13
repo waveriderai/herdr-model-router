@@ -135,7 +135,8 @@ review gate: codex:gpt-6.1-sol@high
   there while it has at least 20% quota left. Below that, the account with the most
   remaining quota takes it.
 - `fix-accounts <a>, <b>`: `--phase fix` (a fix after review) runs on whichever of them has
-  more quota. It uses the first model in the role's order that account can run.
+  more quota. It uses the first model in the role's order that account can run. If none of
+  them can run any (the project policy allows none, for example), the plan is refused.
 - `review-only <account>`: that account never runs a writer lane. A writer role that only it
   can run is refused, and its fallback entries on that account are skipped.
 

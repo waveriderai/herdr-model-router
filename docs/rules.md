@@ -447,13 +447,21 @@ policy refuses (`allowedProviders`, a pin) are dropped with a note. `plan` lists
 At launch, `run` watches for the CLI's own quota or usage-limit message:
 
 - on the new pane's screen before the prompt (Claude Code shows a menu with it), and
-- for 20 seconds after the prompt, while the turn ends: when the agent goes idle, the screen,
-  minus the prompt text the router typed, is checked again. A long turn is left alone after the
-  window. The watch runs only when the role has a fallback order.
+- for 20 seconds after the prompt, while the turn ends: when the agent goes idle, the screen
+  is checked again. A long turn is left alone after the window. The watch runs only when the
+  role has a fallback order.
+
+The message must start a screen line (after the CLI's error glyph such as `■` or `⏺`, or an
+`Error:` prefix). After a prompt, it must also come within 3 lines after the pane's echo of
+that prompt (or Claude Code's `[Pasted text #N]` placeholder). A CLI out of quota answers
+before any model output. A writer that worked and then quotes such a message in its summary
+prints it further down, or inside a sentence, and is left alone. A screen without the echo is
+never read as a quota error.
 
 Matched messages are exhausted limits only: `usage limit reached`, `5-hour limit reached`,
-`hit your (usage) limit`, `quota exceeded`, `insufficient_quota`, `rate limit exceeded`,
-`out of credits`, and Codex's `last status: 429` after its own retries. A warning such as
+`you've hit your (usage) limit`, `quota exceeded`, `insufficient_quota`,
+`rate limit exceeded`, `out of credits`, and Codex's
+`stream error: exceeded retry limit, last status: 429`. A warning such as
 `approaching usage limit` and a context-window limit are not.
 
 On a match the router closes that pane, records the model as skipped on the lane (descriptor,
@@ -495,11 +503,11 @@ snapshot time. A role with a policy pin keeps its pinned descriptors.
 
 Directives in the rules file change the choice for writers:
 
-| Directive                         | Effect                                                                                                                                                                                  |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `# hmr: first-version <account>`  | A writer's first version (`--phase first`, the default) runs on this account while it has at least 20% left, or no reading. Below 20%, the account with the most remaining quota wins.  |
-| `# hmr: fix-accounts <a>[, <b>]`  | `--phase fix` (a fix after review) runs on whichever of these has more quota, with the first model in the role's order (line, then fallbacks) that account can run.                     |
-| `# hmr: review-only <account>[,]` | This account never runs a writer lane. A writer role whose model only it runs is refused (`review-only-account`); fallback entries on it are skipped. Read-only roles may still use it. |
+| Directive                         | Effect                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `# hmr: first-version <account>`  | A writer's first version (`--phase first`, the default) runs on this account while it has at least 20% left, or no reading. Below 20%, the account with the most remaining quota wins.                                                                                                                                                             |
+| `# hmr: fix-accounts <a>[, <b>]`  | `--phase fix` (a fix after review) runs on whichever of these has more quota, with the first model in the role's order (line, then fallbacks) that account can run. If none can (for example the project policy allows none of them, or a pin names another account), the plan is refused (`no-fix-account`); a fix never goes to another account. |
+| `# hmr: review-only <account>[,]` | This account never runs a writer lane. A writer role whose model only it runs is refused (`review-only-account`); fallback entries on it are skipped. Read-only roles may still use it.                                                                                                                                                            |
 
 For a single lane, the fallback order becomes: in a fix, the other fix accounts; then the same
 model on its other accounts, by remaining quota; then each `# fallback:` model, on its accounts

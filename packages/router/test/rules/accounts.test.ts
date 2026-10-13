@@ -250,6 +250,44 @@ describe("account choice: the model first, then the account", () => {
     ]);
   });
 
+  it("refuses a fix that no fix account can take instead of handing it to another writer", () => {
+    const cursorOnly = `${DIRECTIVES}cursor writer: cursor:claude-opus-5-5-high\n`;
+    const refusal = {
+      ok: false,
+      code: "no-fix-account",
+      role: "cursor writer",
+      error:
+        '--phase fix runs only on the fix accounts (# hmr: fix-accounts claude, grok), and none of them can run a model in role "cursor writer"\'s order under the rules and project policy; nothing was planned',
+    };
+    // The project policy allows Cursor only, so neither Claude Code nor grok can take the fix.
+    expect(
+      place("cursor writer", {
+        text: cursorOnly,
+        phase: "fix",
+        policy: { allowedProviders: ["cursor"] },
+        used: { claude: 0, grok: 0, cursor: 0 },
+      }),
+    ).toEqual(refusal);
+    // A pin on a non-fix account is refused the same way.
+    expect(
+      place("cursor writer", {
+        text: cursorOnly,
+        phase: "fix",
+        policy: { pins: { "cursor writer": "cursor:claude-opus-5-5-high" } },
+      }),
+    ).toEqual(refusal);
+    // Without the policy, the same role's fix goes to Claude Code.
+    expect(route(place("cursor writer", { text: cursorOnly, phase: "fix" }))[0]).toEqual([
+      "claude:claude-opus-5-5@high",
+    ]);
+    // A first version is not a fix: Cursor still takes it under the Cursor-only policy.
+    expect(
+      route(
+        place("cursor writer", { text: cursorOnly, policy: { allowedProviders: ["cursor"] } }),
+      )[0],
+    ).toEqual(["cursor:claude-opus-5-5-high"]);
+  });
+
   it("never gives a writer lane to a review-only account", () => {
     const feature = place("feature", { used: {} });
     expect(feature.ok && feature.notes).toContain(

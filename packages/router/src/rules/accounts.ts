@@ -93,6 +93,10 @@ export function assignAccounts(plan: RoutePlan, input: AccountInput): RoutePlan 
       };
     }
     if (pinned) {
+      const fixWriter = writer && plan.lanes.length === 1 && input.phase === "fix";
+      if (fixWriter && rules.fixAccounts && !rules.fixAccounts.includes(own.provider)) {
+        return noFixAccount(plan.role, rules.fixAccounts);
+      }
       lanes.push(lane);
       continue;
     }
@@ -116,9 +120,7 @@ export function assignAccounts(plan: RoutePlan, input: AccountInput): RoutePlan 
         chosen = fixOptions[0]!;
         reason = `fix after review goes to the fix account with the most remaining quota (${fixOptions.map((option) => label(option.provider)).join(", ")})`;
       } else {
-        notes.push(
-          `no model in role "${plan.role}"'s order runs on a fix account (${rules.fixAccounts.join(", ")}); the account with the most remaining quota is used`,
-        );
+        return noFixAccount(plan.role, rules.fixAccounts);
       }
     }
     if (!reason && writer && input.phase === "first" && rules.firstVersion) {
@@ -202,6 +204,16 @@ export function assignAccounts(plan: RoutePlan, input: AccountInput): RoutePlan 
     notes.push("account choice skipped: a project policy pin fixes this role's descriptors");
   }
   return { ...plan, lanes, fallbacks, notes };
+}
+
+/** A fix after review runs only on a fix account; with none usable, nothing is planned. */
+function noFixAccount(role: string, fixAccounts: string[]): PlanRefusal {
+  return {
+    ok: false,
+    code: "no-fix-account",
+    role,
+    error: `--phase fix runs only on the fix accounts (# hmr: fix-accounts ${fixAccounts.join(", ")}), and none of them can run a model in role "${role}"'s order under the rules and project policy; nothing was planned`,
+  };
 }
 
 function descriptorOf(lane: PlannedLane): NativeDescriptor {

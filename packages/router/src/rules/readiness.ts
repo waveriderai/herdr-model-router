@@ -164,40 +164,92 @@ export function detectDialog(text: string): { dialog: string; evidence: string }
 }
 
 /**
- * What the native CLIs print when an account is out of quota or past its usage limit, in
- * compact form (see compactScreen). Each is an exhausted limit, never a warning such as
+ * The line a native CLI prints when its account is out of quota or past its usage limit,
+ * matched from the start of a screen line (after the CLI's error glyph or `Error:` prefix),
+ * lowercased with spaces collapsed. Each is an exhausted limit, never a warning such as
  * "approaching usage limit", and never a context-window limit.
  */
-const QUOTA_PATTERNS: { label: string; pattern: string | RegExp }[] = [
+const QUOTA_LINES: { label: string; pattern: RegExp }[] = [
   // Claude Code: "Claude usage limit reached", "5-hour limit reached ∙ resets 3pm".
-  { label: "limit reached", pattern: /(?:usage|hour|daily|weekly|monthly|session)limitreached/ },
+  {
+    label: "limit reached",
+    pattern:
+      /^(?:claude )?(?:usage|\d+-hour|session|daily|weekly|opus weekly|monthly) limit reached\b/,
+  },
   // Claude Code "You've hit your limit"; Codex and Cursor "You've hit your usage limit".
-  { label: "hit your limit", pattern: /hityour(?:usage|rate)?limit/ },
+  { label: "hit your limit", pattern: /^you'?ve hit your (?:usage |rate )?limit\b/ },
   // OpenAI and xAI API errors surfaced by Codex and grok.
-  { label: "quota exceeded", pattern: /quotaexceeded|exceededyourcurrentquota|insufficient_quota/ },
-  { label: "rate limit exceeded", pattern: "ratelimitexceeded" },
-  { label: "out of credits", pattern: /(?:outof|runoutof|nomore)credits/ },
-  // Codex after its own retries: "exceeded retry limit, last status: 429 Too Many Requests".
-  { label: "HTTP 429 after retries", pattern: "laststatus:429" },
+  {
+    label: "quota exceeded",
+    pattern: /^(?:quota exceeded|you exceeded your current quota|insufficient_quota)\b/,
+  },
+  { label: "rate limit exceeded", pattern: /^rate limit exceeded\b/ },
+  { label: "out of credits", pattern: /^(?:you have )?(?:run out of|no more|out of) credits\b/ },
+  // Codex after its own retries.
+  {
+    label: "HTTP 429 after retries",
+    pattern: /^stream error: exceeded retry limit, last status: 429\b/,
+  },
 ];
 
+/** A CLI's error glyph, box border, or `Error:` prefix in front of its message. */
+const ERROR_PREFIX = /^[\s■⎿⏺●✗✘×!›>│┃|]*(?:(?:api )?error:\s*)?/i;
+
+/** How many screen lines may separate the echoed prompt from the CLI's quota error. */
+const QUOTA_AFTER_ECHO_LINES = 3;
+
+function quotaLine(line: string, next = ""): string | undefined {
+  const normalize = (value: string) =>
+    value
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(ERROR_PREFIX, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  const alone = normalize(line);
+  if (alone === "") return undefined;
+  // A narrow pane wraps the message: also read it joined with the next line.
+  const joined = `${alone} ${next.replace(/\s+/g, " ").trim().toLowerCase()}`;
+  return QUOTA_LINES.find(({ pattern }) => pattern.test(alone) || pattern.test(joined))?.label;
+}
+
 /**
- * The CLI's own quota or usage-limit message on this screen, as a short label, if any. `sent`
- * is the prompt the router typed: the pane echoes it, so its text is removed first and a task
- * that merely mentions a usage limit is not mistaken for one.
+ * The CLI's own quota or usage-limit error on this screen, as a short label, if any.
+ *
+ * Without `sent` (a new pane, before any prompt) any line may carry it. With `sent`, the
+ * prompt the router typed, the error must start a line within a few lines after the pane's
+ * echo of that prompt: a CLI out of quota answers before any model output, while a writer
+ * that ran and merely quotes such a message prints it after its work. A screen where the echo
+ * cannot be found is never read as a quota error.
  */
 export function detectQuota(text: string, sent?: string): string | undefined {
-  let compact = compactScreen(text);
-  if (sent) {
-    const echoes = [sent, ...sent.split("\n")]
-      .map(compactScreen)
-      .filter((echo) => echo.length >= 6)
-      .sort((a, b) => b.length - a.length);
-    for (const echo of echoes) compact = compact.split(echo).join(" ");
+  const lines = text.split("\n");
+  let from = 0;
+  let to = lines.length;
+  if (sent !== undefined) {
+    const prompt = compactScreen(sent);
+    const isEcho = (line: string) => {
+      const compact = compactScreen(line.replace(ERROR_PREFIX, ""));
+      return /^\[pastedtext#\d+/.test(compact) || (compact.length >= 6 && prompt.includes(compact));
+    };
+    let echo = -1;
+    lines.forEach((line, index) => {
+      if (isEcho(line)) echo = index;
+    });
+    if (echo < 0) return undefined;
+    from = echo + 1;
+    let seen = 0;
+    to = from;
+    while (to < lines.length && seen < QUOTA_AFTER_ECHO_LINES) {
+      if (lines[to]!.trim() !== "") seen += 1;
+      to += 1;
+    }
   }
-  return QUOTA_PATTERNS.find(({ pattern }) =>
-    typeof pattern === "string" ? compact.includes(pattern) : pattern.test(compact),
-  )?.label;
+  for (let index = from; index < to; index += 1) {
+    const label = quotaLine(lines[index]!, lines[index + 1]);
+    if (label) return label;
+  }
+  return undefined;
 }
 
 export function quotaReason(kind: string, label: string): string {

@@ -68,7 +68,8 @@ export type PlanRefusalCode =
   | "panel-writer-conflict"
   | "readonly-writer-conflict"
   | "bypass-read-only"
-  | "review-only-account";
+  | "review-only-account"
+  | "no-fix-account";
 
 export interface PlanRefusal {
   ok: false;
