@@ -31,6 +31,8 @@ export interface RoutePlan {
   access: Access;
   /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
   forcedReadOnly: boolean;
+  /** The rules file lists more than one lane, even if parent-alias copies were skipped. */
+  definedAsPanel: boolean;
   rulesSource: RulesSource;
   policySource?: string;
   /** SHA-256 of the policy text this plan was made from. */
@@ -172,7 +174,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
   }
 
   const allowed = input.policy?.allowedProviders;
-  const blocked = allowed ? launched.find((lane) => !allowed.includes(lane.provider)) : undefined;
+  const blocked = allowed ? lanes.find((lane) => !allowed.includes(lane.provider)) : undefined;
   if (blocked) {
     return refuse(
       "provider-not-allowed",
@@ -180,9 +182,11 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     );
   }
 
-  const actual = launched.map((lane) => lane.descriptor);
+  // Policy checks run on every resolved lane, before dedupe: a skipped copy changes nothing a
+  // pin or allowedProviders already approved.
+  const actual = lanes.map((lane) => lane.descriptor);
   for (const { key, pin } of pinsFor(input.policy, found.names)) {
-    const expected = pin.length === 1 ? launched.map(() => pin[0]!) : pin;
+    const expected = pin.length === 1 ? lanes.map(() => pin[0]!) : pin;
     const mismatch =
       expected.length !== actual.length
         ? 0
@@ -235,6 +239,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     kind,
     access,
     forcedReadOnly,
+    definedAsPanel,
     rulesSource: input.rulesSource,
     ...(input.policySource ? { policySource: input.policySource } : {}),
     ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),

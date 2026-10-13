@@ -171,4 +171,32 @@ describe("read-only roles", () => {
     const out = formatPlan(result, "footer");
     expect(out.match(/read-only globally/g)).toHaveLength(1);
   });
+
+  it("checks pins and allowed providers against every resolved lane, before dedupe", () => {
+    const text = "reviewers: inherit-parent, codex:gpt-6.1-sol@high\n";
+    const pinned = plan(text, "reviewers", {
+      parent: "codex:gpt-6.1-sol@high",
+      policy: {
+        version: 1,
+        pins: { reviewers: ["codex:gpt-6.1-sol@high", "codex:gpt-6.1-sol@high"] },
+      },
+    });
+    expect(pinned.ok && pinned.lanes.length).toBe(1);
+    const blocked = plan(text, "reviewers", {
+      parent: "codex:gpt-6.1-sol@high",
+      policy: { version: 1, allowedProviders: ["claude"] },
+    });
+    expect(!blocked.ok && blocked.code).toBe("provider-not-allowed");
+  });
+
+  it("marks a collapsed panel as defined as a panel", () => {
+    const result = plan("coordinator: inherit-parent, codex:gpt-6.1-sol@high\n", "coordinator", {
+      parent: "codex:gpt-6.1-sol@high",
+    });
+    expect(result.ok && [result.kind, result.definedAsPanel, result.access]).toEqual([
+      "single",
+      true,
+      "read",
+    ]);
+  });
 });

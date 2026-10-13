@@ -232,6 +232,7 @@ describe("plan", () => {
       kind: "single",
       access: "write",
       forcedReadOnly: false,
+      definedAsPanel: false,
       rulesSource: source,
       cwd: "/work/project",
       lanes: [

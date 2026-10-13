@@ -53,7 +53,10 @@ describe("parent aliases in a workflow (R4)", () => {
       "claude:claude-opus-5-5@high",
     ]);
     expect(h.herdr.prompts.map((prompt) => prompt.text).join("\n")).toContain(
-      "Do not re-run a check that result already marks pass",
+      "Do not re-run a check that is marked pass",
+    );
+    expect(h.herdr.prompts.map((prompt) => prompt.text).join("\n")).toContain(
+      '"command":"cat greeting.txt"',
     );
     // The user's rules file is never rewritten.
     expect(readFileSync(h.rulesFile, "utf8")).toBe(rulesBefore);
