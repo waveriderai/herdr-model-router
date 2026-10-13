@@ -13,7 +13,7 @@ Rows contain provider, plan, source, window, used %, reset time and error only. 
 ```
 mkdir -p ~/hmr-usage/bin && cp tools/usage-collector/collect.py ~/hmr-usage/bin/
 crontab -e
-*/5 * * * * /usr/bin/python3 /Users/waverider/hmr-usage/bin/collect.py >>/Users/waverider/hmr-usage/collect.log 2>&1
+*/5 * * * * /usr/bin/python3 "$HOME/hmr-usage/bin/collect.py" >>"$HOME/hmr-usage/collect.log" 2>&1
 ```
 
 ## Known limits
