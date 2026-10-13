@@ -247,6 +247,7 @@ describe("plan", () => {
           notes: [],
         },
       ],
+      fallbacks: [],
       notes: [],
     });
   });

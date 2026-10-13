@@ -743,3 +743,59 @@ describe("router home inside the checkout (KTD11)", () => {
     }
   });
 });
+
+describe("account choice from the usage collector (AGENT-200)", () => {
+  function withUsage(box: Sandbox, used: Record<string, number>) {
+    const rules = path.join(box.home, ".cursor/rules/pstack-models.mdc");
+    writeFileSync(
+      rules,
+      readFileSync(rules, "utf8").replace(
+        "# One line per role.",
+        "# hmr: first-version cursor\n# hmr: fix-accounts claude, grok\n# hmr: review-only codex\n# One line per role.",
+      ) + "# fallback: grok:grok-4.7@high\n",
+    );
+    mkdirSync(path.join(box.home, "hmr-usage"), { recursive: true });
+    writeFileSync(
+      path.join(box.home, "hmr-usage/usage.json"),
+      JSON.stringify({
+        updated: new Date().toISOString(),
+        ok: true,
+        rows: Object.entries(used).map(([provider, pct]) => ({
+          provider,
+          window: "Weekly",
+          used_pct: pct,
+          error: null,
+        })),
+      }),
+    );
+  }
+
+  it("previews a fix on the fix account with the most quota, reading only files", async () => {
+    const box = sandbox();
+    withUsage(box, { claude: 90, grok: 20, cursor: 0 });
+    // The fixture's last role is "cursor reader"; the appended fallback line belongs to it.
+    const first = await cli(box, ["plan", "--role", "bug-fix", "--json"]);
+    expect(first.code).toBe(0);
+    expect(JSON.parse(first.out).lanes[0].descriptor).toBe("cursor:claude-opus-5-5-xhigh");
+    const fix = await cli(box, ["plan", "--role", "bug-fix", "--phase", "fix", "--json"]);
+    expect(fix.code).toBe(0);
+    // bug-fix has no Grok model, so its fix stays on Claude Code despite grok's quota.
+    expect(JSON.parse(fix.out).lanes[0].descriptor).toBe("claude:claude-opus-5-5@xhigh");
+    expect(JSON.parse(fix.out).notes).toContain(
+      `usage: ${path.join(box.home, "hmr-usage/usage.json")} as of ${JSON.parse(readFileSync(path.join(box.home, "hmr-usage/usage.json"), "utf8")).updated}`,
+    );
+    expectNoEffects(box, fix);
+    const bad = await cli(box, ["plan", "--role", "bug-fix", "--phase", "second"]);
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain("--phase must be one of first, fix");
+  });
+
+  it("refuses a writer role that only a review-only account can run", async () => {
+    const box = sandbox();
+    withUsage(box, {});
+    const result = await cli(box, ["run", "Build it", "--role", "feature", "--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(`${result.out}${result.err}`).toContain("Refused (review-only-account)");
+    expectNoEffects(box, result);
+  });
+});

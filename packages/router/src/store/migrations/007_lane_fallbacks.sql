@@ -1,0 +1,5 @@
+-- Quota fallback (`# fallback:` in the rules file). When a lane's model hits a quota or usage
+-- limit, the lane moves to the next model in its role's fallback order. `skipped_json` keeps
+-- every model the lane left behind, in order: its descriptor, why it was skipped, and the pane
+-- and attempt it used, so attempts recorded before the switch stay attributable. The column
+-- itself is added by database.ts, only when missing.

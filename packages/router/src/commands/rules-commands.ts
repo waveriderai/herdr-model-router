@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
 import os from "node:os";
+import { assignAccounts, type Phase } from "../rules/accounts.js";
 import { parseRules, type RuleSet } from "../rules/mdc-parser.js";
+import { readUsage } from "../rules/usage-snapshot.js";
 import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
-import { planRoute, roleNames, type PlanRefusal, type RoutePlan } from "../rules/plan.js";
+import {
+  planRoute,
+  roleNames,
+  type PlannedLane,
+  type PlanRefusal,
+  type RoutePlan,
+} from "../rules/plan.js";
 import { nativeLaunch, permissionProfile } from "../rules/native-argv.js";
 import {
   findProjectRoot,
@@ -27,6 +35,8 @@ export interface RulesLocation {
   home: string;
   /** --rules */
   rulesFlag?: string;
+  /** The usage collector's usage.json (see usage-snapshot.ts); unset reads no quota numbers. */
+  usageFile?: string;
 }
 
 export interface LoadedRules {
@@ -90,6 +100,15 @@ export function executeRoles(location: RulesLocation): CommandResult {
       selectors: role.lanes.map((lane) =>
         lane.kind === "parent" ? lane.alias : lane.descriptor.canonical,
       ),
+      fallbacks: role.fallbacks.map((entry) =>
+        !entry.ok
+          ? { selector: entry.selector, error: entry.error }
+          : {
+              selector: entry.selector,
+              resolved:
+                entry.lane.kind === "parent" ? entry.lane.alias : entry.lane.descriptor.canonical,
+            },
+      ),
     })),
     ...rules.invalid.map((role) => ({ names: role.names, line: role.line, error: role.error })),
   ].sort((a, b) => a.line - b.line);
@@ -98,7 +117,18 @@ export function executeRoles(location: RulesLocation): CommandResult {
     ...roles.map((role) =>
       "error" in role
         ? `  ${role.names.join(", ")}: INVALID (${role.error})`
-        : `  ${role.names.join(", ")}: ${role.selectors.join(", ")}${role.kind === "panel" ? `  [panel, ${role.lanes} lanes]` : ""}`,
+        : [
+            `  ${role.names.join(", ")}: ${role.selectors.join(", ")}${role.kind === "panel" ? `  [panel, ${role.lanes} lanes]` : ""}`,
+            ...(role.fallbacks.length > 0
+              ? [
+                  `    fallback on quota: ${role.fallbacks
+                    .map((entry) =>
+                      "error" in entry ? `${entry.selector} (unusable)` : entry.resolved,
+                    )
+                    .join(", then ")}`,
+                ]
+              : []),
+          ].join("\n"),
     ),
   ];
   return {
@@ -114,6 +144,8 @@ export interface PlanRequest {
   readOnly?: boolean;
   /** The per-run opt-in to the CLI's full permission bypass (`run` only). */
   bypassPermissions?: boolean;
+  /** A writer's first version (default) or its fix after review; picks the account. */
+  phase?: Phase;
 }
 
 /** The pure route preview behind `plan` and `run --dry-run` in rules mode. */
@@ -150,7 +182,15 @@ export function previewPlan(
     ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   if (!plan.ok) return { ok: false, result: refusal(plan) };
-  return { ok: true, plan, loaded: loaded.loaded };
+  // The model is chosen; now the account that runs it. Reads the usage file only.
+  const placed = assignAccounts(plan, {
+    ...(loaded.loaded.rules.accounts ? { accounts: loaded.loaded.rules.accounts } : {}),
+    phase: request.phase ?? "first",
+    usage: location.usageFile ? readUsage(location.usageFile) : undefined,
+    ...(loaded.loaded.policy ? { policy: loaded.loaded.policy } : {}),
+  });
+  if (!placed.ok) return { ok: false, result: refusal(placed) };
+  return { ok: true, plan: placed, loaded: loaded.loaded };
 }
 
 export function refusal(plan: PlanRefusal): CommandResult {
@@ -164,8 +204,8 @@ export function refusal(plan: PlanRefusal): CommandResult {
 }
 
 /** Each lane's exact native argv, or why it cannot run. */
-export function laneLaunches(plan: RoutePlan) {
-  return plan.lanes.map((lane) => {
+export function laneLaunches(plan: RoutePlan, lanes: PlannedLane[] = plan.lanes) {
+  return lanes.map((lane) => {
     const launch = nativeLaunch(lane, permissionProfile(plan));
     return launch.ok
       ? { ok: true as const, index: lane.index, kind: launch.launch.kind, argv: launch.launch.argv }
@@ -189,6 +229,14 @@ export function formatPlan(plan: RoutePlan, footer: string): string {
         ...lane.notes.map((note) => `  note: ${note}`),
       ];
     }),
+    ...laneLaunches(plan, plan.fallbacks).flatMap((launch, position) => {
+      const lane = plan.fallbacks[position]!;
+      return [
+        `Fallback ${position + 1} on quota or usage limit: ${lane.descriptor}`,
+        launch.ok ? `  argv: ${launch.argv.join(" ")}` : `  cannot launch: ${launch.error}`,
+        ...lane.notes.map((note) => `  note: ${note}`),
+      ];
+    }),
     ...plan.notes.map((note) => `note: ${note}`),
     footer,
   ].join("\n");
@@ -199,7 +247,13 @@ export const PREVIEW_FOOTER =
 
 export function planJson(plan: RoutePlan, extra: Record<string, unknown> = {}) {
   const launches = laneLaunches(plan);
-  return { ...plan, launches, launchable: launches.every((launch) => launch.ok), ...extra };
+  return {
+    ...plan,
+    launches,
+    fallbackLaunches: laneLaunches(plan, plan.fallbacks),
+    launchable: launches.every((launch) => launch.ok),
+    ...extra,
+  };
 }
 
 export function executePlan(location: RulesLocation, request: PlanRequest): CommandResult {

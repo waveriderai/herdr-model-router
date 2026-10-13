@@ -67,6 +67,8 @@ import {
 } from "./commands/start.js";
 import type { CoordinatorRepository } from "./store/coordinator-repository.js";
 import { isHerdrEnv } from "./launch/readiness.js";
+import { PHASES, type Phase } from "./rules/accounts.js";
+import { defaultUsagePath } from "./rules/usage-snapshot.js";
 import {
   executeTaskClose,
   executeTaskRecover,
@@ -95,6 +97,15 @@ export interface CliOptions {
 }
 
 const ROUTING_MODES = ["rules", "semantic", "quota"] as const;
+const PHASE_HELP =
+  "first (a writer's first version, default) or fix (a writer's fix after review); picks the account";
+
+function phaseFlag(value: string): Phase {
+  if (!(PHASES as readonly string[]).includes(value)) {
+    throw new Error(`--phase must be one of ${PHASES.join(", ")}`);
+  }
+  return value as Phase;
+}
 type RoutingModeFlag = (typeof ROUTING_MODES)[number];
 
 function effortDepsFrom(deps: RunDeps): EffortDeps {
@@ -208,6 +219,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     )
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--read-only", "Plan a single-lane role as read-only", false)
+    .option("--phase <phase>", PHASE_HELP, "first")
     .option("--json", "Emit JSON", false)
     .action(
       (flags: {
@@ -215,16 +227,23 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         parent?: string;
         rules?: string;
         readOnly?: boolean;
+        phase: string;
         json?: boolean;
       }) =>
         guarded(
           () =>
             executePlan(
-              { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
+              {
+                cwd,
+                home: userHome(env),
+                usageFile: defaultUsagePath(env, userHome(env)),
+                ...(flags.rules ? { rulesFlag: flags.rules } : {}),
+              },
               {
                 role: flags.role,
                 ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
                 ...(flags.readOnly ? { readOnly: true } : {}),
+                phase: phaseFlag(flags.phase),
               },
             ),
           flags.json,
@@ -249,6 +268,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
       "For this run only, launch a writer with its CLI's full approval and sandbox bypass (rules and semantic modes)",
       false,
     )
+    .option("--phase <phase>", PHASE_HELP, "first")
     .option("--dry-run", "Print the route without launching", false)
     .option("--json", "Emit JSON for plugins", false)
     .option("--session <id>", "Route the next phase of an earlier router session (quota mode)")
@@ -279,6 +299,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           rules?: string;
           readOnly?: boolean;
           dangerouslyBypassPermissions?: boolean;
+          phase: string;
         },
       ) => {
         const mode = (flags.routingMode ?? "rules") as RoutingModeFlag;
@@ -310,6 +331,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
                   ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
                   ...(flags.readOnly ? { readOnly: true } : {}),
                   ...(flags.dangerouslyBypassPermissions ? { bypassPermissions: true } : {}),
+                  phase: phaseFlag(flags.phase),
                 },
                 createRulesRunDeps(env, cwd, flags.rules, options.rulesOverrides),
               ),
@@ -610,7 +632,12 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         guarded(
           () =>
             executeWorkflowPlan(
-              { cwd, home: userHome(env), ...(flags.rules ? { rulesFlag: flags.rules } : {}) },
+              {
+                cwd,
+                home: userHome(env),
+                usageFile: defaultUsagePath(env, userHome(env)),
+                ...(flags.rules ? { rulesFlag: flags.rules } : {}),
+              },
               flags.brief,
               flags.parent,
               flags.skillsRoot,

@@ -1,4 +1,5 @@
 import { isHerdrEnv } from "../launch/readiness.js";
+import type { Phase } from "../rules/accounts.js";
 import type { Provider } from "../rules/descriptor.js";
 import { dispatchPlan, type DispatchDeps, type LaneOutcome } from "../rules/dispatch.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
@@ -23,6 +24,8 @@ export interface RulesRunRequest {
   readOnly?: boolean;
   /** The explicit per-run opt-in to each CLI's full permission bypass. */
   bypassPermissions?: boolean;
+  /** A writer's first version (default) or its fix after review; picks the account. */
+  phase?: Phase;
   dryRun: boolean;
 }
 
@@ -83,6 +86,7 @@ export async function executeRulesRun(
     ...(request.parent !== undefined ? { parent: request.parent } : {}),
     ...(request.readOnly ? { readOnly: true } : {}),
     ...(request.bypassPermissions ? { bypassPermissions: true } : {}),
+    ...(request.phase ? { phase: request.phase } : {}),
   });
   if (!preview.ok) return preview.result;
   const plan = { ...preview.plan, notes: [...preview.plan.notes, ...notes] };
@@ -103,6 +107,16 @@ export async function executeRulesRun(
   }
   const shared = deps.sharedProviders?.() ?? [];
   const sharedLane = plan.lanes.find((lane) => shared.includes(lane.provider));
+  const sharedFallbacks = plan.fallbacks.filter((lane) => shared.includes(lane.provider));
+  if (sharedFallbacks.length > 0) {
+    plan.fallbacks = plan.fallbacks.filter((lane) => !shared.includes(lane.provider));
+    plan.notes.push(
+      ...sharedFallbacks.map(
+        (lane) =>
+          `fallback ${lane.descriptor} skipped: ${lane.provider} has a shared account in config.json, and rules mode does not launch on shared accounts`,
+      ),
+    );
+  }
   if (sharedLane) {
     return refused(
       `lane ${sharedLane.index} runs on ${sharedLane.provider}, which has a shared account in config.json. Rules mode does not hold shared-quota reservations, so it does not launch on shared accounts; use --routing-mode quota for those.`,
@@ -159,5 +173,10 @@ export function formatLaneOutcome(lane: LaneOutcome): string {
   const attempt = lane.attempt
     ? ` attempt ${lane.attempt.id}: ${lane.attempt.state}${lane.attempt.evidence ? ` (${lane.attempt.evidence})` : ""}`
     : "";
-  return `Lane ${lane.index} [${lane.laneId}] ${lane.state}${where}${agent}${attempt}${lane.error ? ` error: ${lane.error}` : ""}`;
+  return [
+    ...(lane.skipped ?? []).map(
+      (skipped) => `Lane ${lane.index} skipped ${skipped.descriptor}: ${skipped.reason}`,
+    ),
+    `Lane ${lane.index} [${lane.laneId}]${lane.skipped?.length ? ` ${lane.descriptor}` : ""} ${lane.state}${where}${agent}${attempt}${lane.error ? ` error: ${lane.error}` : ""}`,
+  ].join("\n");
 }

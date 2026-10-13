@@ -8,7 +8,7 @@ export interface OpenDatabaseOptions {
   home: string;
 }
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 
 const MIGRATIONS: Record<number, string> = {
   1: "001_initial.sql",
@@ -17,6 +17,7 @@ const MIGRATIONS: Record<number, string> = {
   4: "004_dispatch.sql",
   5: "005_workflow.sql",
   6: "006_coordinator.sql",
+  7: "007_lane_fallbacks.sql",
 };
 
 /**
@@ -28,6 +29,7 @@ const ADDED_COLUMNS: Record<number, { table: string; column: string; type: strin
     { table: "dispatch_lanes", column: "session_id", type: "TEXT" },
     { table: "dispatch_lanes", column: "session_cwd", type: "TEXT" },
   ],
+  7: [{ table: "dispatch_lanes", column: "skipped_json", type: "TEXT" }],
 };
 
 function addColumns(db: Database.Database, version: number): void {

@@ -27,6 +27,14 @@ choose a model for you.
   guesses from keywords.
 - **Exact models.** Lanes use `provider:model@effort` with the provider's exact native model
   id. Nothing is rewritten to a rolling alias.
+- **Model first, then the account.** When several accounts can run a lane's model (a Claude
+  model on Claude Code or Cursor, a Grok model on grok or Cursor; GPT models only on Codex),
+  the router runs it on the one with the most remaining quota, from the usage collector's
+  numbers. `# hmr:` directives can send first versions to one account, fixes to others, and
+  keep an account off writer work.
+- **Fallback on quota.** A role's `# fallback:` comment is its fallback order. When the
+  launched model hits a quota or usage limit, the router closes it, logs what it skipped and
+  why, and launches the next one. It stops with an error when the order runs out.
 - **Panels run the lanes that remain.** A role with several lanes is a read-only panel, and
   it is not a fallback list. A selector written twice still runs twice. A `parent`, `auto`, or
   `inherit-parent` lane that resolves to a model already in the panel is not launched.
@@ -101,6 +109,41 @@ reviewers: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, claude:claude-op
   plan says that Cursor's fast variant has no native equivalent. Any other unrecognized value
   is an error, never a guess. Rolling aliases such as `opus`, `sonnet`, `opusplan`, `default`,
   or `*-latest` are refused; write the full model id.
+
+### Fallback order and accounts
+
+```text
+# hmr: first-version cursor
+# hmr: fix-accounts claude, grok
+# hmr: review-only codex
+feature: claude:claude-opus-5-5@high
+# fallback: codex:gpt-6.1-sol@high, then claude:claude-sonnet-5-5@high
+bug-fix: claude:claude-sonnet-5-5@high   # fallback: grok-4.7-xhigh-fast
+review gate: codex:gpt-6.1-sol@high
+```
+
+- `# fallback: a, then b` belongs to the role entry above it, as a trailing comment or on a
+  comment line before the next entry. When the running model shows a quota or usage-limit
+  error at startup, or the CLI's own error line (Codex `■`, Claude Code `⎿`) answers the
+  prompt before any model output, the router closes its pane and launches the next entry. An entry that cannot be launched (for example `cursor Auto`) is skipped with a
+  note. Panels and coordinator workflows do not fall back.
+- The router picks the model from the rules, then the account. Accounts that can run the
+  same model are listed in `packages/router/config/model-accounts.json`. The account with the
+  most remaining quota wins, using `~/hmr-usage/usage.json` from the usage collector
+  (AGENT-197). Without that file, a lane runs where the rules file puts it.
+- `first-version <account>`: a writer's first version (`--phase first`, the default) runs
+  there while it has at least 20% quota left. Below that, the account with the most
+  remaining quota takes it.
+- `fix-accounts <a>, <b>`: `--phase fix` (a fix after review) runs on whichever of them has
+  more quota. It uses the first model in the role's order that account can run. If none of
+  them can run any (the project policy allows none, for example), the plan is refused.
+- `review-only <account>`: that account never runs a writer lane. A writer role that only it
+  can run is refused, and its fallback entries on that account are skipped.
+
+```sh
+hmr plan --role feature                  # shows the account, its quota, and the fallback order
+hmr run "Fix the review findings" --role bug-fix --phase fix
+```
 
 See [Rules mode](docs/rules.md) for the full grammar, access rules, and task lifecycle.
 
