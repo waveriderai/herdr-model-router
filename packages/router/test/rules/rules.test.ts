@@ -232,6 +232,7 @@ describe("plan", () => {
       kind: "single",
       access: "write",
       forcedReadOnly: false,
+      definedAsPanel: false,
       rulesSource: source,
       cwd: "/work/project",
       lanes: [
@@ -276,8 +277,10 @@ describe("plan", () => {
     });
     expect(plan.ok && plan.lanes.map((lane) => [lane.descriptor, lane.from])).toEqual([
       ["claude:claude-opus-5-5@max", "parent"],
-      ["claude:claude-opus-5-5@max", "parent"],
       ["grok:grok-4.7@xhigh", "rule"],
+    ]);
+    expect(plan.ok && plan.notes).toEqual([
+      "skipped inherit-parent (claude:claude-opus-5-5@max): that model is already in this panel",
     ]);
     expect(planRoute({ ...base, role: "synthesizer", parent: "gpt-6.1-sol" })).toMatchObject({
       ok: false,
@@ -288,6 +291,25 @@ describe("plan", () => {
       code: "invalid-parent",
       error: expect.stringContaining("rolling or automatic model alias"),
     });
+  });
+
+  it("drops parent aliases that copy a model already in the panel and stays read-only", () => {
+    const plan = planRoute({
+      rules: rules("copies: inherit-parent, inherit-parent, grok:grok-4.7@high\n"),
+      rulesSource: source,
+      cwd: "/work/project",
+      role: "copies",
+      parent: "grok:grok-4.7@high",
+    });
+    expect(plan.ok && plan.kind).toBe("single");
+    expect(plan.ok && plan.access).toBe("read");
+    expect(plan.ok && plan.lanes.map((lane) => [lane.descriptor, lane.from, lane.index])).toEqual([
+      ["grok:grok-4.7@high", "rule", 1],
+    ]);
+    expect(plan.ok && plan.notes).toEqual([
+      "skipped inherit-parent (grok:grok-4.7@high): that model is already in this panel",
+      "skipped inherit-parent (grok:grok-4.7@high): that model is already in this panel",
+    ]);
   });
 
   it("lists the available roles when the role is unknown", () => {

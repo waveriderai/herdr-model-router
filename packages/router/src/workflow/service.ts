@@ -335,12 +335,17 @@ function verifierPrompt(input: {
   revision: Revision;
   /** The modes of the attempt under verification; they apply to its verifiers too. */
   modes: readonly string[];
+  /** The writer's checks from its digest-verified result for this attempt. */
+  writerChecks: readonly { command: string; result: string }[];
 }): string {
   const sources = skillSourcesOf(input.brief);
   const version = sources ? RESULT_VERSION_V2 : RESULT_VERSION;
   return [
     `HMR workflow ${input.workflowId}: read-only verification lane ${input.laneId} for role "${input.role}". Do not modify any file.`,
     `Verify the worktree at revision head ${input.revision.head}, content ${input.revision.content} (check with \`hmr workflow fingerprint\`).`,
+    "Review the diff against the acceptance items. The writer's recorded checks below are the test evidence. Do not re-run a check that is marked pass. Re-run a command only when no recorded pass covers that item.",
+    "Writer's recorded checks for this attempt (from its result, SHA-256 verified):",
+    canonicalJson(input.writerChecks),
     "Brief (JSON):",
     canonicalJson(input.brief),
     ...(sources
@@ -1344,6 +1349,15 @@ export async function verifyWorkflow(
         modes = recorded.value;
       }
       const revision = gate.value.revision;
+      const writer = recordedResult(
+        deps.artifacts,
+        workflow.id,
+        `result-${input.expectedAttemptId}.json`,
+        gate.value.attempt.result!.sha256,
+      );
+      if (!writer.ok) return fail("result-untrusted", `Writer result: ${writer.problem}.`);
+      const writerChecks =
+        (writer.result as { checks?: { command: string; result: string }[] }).checks ?? [];
       // Set first: a role whose lanes fail to start still leaves the workflow verifying.
       deps.workflows.commit(lease, () => deps.workflows.setState(workflow.id, "verifying"));
       for (const role of brief.value.verifierRoles) {
@@ -1381,6 +1395,7 @@ export async function verifyWorkflow(
               role,
               revision,
               modes,
+              writerChecks,
             });
           },
         });

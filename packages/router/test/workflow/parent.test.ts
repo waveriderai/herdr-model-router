@@ -20,7 +20,7 @@ describe("parent aliases in a workflow (R4)", () => {
     expect(h.herdr.calls).toEqual([]);
   });
 
-  it("keeps the start's parent for verification, with every lane in order", async () => {
+  it("keeps the start's parent for verification and skips a repeated parent alias", async () => {
     const h = harness();
     const rulesBefore = INHERITING;
     writeFileSync(h.rulesFile, rulesBefore);
@@ -51,8 +51,13 @@ describe("parent aliases in a workflow (R4)", () => {
     expect(verified.value.lanes[0]!.lanes.map((lane) => lane.descriptor)).toEqual([
       "codex:gpt-6.1-sol@high",
       "claude:claude-opus-5-5@high",
-      "codex:gpt-6.1-sol@high",
     ]);
+    expect(h.herdr.prompts.map((prompt) => prompt.text).join("\n")).toContain(
+      "Do not re-run a check that is marked pass",
+    );
+    expect(h.herdr.prompts.map((prompt) => prompt.text).join("\n")).toContain(
+      '"command":"cat greeting.txt"',
+    );
     // The user's rules file is never rewritten.
     expect(readFileSync(h.rulesFile, "utf8")).toBe(rulesBefore);
   });

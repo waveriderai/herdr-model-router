@@ -26,11 +26,13 @@ export interface RoutePlan {
   role: string;
   /** All names that share this role's lanes. */
   roleNames: string[];
-  /** `panel`: more than one lane. Every lane runs; it is not a fallback list. */
+  /** `panel`: more than one lane. The lanes that remain all run; it is not a fallback list. */
   kind: "single" | "panel";
   access: Access;
   /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
   forcedReadOnly: boolean;
+  /** The rules file lists more than one lane, even if parent-alias copies were skipped. */
+  definedAsPanel: boolean;
   rulesSource: RulesSource;
   policySource?: string;
   /** SHA-256 of the policy text this plan was made from. */
@@ -151,6 +153,26 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     }
   }
 
+  // A parent alias that copies a model already in the panel adds no reviewer.
+  // The signal of a panel is a different model. A selector written twice still
+  // runs twice: only alias lanes are dropped, and the rules file is not rewritten.
+  const collapseNotes: string[] = [];
+  const ruleDescriptors = new Set(
+    lanes.filter((lane) => lane.from === "rule").map((lane) => lane.descriptor),
+  );
+  const seen = new Set(ruleDescriptors);
+  const launched: PlannedLane[] = [];
+  for (const lane of lanes) {
+    if (lane.from === "parent" && seen.has(lane.descriptor)) {
+      collapseNotes.push(
+        `skipped ${lane.selector} (${lane.descriptor}): that model is already in this panel`,
+      );
+      continue;
+    }
+    if (lane.from === "parent") seen.add(lane.descriptor);
+    launched.push({ ...lane, index: launched.length + 1 });
+  }
+
   const allowed = input.policy?.allowedProviders;
   const blocked = allowed ? lanes.find((lane) => !allowed.includes(lane.provider)) : undefined;
   if (blocked) {
@@ -160,6 +182,8 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     );
   }
 
+  // Policy checks run on every resolved lane, before dedupe: a skipped copy changes nothing a
+  // pin or allowedProviders already approved.
   const actual = lanes.map((lane) => lane.descriptor);
   for (const { key, pin } of pinsFor(input.policy, found.names)) {
     const expected = pin.length === 1 ? lanes.map(() => pin[0]!) : pin;
@@ -178,10 +202,13 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     }
   }
 
-  const kind = lanes.length > 1 ? "panel" : "single";
+  // The role is a panel when the rules file lists more than one lane, even if
+  // alias copies were dropped. A collapsed panel stays read-only.
+  const definedAsPanel = lanes.length > 1;
+  const kind = launched.length > 1 ? "panel" : "single";
   const writerRoles = input.policy?.writerRoles?.map(normalizeRoleName);
   const namedWriter = writerRoles?.some((name) => found.names.includes(name)) ?? false;
-  if (kind === "panel" && namedWriter) {
+  if (definedAsPanel && namedWriter) {
     return refuse(
       "panel-writer-conflict",
       `project policy lists panel role "${role}" as a writer, but panels are read-only`,
@@ -197,7 +224,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     );
   }
   const access: Access =
-    kind === "panel" ||
+    definedAsPanel ||
     forcedReadOnly ||
     input.readOnly ||
     (writerRoles !== undefined && !namedWriter)
@@ -212,12 +239,13 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     kind,
     access,
     forcedReadOnly,
+    definedAsPanel,
     rulesSource: input.rulesSource,
     ...(input.policySource ? { policySource: input.policySource } : {}),
     ...(input.policySha256 ? { policySha256: input.policySha256 } : {}),
     cwd: input.cwd,
-    lanes,
-    notes,
+    lanes: launched,
+    notes: [...notes, ...collapseNotes],
   };
 }
 

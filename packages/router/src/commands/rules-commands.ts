@@ -186,6 +186,7 @@ export function formatPlan(plan: RoutePlan, footer: string): string {
         ...lane.notes.map((note) => `  note: ${note}`),
       ];
     }),
+    ...plan.notes.map((note) => `note: ${note}`),
     footer,
   ].join("\n");
 }

@@ -240,9 +240,11 @@ describe("offline rules preview (AE1, AE2)", () => {
     expect(result.code).toBe(0);
     expect(result.out.match(/^Lane \d: .*$/gm)).toEqual([
       "Lane 1: claude:claude-opus-5-5@max [parent via inherit-parent]",
-      "Lane 2: claude:claude-opus-5-5@max [parent via inherit-parent]",
-      "Lane 3: grok:grok-4.7@xhigh [rule]",
+      "Lane 2: grok:grok-4.7@xhigh [rule]",
     ]);
+    expect(result.out).toContain(
+      "note: skipped inherit-parent (claude:claude-opus-5-5@max): that model is already in this panel",
+    );
     expect(result.out).toContain(
       "  argv: grok --model grok-4.7 --reasoning-effort xhigh --permission-mode plan",
     );
@@ -596,7 +598,7 @@ describe("workflow preview (R10)", () => {
     expectNoEffects(box, result);
   });
 
-  it("resolves parent aliases in workflow roles from an explicit --parent, keeping every lane", async () => {
+  it("resolves parent aliases in workflow roles and skips an alias that copies a lane", async () => {
     const box = sandbox();
     const file = brief(box, { verifierRoles: ["arena runners"] });
     const result = await cli(box, [
@@ -610,12 +612,14 @@ describe("workflow preview (R10)", () => {
     ]);
     expect(result.code).toBe(0);
     const json = JSON.parse(result.out) as {
-      verifiers: { lanes: { descriptor: string; from: string }[] }[];
+      verifiers: { lanes: { descriptor: string; from: string }[]; notes: string[] }[];
     };
     expect(json.verifiers[0]!.lanes.map((lane) => [lane.descriptor, lane.from])).toEqual([
       ["codex:gpt-6.1-sol@high", "parent"],
-      ["codex:gpt-6.1-sol@high", "parent"],
       ["grok:grok-4.7@xhigh", "rule"],
+    ]);
+    expect(json.verifiers[0]!.notes).toEqual([
+      "skipped inherit-parent (codex:gpt-6.1-sol@high): that model is already in this panel",
     ]);
     expectNoEffects(box, result);
     const missing = await cli(box, ["workflow", "plan", "--brief", file]);

@@ -27,8 +27,9 @@ choose a model for you.
   guesses from keywords.
 - **Exact models.** Lanes use `provider:model@effort` with the provider's exact native model
   id. Nothing is rewritten to a rolling alias.
-- **Panels run every lane.** A role with several lanes is a read-only panel: every lane runs,
-  in order, duplicates included. It is not a fallback list.
+- **Panels run the lanes that remain.** A role with several lanes is a read-only panel, and
+  it is not a fallback list. A selector written twice still runs twice. A `parent`, `auto`, or
+  `inherit-parent` lane that resolves to a model already in the panel is not launched.
 - **One writer per worktree.** A writer task owns its worktree until you close it with
   evidence. Revisions go to the same agent, pane, and model.
 - **At most one send per attempt.** If the router cannot tell whether a prompt arrived, it

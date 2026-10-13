@@ -136,4 +136,20 @@ describe("hmr start (CLI)", () => {
       expectNoEffects(box, result);
     }
   });
+
+  it("refuses a coordinator panel that collapses to one lane after parent dedupe", async () => {
+    const box = sandbox(
+      RULES.replace(/^coordinator: .*$/m, "coordinator: inherit-parent, codex:gpt-6.1-sol@high"),
+    );
+    const result = await cli(box, [
+      "start",
+      "Inspect only.",
+      "--parent",
+      "codex:gpt-6.1-sol@high",
+      "--dry-run",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("panel");
+    expectNoEffects(box, result);
+  });
 });
