@@ -195,9 +195,6 @@ const QUOTA_LINES: { label: string; pattern: RegExp }[] = [
 /** A CLI's error glyph, box border, or `Error:` prefix in front of its message. */
 const ERROR_PREFIX = /^[\s■⎿⏺●✗✘×!›>│┃|]*(?:(?:api )?error:\s*)?/i;
 
-/** How many screen lines may separate the echoed prompt from the CLI's quota error. */
-const QUOTA_AFTER_ECHO_LINES = 3;
-
 function quotaLine(line: string, next = ""): string | undefined {
   const normalize = (value: string) =>
     value
@@ -213,43 +210,72 @@ function quotaLine(line: string, next = ""): string | undefined {
   return QUOTA_LINES.find(({ pattern }) => pattern.test(alone) || pattern.test(joined))?.label;
 }
 
+/** The line where the pane echoes what was typed: `> `, `› ` or `❯ `, maybe inside a box. */
+const INPUT_MARKER = /^\s*(?:│\s*)?[>›❯]\s?/;
+/** Lines a CLI draws for the model's turn or its own events: never a continued prompt echo. */
+const OUTPUT_MARKER = /^\s*[⏺●•■⎿]/;
+
+/**
+ * Where each CLI prints its own error, as opposed to the model's output. Codex draws an error
+ * event as `■ <message>` (model messages and tool calls start with `•`). Claude Code attaches
+ * an API error to the user's message as `⎿ <message>` (model text and tool calls start with
+ * `⏺`, and a tool result's `⎿` only ever follows a tool call). The grok CLI and Cursor agent
+ * have no verified error line, so a quota error after a prompt is never read from them.
+ */
+const ERROR_MARKER: Partial<Record<string, RegExp>> = {
+  codex: /^\s*■\s+/,
+  claude: /^\s*⎿\s+/,
+};
+
 /**
  * The CLI's own quota or usage-limit error on this screen, as a short label, if any.
  *
- * Without `sent` (a new pane, before any prompt) any line may carry it. With `sent`, the
- * prompt the router typed, the error must start a line within a few lines after the pane's
- * echo of that prompt: a CLI out of quota answers before any model output, while a writer
- * that ran and merely quotes such a message prints it after its work. A screen where the echo
- * cannot be found is never read as a quota error.
+ * Without `after` (a new pane, before any prompt, so no model output exists yet) any line may
+ * carry it. After a prompt, the evidence must show the model never ran: the first line after
+ * the pane's echo of the prompt (or Claude Code's `[Pasted text #N]` placeholder) is that
+ * CLI's own error line, carrying the quota message. Any model output first, a CLI without a
+ * verified error line, or a screen without the echo is never read as a quota error.
  */
-export function detectQuota(text: string, sent?: string): string | undefined {
+export function detectQuota(
+  text: string,
+  after?: { sent: string; kind: string },
+): string | undefined {
   const lines = text.split("\n");
-  let from = 0;
-  let to = lines.length;
-  if (sent !== undefined) {
-    const prompt = compactScreen(sent);
-    const isEcho = (line: string) => {
-      const compact = compactScreen(line.replace(ERROR_PREFIX, ""));
-      return /^\[pastedtext#\d+/.test(compact) || (compact.length >= 6 && prompt.includes(compact));
-    };
-    let echo = -1;
-    lines.forEach((line, index) => {
-      if (isEcho(line)) echo = index;
-    });
-    if (echo < 0) return undefined;
-    from = echo + 1;
-    let seen = 0;
-    to = from;
-    while (to < lines.length && seen < QUOTA_AFTER_ECHO_LINES) {
-      if (lines[to]!.trim() !== "") seen += 1;
-      to += 1;
+  if (!after) {
+    for (const [index, line] of lines.entries()) {
+      const label = quotaLine(line, lines[index + 1]);
+      if (label) return label;
     }
+    return undefined;
   }
-  for (let index = from; index < to; index += 1) {
-    const label = quotaLine(lines[index]!, lines[index + 1]);
-    if (label) return label;
+  const marker = ERROR_MARKER[after.kind];
+  if (!marker) return undefined;
+  const prompt = compactScreen(after.sent);
+  const echoed = (content: string) => {
+    const compact = compactScreen(content);
+    return /^\[pastedtext#\d+/.test(compact) || (compact.length >= 6 && prompt.includes(compact));
+  };
+  let anchor = -1;
+  lines.forEach((line, index) => {
+    const input = INPUT_MARKER.exec(line);
+    if (!input) return;
+    const content = line.slice(input[0].length);
+    const compact = compactScreen(content);
+    // The echo's first line may be short ("Fix it"): it must then open the prompt.
+    if (echoed(content) || (compact !== "" && prompt.startsWith(compact))) anchor = index;
+  });
+  if (anchor < 0) return undefined;
+  let next = anchor + 1;
+  // Skip blank lines and the wrapped rest of the echo.
+  while (
+    next < lines.length &&
+    (lines[next]!.trim() === "" || (!OUTPUT_MARKER.test(lines[next]!) && echoed(lines[next]!)))
+  ) {
+    next += 1;
   }
-  return undefined;
+  const first = lines[next];
+  if (first === undefined || !marker.test(first)) return undefined;
+  return quotaLine(first.replace(marker, ""), lines[next + 1]);
 }
 
 export function quotaReason(kind: string, label: string): string {

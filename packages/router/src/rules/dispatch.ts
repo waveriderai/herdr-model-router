@@ -435,7 +435,8 @@ export async function watchForQuota(
     if (info?.status === "working") started = true;
     if (info?.status === "idle") {
       const text = await readScreen(deps, input.paneId);
-      const quota = text === undefined ? undefined : detectQuota(text, input.sent);
+      const quota =
+        text === undefined ? undefined : detectQuota(text, { sent: input.sent, kind: input.kind });
       if (quota) return quotaReason(input.kind, quota);
       // The turn started and ended without a quota error: the model is answering.
       if (started) return undefined;

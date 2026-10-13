@@ -451,12 +451,21 @@ At launch, `run` watches for the CLI's own quota or usage-limit message:
   is checked again. A long turn is left alone after the window. The watch runs only when the
   role has a fallback order.
 
-The message must start a screen line (after the CLI's error glyph such as `■` or `⏺`, or an
-`Error:` prefix). After a prompt, it must also come within 3 lines after the pane's echo of
-that prompt (or Claude Code's `[Pasted text #N]` placeholder). A CLI out of quota answers
-before any model output. A writer that worked and then quotes such a message in its summary
-prints it further down, or inside a sentence, and is left alone. A screen without the echo is
-never read as a quota error.
+Before the prompt, no model output exists yet, so any screen line that starts with the
+message counts. After the prompt, the evidence must show that the model never ran: the first
+line after the pane's echo of the prompt (or Claude Code's `[Pasted text #N]` placeholder)
+must be the CLI's own error line carrying the message:
+
+| CLI          | Its own error line | Model output (never read) |
+| ------------ | ------------------ | ------------------------- |
+| Codex        | `■ <message>`      | `• ...`                   |
+| Claude Code  | `⎿ <message>`      | `⏺ ...`                   |
+| grok, Cursor | none verified      | (not read after a prompt) |
+
+A writer that ran, even briefly, prints model output or a tool call first, so quoting a quota
+message in its summary is never read as a quota error. A screen without the echo is not read
+either. grok and Cursor are checked only on their startup screen, until their error lines are
+verified.
 
 Matched messages are exhausted limits only: `usage limit reached`, `5-hour limit reached`,
 `you've hit your (usage) limit`, `quota exceeded`, `insufficient_quota`,

@@ -124,8 +124,8 @@ review gate: codex:gpt-6.1-sol@high
 
 - `# fallback: a, then b` belongs to the role entry above it, as a trailing comment or on a
   comment line before the next entry. When the running model shows a quota or usage-limit
-  error at startup or right after the prompt, the router closes its pane and launches the
-  next entry. An entry that cannot be launched (for example `cursor Auto`) is skipped with a
+  error at startup, or the CLI's own error line (Codex `■`, Claude Code `⎿`) answers the
+  prompt before any model output, the router closes its pane and launches the next entry. An entry that cannot be launched (for example `cursor Auto`) is skipped with a
   note. Panels and coordinator workflows do not fall back.
 - The router picks the model from the rules, then the account. Accounts that can run the
   same model are listed in `packages/router/config/model-accounts.json`. The account with the

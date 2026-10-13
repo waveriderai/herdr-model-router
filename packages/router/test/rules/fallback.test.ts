@@ -183,20 +183,58 @@ describe("quota detection", () => {
     expect(detectQuota("Context limit reached · /compact or /clear to continue")).toBeUndefined();
     expect(detectQuota(READY_SCREEN.claude!)).toBeUndefined();
     const sent = "When Codex says You've hit your usage limit, switch models.\nAdd tests.";
+    const codex = { sent, kind: "codex" };
     // The pane wraps and indents the echoed prompt.
     const echoed =
-      "> When Codex says You've hit your\n  usage limit, switch models.\n  Add tests.\n";
-    expect(detectQuota(echoed, sent)).toBeUndefined();
-    expect(detectQuota(`${echoed}■ You've hit your usage limit.`, sent)).toBe("hit your limit");
+      "› When Codex says You've hit your\n  usage limit, switch models.\n  Add tests.\n";
+    expect(detectQuota(echoed, codex)).toBeUndefined();
+    expect(
+      detectQuota(`${echoed}\n■ You've hit your usage\n  limit. Try again in 2 hours.`, codex),
+    ).toBe("hit your limit");
     // A long prompt that Claude Code collapses still anchors the check.
     expect(
-      detectQuota(
-        "> [Pasted text #1 +40 lines]\n\n⏺ Claude usage limit reached.",
-        "x\n".repeat(40),
-      ),
+      detectQuota("> [Pasted text #1 +40 lines]\n  ⎿  Claude usage limit reached.", {
+        sent: "x\n".repeat(40),
+        kind: "claude",
+      }),
     ).toBe("limit reached");
     // No echo of the prompt on screen: never read as a quota error.
-    expect(detectQuota("■ You've hit your usage limit.", sent)).toBeUndefined();
+    expect(detectQuota("■ You've hit your usage limit.", codex)).toBeUndefined();
+  });
+
+  it("after a prompt, reads only the CLI's own error line, first after the echo", () => {
+    const sent = "Handle provider errors in the client.";
+    const claude = { sent, kind: "claude" };
+    // Codex's case: a writer runs a tool, then its short summary starts with the phrase.
+    const shortSummary = [
+      `> ${sent}`,
+      "",
+      "⏺ Write(src/client.ts)",
+      "  ⎿  Wrote 20 lines to src/client.ts",
+      "⏺ Rate limit exceeded is now handled with retries.",
+    ].join("\n");
+    expect(detectQuota(shortSummary, claude)).toBeUndefined();
+    // Even the model's first line, with no tool call, is model output (⏺), not a CLI error.
+    expect(detectQuota(`> ${sent}\n⏺ Rate limit exceeded is now handled.`, claude)).toBeUndefined();
+    // A tool result that prints the phrase follows its tool call, never the echo itself.
+    expect(
+      detectQuota(`> ${sent}\n⏺ Bash(curl api)\n  ⎿  Rate limit exceeded`, claude),
+    ).toBeUndefined();
+    // Codex model output is `•`; only `■` is Codex's own error.
+    expect(
+      detectQuota(`› ${sent}\n• You've hit your usage limit is handled now.`, {
+        sent,
+        kind: "codex",
+      }),
+    ).toBeUndefined();
+    // The CLI's own error, first after the echo, is.
+    expect(detectQuota(`> ${sent}\n  ⎿  You've hit your limit · resets 3pm`, claude)).toBe(
+      "hit your limit",
+    );
+    // grok and Cursor have no verified error line: after a prompt, never a quota error.
+    for (const kind of ["grok", "cursor"]) {
+      expect(detectQuota(`> ${sent}\nError: Rate limit exceeded`, { sent, kind })).toBeUndefined();
+    }
   });
 
   it("does not mistake a writer that finished and quotes a quota error for one", () => {
@@ -215,16 +253,19 @@ describe("quota detection", () => {
       "  You've hit your usage limit",
       "",
     ].join("\n");
-    expect(detectQuota(finished, sent)).toBeUndefined();
+    expect(detectQuota(finished, { sent, kind: "claude" })).toBeUndefined();
     // Quoted in prose, even right after the prompt, it does not start a line.
     expect(
-      detectQuota(`> ${sent}\n⏺ Retries now cover "Rate limit exceeded" replies.`, sent),
+      detectQuota(`> ${sent}\n⏺ Retries now cover "Rate limit exceeded" replies.`, {
+        sent,
+        kind: "claude",
+      }),
     ).toBeUndefined();
   });
 });
 
 const QUOTA = {
-  claude: "⏺ You've hit your limit · resets 3pm (America/Los_Angeles)\n",
+  claude: "  ⎿  You've hit your limit · resets 3pm (America/Los_Angeles)\n",
   codex: "■ You've hit your usage limit. Upgrade to Pro, or try again in 2 hours.\n",
   grok: "Error: Rate limit exceeded for grok-4.7.\n",
 };
@@ -319,7 +360,9 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
   it("skips a model whose screen shows its limit at startup, and a fallback whose CLI is missing", async () => {
     const herdr = fakeHerdr({
       detect: (_pane, executable) =>
-        executable === "claude" ? { screen: `${QUOTA.claude}${READY_SCREEN.claude}` } : {},
+        executable === "claude"
+          ? { screen: `You've hit your limit · resets 3pm\n${READY_SCREEN.claude}` }
+          : {},
     });
     const { deps: d } = deps(herdr, {
       resolveExecutable: (name) => (name === "codex" ? undefined : `/opt/fake bin/${name}`),
@@ -358,7 +401,10 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
 
   it("stops with a clear error and releases the worktree when every model hits its limit", async () => {
     const herdr: FakeHerdr = fakeHerdr({
-      prompt: quotaAfterPrompt(() => herdr, ["claude", "codex", "grok"]),
+      prompt: quotaAfterPrompt(() => herdr, ["claude", "codex"]),
+      // grok has no verified error line after a prompt; its limit shows at startup here.
+      detect: (_pane, executable) =>
+        executable === "grok" ? { screen: `${QUOTA.grok}${READY_SCREEN.grok}` } : {},
     });
     const { deps: d } = deps(herdr);
     const result = await dispatchPlan({
@@ -419,14 +465,12 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       prompt: (target) => {
         const pane = [...herdr.panes.values()].find((entry) => entry.name === target)!;
         pane.history = [
+          // The review gate's reproduction: a tool call, then a short summary.
           `> ${herdr.prompts.at(-1)!.text}`,
-          "⏺ Update(src/client.ts)",
-          "  ⎿  Updated src/client.ts with 14 additions",
-          "⏺ Done. Requests that fail with",
           "",
-          "  Rate limit exceeded",
-          "",
-          "  now retry with backoff.",
+          "⏺ Write(src/client.ts)",
+          "  ⎿  Wrote 20 lines to src/client.ts",
+          "⏺ Rate limit exceeded is now handled with retries.",
           "",
         ].join("\n");
         pane.status = "idle";
