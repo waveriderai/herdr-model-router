@@ -469,10 +469,13 @@ pane, or the prompt is taller than the pane, no quota decision is made after the
 grok and Cursor draw no error glyph of their own, so for them the turn must be the CLI's
 quota message and nothing else: it carries no tool call or other output, is followed directly
 by the composer the CLI draws again (grok's token line or `│ ❯ │` box, Cursor's `→` line), and
-reads as a whole message: an optional `Error:`, the limit phrase, an optional model or HTTP
-429 qualifier, and then only the CLI's own advice (the limit resets, try again, retry,
-upgrade, switch to Auto or another model). A one-line summary that merely starts with the
-phrase, such as `Rate limit exceeded is now retried.`, is not one. A writer that ran, even
+reads as a whole message: an optional `Error:`, the limit phrase, an optional qualifier (a
+model id, or `for this cycle`, month, week or period) and HTTP 429, and then only whole items
+of the CLI's own advice: the limit resets, try again or retry (followed by nothing but a time
+such as `in 4 days 12 hours` or `later`), upgrade, switch to Auto or another model, check the
+plan. A summary that merely starts with the phrase is not one, such as
+`Rate limit exceeded is now retried.` or
+`Rate limit exceeded. Try again later is now shown with a countdown.`. A writer that ran, even
 briefly, prints a tool call or more output first, so quoting a quota message in its summary
 is never read as a quota error.
 

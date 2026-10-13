@@ -240,32 +240,45 @@ const COMPOSER_START: Partial<Record<string, RegExp>> = {
 };
 const MAX_BARE_MESSAGE_LINES = 3;
 
+/** One word of when a limit resets: `3pm`, `4 days`, `tomorrow`, `(America/Los_Angeles)`. */
+const TIME_WORD = String.raw`(?:\d[\d:./]*(?:\s?(?:am|pm)|[dhms]\b)?|am|pm|utc|gmt|[pmce][sd]?t|today|tomorrow|tonight|later|soon|midnight|noon|(?:mon|tues|wednes|thurs|fri|satur|sun)day|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?|days?|hours?|hrs?|minutes?|mins?|seconds?|secs?|weeks?|a few|a moment|an? (?:hour|minute|day|week)|\([\w/ :+-]*\))`;
+const TIMES = String.raw`${TIME_WORD}(?:(?:\s*,\s*|\s+(?:and\s+)?)${TIME_WORD})*`;
+
+/**
+ * The CLI's own advice after a quota message, each item whole: when the limit resets, to try
+ * again or retry (with only a time after it), to upgrade, to switch models, or to check the
+ * plan. Nothing else may follow, so a summary such as `Try again later is now shown with a
+ * countdown.` is not advice.
+ */
+const ADVICE = [
+  String.raw`(?:your )?(?:limit |usage |quota )?(?:will )?resets?(?: (?:at|in|on|after))? ${TIMES}`,
+  String.raw`(?:please )?(?:try again|retry)(?:(?: (?:in|at|after|on))? ${TIMES})?`,
+  String.raw`upgrade(?: to (?:pro|ultra|max|plus|team|a higher plan|a paid plan|continue))?(?: (?:for|to get) (?:more|higher) (?:usage|limits))?(?: to continue)?`,
+  String.raw`switch to (?:auto|a different model|another model)(?: to continue)?`,
+  String.raw`get cursor pro(?: for more agent usage)?`,
+  String.raw`(?:please )?check your plan(?: and billing details)?`,
+].join("|");
+
+/** What a limit is for: a model id (with a digit or a dash), or the current period. */
+const QUALIFIER = String.raw`(?: for (?:model )?(?:[\w.@:/]*[\d-][\w.@:/-]*|(?:this|the current|the) (?:cycle|month|week|day|period|billing (?:cycle|period))))?`;
+
 /**
  * A whole quota error as a CLI prints it, lowercased with its lines joined: an optional
- * `Error:` prefix, the exhausted-limit phrase, an optional model or HTTP 429 qualifier, and
- * then only the CLI's own advice (when the limit resets, to try again, upgrade, or switch
- * models). A sentence that merely starts with the phrase, such as a writer's summary
- * "Rate limit exceeded is now retried.", is not one.
+ * `Error:` prefix, the exhausted-limit phrase, an optional {@link QUALIFIER} and HTTP 429,
+ * then only whole items of {@link ADVICE}. A sentence that merely starts with the phrase,
+ * such as a writer's summary "Rate limit exceeded is now retried.", is not one.
  */
 const BARE_QUOTA_MESSAGE = new RegExp(
-  "^(?:error:\\s*)?" +
-    "(?:(?:usage|\\d+-hour|session|daily|weekly|monthly) limit reached" +
-    "|you'?ve hit your (?:usage |rate )?limit" +
-    "|quota exceeded|you exceeded your current quota|insufficient_quota" +
-    "|rate limit exceeded" +
-    "|(?:you have )?(?:run out of|no more|out of) credits)" +
-    "(?: for (?:model )?[\\w.@:/-]+)?" +
-    "(?:\\s*\\(?(?:http |status )?429\\)?)?" +
-    "[.!]?" +
-    "(?:\\s*[·∙,;-]?\\s*(?:" +
-    "(?:your limit )?resets? (?:at|in|on)\\b" +
-    "|(?:please )?try again (?:in|later|at|after|tomorrow)\\b" +
-    "|(?:please )?retry (?:in|later|after)\\b" +
-    "|upgrade (?:to|your)\\b" +
-    "|switch to (?:auto|a different model|another model)\\b" +
-    "|get cursor pro\\b" +
-    "|your limit will reset\\b" +
-    ").*)?$",
+  String.raw`^(?:error:\s*)?` +
+    String.raw`(?:(?:usage|\d+-hour|session|daily|weekly|monthly) limit reached` +
+    String.raw`|you'?ve hit your (?:usage |rate )?limit` +
+    String.raw`|quota exceeded|you exceeded your current quota|insufficient_quota` +
+    String.raw`|rate limit exceeded` +
+    String.raw`|(?:you have )?(?:run out of|no more|out of) credits)` +
+    QUALIFIER +
+    String.raw`(?:\s*\(?(?:http |status )?429\)?)?` +
+    String.raw`(?:(?:\s*[.!]\s*|\s*[·∙,;-]\s*|\s+)(?:or\s+)?(?:${ADVICE}))*` +
+    String.raw`\s*[.!]?$`,
 );
 
 /**
