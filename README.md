@@ -144,7 +144,8 @@ Each lane gets the permission defaults of its role
   `grok --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write`,
   Cursor `--mode plan`.
 - **Writers** auto-approve edits inside their own working directory (the worktree), with the
-  CLI's sandbox on: `claude --permission-mode acceptEdits` with Bash sandboxed,
+  CLI's sandbox on: `claude --permission-mode acceptEdits` with Bash sandboxed (a writer
+  Claude that cannot start its sandbox exits instead of running unsandboxed),
   `codex --sandbox workspace-write --ask-for-approval on-request`,
   `grok --sandbox workspace --allow 'Edit(./**)'`, Cursor `--sandbox enabled`.
 - **Full bypass** (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,

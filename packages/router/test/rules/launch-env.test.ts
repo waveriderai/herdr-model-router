@@ -23,7 +23,6 @@ import {
 } from "../../src/rules/launch-script.js";
 import { parseRules } from "../../src/rules/mdc-parser.js";
 import { planRoute } from "../../src/rules/plan.js";
-import { CLAUDE_WRITER_SETTINGS } from "../../src/rules/native-argv.js";
 import { HELP } from "../helpers/fake-herdr.js";
 
 const ok = (stdout = ""): CommandResult => ({ ok: true, code: 0, stdout, stderr: "" });
@@ -185,7 +184,7 @@ describe("native CLI launch environment (process level)", () => {
         "arg=--permission-mode",
         "arg=acceptEdits",
         "arg=--settings",
-        `arg=${CLAUDE_WRITER_SETTINGS}`,
+        'arg={"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}',
       ]);
       expect(lines[0]).toBe(`cwd=${realpathSync(project)}`);
       const env = Object.fromEntries(

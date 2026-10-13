@@ -84,10 +84,18 @@ export function permissionProfile(plan: {
 
 /**
  * Claude Code settings for a writer: Bash runs in Claude's sandbox, is not auto-approved for
- * being sandboxed, and may not ask to leave the sandbox.
+ * being sandboxed, and may not ask to leave the sandbox. `failIfUnavailable` makes Claude exit
+ * at startup when the sandbox cannot start (a missing dependency, an unsupported platform);
+ * without it Claude runs commands unsandboxed. The exit fails the lane's readiness check, so
+ * the lane is not prompted.
  */
 export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
-  sandbox: { enabled: true, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: false },
+  sandbox: {
+    enabled: true,
+    failIfUnavailable: true,
+    autoAllowBashIfSandboxed: false,
+    allowUnsandboxedCommands: false,
+  },
 });
 
 /** Tools a read-only Claude lane may use without a prompt. Plan mode still blocks edits. */

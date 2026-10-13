@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BYPASS_FLAGS,
-  CLAUDE_WRITER_SETTINGS,
   missingCapabilities,
   nativeLaunch,
   permissionProfile,
@@ -25,6 +24,9 @@ const CLAUDE_READ = [
   "--allowedTools",
   "Read,Grep,Glob,WebFetch,WebSearch",
 ];
+/** Written out, not imported: a missing key in the source must fail this test. */
+const CLAUDE_WRITER_SETTINGS_JSON =
+  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}';
 const GROK_READ = [
   "--sandbox",
   "read-only",
@@ -59,7 +61,7 @@ describe("native argv", () => {
         "--permission-mode",
         "acceptEdits",
         "--settings",
-        CLAUDE_WRITER_SETTINGS,
+        CLAUDE_WRITER_SETTINGS_JSON,
       ],
     ],
     [
@@ -160,6 +162,19 @@ describe("native argv", () => {
     expect(launch.kind).toBe(kind);
     expect(launch.argv).toEqual(expected);
     expect(launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
+  });
+
+  it("makes a writer Claude exit, not run unsandboxed, when its sandbox cannot start", () => {
+    const launch = argv("claude", "m", "high", "writer");
+    const settings = launch.argv[launch.argv.indexOf("--settings") + 1];
+    expect(JSON.parse(settings ?? "")).toEqual({
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        autoAllowBashIfSandboxed: false,
+        allowUnsandboxedCommands: false,
+      },
+    });
   });
 
   it("gives a read-only Grok lane enforced rules, never the plan mode Grok ignores", () => {

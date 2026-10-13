@@ -76,9 +76,11 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 | `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                  | refused: no known bypass flag                |
 
 - Claude's writer settings are
-  `{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}`:
-  Bash runs in Claude's sandbox, still asks, and cannot ask to leave the sandbox. `acceptEdits`
-  covers the working directory only.
+  `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}`:
+  Bash runs in Claude's sandbox, still asks, and cannot ask to leave the sandbox. If the sandbox
+  cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
+  of running commands unsandboxed, and the lane fails its readiness check. `acceptEdits` covers
+  the working directory only.
 - Grok accepts `--permission-mode plan` but ignores it, so read-only Grok lanes use `--allow`
   and `--deny` rules (a `deny` always wins in Grok) plus Grok's `read-only` OS sandbox. A writer's
   `Edit(./**)` is rooted at its working directory, and the `workspace` sandbox lets it write
