@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { HerdrPaneClient } from "../launch/herdr-client.js";
+import { PLANE_CLI_LINE } from "../launch/plane-cli-line.js";
 import { isHerdrEnv } from "../launch/readiness.js";
 import type { Provider } from "../rules/descriptor.js";
 import {
@@ -163,6 +164,8 @@ export function coordinatorPrompt(input: {
   const { hmr, route, skills, rules } = input.commands;
   return [
     `HMR coordinator ${input.coordinatorId}: you coordinate this worktree (${input.cwd}) as role "${input.role}" on ${input.descriptor}.`,
+    "",
+    PLANE_CLI_LINE,
     "",
     "You are a control role, not a source writer. Do not edit the project's files yourself: every change goes through exactly one HMR writer. Your CLI runs with its ordinary tool permissions; it is not read-only at the operating-system level, and HMR's single-writer lease covers only writers started through HMR or agent-collab.",
     `Read the model-router skill first and follow its workflow: ${input.skill.file} (sha256 ${input.skill.sha256}).`,

@@ -62,6 +62,8 @@ describe("handoff builder", () => {
         "- Do not deploy or consume extra quota.",
         "Remaining acceptance criteria:",
         "- list the options",
+        "",
+        "A read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).",
       ].join("\n"),
     );
   });

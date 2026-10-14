@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { redactCollectorText } from "../collectors/normalizer.js";
+import { PLANE_CLI_LINE } from "../launch/plane-cli-line.js";
 import {
   closeCreatedPane,
   dispatchPlan,
@@ -291,6 +292,8 @@ export function writerPrompt(input: {
   const lines = [
     `HMR workflow ${brief.workflowId}, attempt ${input.attemptId}: you are the only writer for role "${brief.writerRole}" in this worktree.`,
     "",
+    PLANE_CLI_LINE,
+    "",
     input.purpose === "initial"
       ? "Brief (JSON):"
       : "Revision requested by the coordinator. The original brief still applies; the requested changes follow it.",
@@ -342,6 +345,7 @@ function verifierPrompt(input: {
   const version = sources ? RESULT_VERSION_V2 : RESULT_VERSION;
   return [
     `HMR workflow ${input.workflowId}: read-only verification lane ${input.laneId} for role "${input.role}". Do not modify any file.`,
+    PLANE_CLI_LINE,
     `Verify the worktree at revision head ${input.revision.head}, content ${input.revision.content} (check with \`hmr workflow fingerprint\`).`,
     "Review the diff against the acceptance items. The writer's recorded checks below are the test evidence. Do not re-run a check that is marked pass. Re-run a command only when no recorded pass covers that item.",
     "Writer's recorded checks for this attempt (from its result, SHA-256 verified):",

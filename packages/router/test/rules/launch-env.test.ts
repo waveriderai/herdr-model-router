@@ -212,7 +212,7 @@ describe("native CLI launch environment (process level)", () => {
       expect(paneCommands).toHaveLength(1);
       expect(paneCommands[0]).toMatch(/^\/bin\/sh '.+\/router home\/launch\/lane_[0-9a-f-]+\.sh'$/);
       expect(prompts).toEqual([
-        `${result.lanes[0]!.agentName}: Fix it\n\n(Writer task ${result.task.id} for role "bug-fix". Revisions for this task arrive in this same session.)`,
+        `${result.lanes[0]!.agentName}: Fix it\n\nA read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).\n\n(Writer task ${result.task.id} for role "bug-fix". Revisions for this task arrive in this same session.)`,
       ]);
     },
   );

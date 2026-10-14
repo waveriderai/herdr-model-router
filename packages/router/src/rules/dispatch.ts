@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import type { CommandResult, HerdrClient, HerdrPaneClient } from "../launch/herdr-client.js";
+import { PLANE_CLI_LINE } from "../launch/plane-cli-line.js";
 import { herdrError, parseHerdrPaneId } from "../launch/herdr-launcher.js";
 import {
   NotOwnerError,
@@ -284,7 +285,7 @@ function laneText(
       : plan.access === "write"
         ? `Writer task ${task.id} for role "${plan.role}". Revisions for this task arrive in this same session.`
         : `Read-only task for role "${plan.role}". Do not modify files.`;
-  return `${prompt}\n\n(${role})`;
+  return `${prompt}\n\n${PLANE_CLI_LINE}\n\n(${role})`;
 }
 
 const sleepFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));

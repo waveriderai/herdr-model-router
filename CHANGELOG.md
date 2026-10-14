@@ -11,6 +11,11 @@ and released under a single tag.
 
 ### Added
 
+- Launched agents are told, in one line, that a read-only Plane CLI is at `~/bin/plane` on
+  DevPro (`plane list`, `plane get AGENT-123`, `~/bin/plane --help`). The line is in rules-mode
+  lane prompts, workflow writer and verifier prompts, the coordinator bootstrap, and quota-mode
+  handoffs (AGENT-263).
+
 - Per-role permission defaults (AGENT-198). Read-only lanes auto-approve file reads and web
   fetches only; writers auto-approve edits inside their own worktree with the CLI's sandbox on
   (a writer Claude exits at startup rather than run unsandboxed when its sandbox cannot start);
