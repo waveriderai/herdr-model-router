@@ -82,8 +82,8 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 | `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                  | refused: no known bypass flag                |
 
 - Claude's writer settings are
-  `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}`:
-  Bash runs in Claude's sandbox, still asks, and cannot ask to leave the sandbox. If the sandbox
+  `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true}}`:
+  Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); a command that must run outside the sandbox asks for approval in the pane. If the sandbox
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. `acceptEdits` covers
   the working directory only.
