@@ -26,7 +26,7 @@ const CLAUDE_READ = [
 ];
 /** Written out, not imported: a missing key in the source must fail this test. */
 const CLAUDE_WRITER_SETTINGS_JSON =
-  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":false,"allowUnsandboxedCommands":false}}';
+  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false}}';
 const GROK_READ = [
   "--sandbox",
   "read-only",
@@ -171,7 +171,7 @@ describe("native argv", () => {
       sandbox: {
         enabled: true,
         failIfUnavailable: true,
-        autoAllowBashIfSandboxed: false,
+        autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: false,
       },
     });
