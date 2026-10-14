@@ -10,11 +10,16 @@
  */
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fchmodSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -81,38 +86,124 @@ export function addToTrustList(dir: string, env: Env = process.env): string {
   return target;
 }
 
-function writeAtomic(file: string, text: string): void {
-  const tmp = `${file}.hmr-${process.pid}.tmp`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, file);
+const LOCK_WAIT_MS = 5_000;
+const LOCK_STALE_MS = 30_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** An exclusive sibling lock file, so two HMR processes never interleave one config update. */
+function withFileLock<T>(file: string, action: () => T): T {
+  const lock = `${file}.hmr.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) unlinkSync(lock);
+      } catch {
+        // Gone already: retry.
+      }
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${lock}`, { cause: error });
+      sleepSync(50);
+    }
+  }
+  try {
+    return action();
+  } finally {
+    try {
+      unlinkSync(lock);
+    } catch {
+      // Already removed.
+    }
+  }
+}
+
+/**
+ * Read-modify-write under the lock: the temp file is created exclusively with the original
+ * file's mode (0600 when new), and the update is abandoned if the file changed between the
+ * read and the rename (another writer, such as the CLI itself).
+ */
+function updateFile(file: string, change: (text: string) => string | undefined): boolean {
+  return withFileLock(file, () => {
+    const exists = existsSync(file);
+    const before = exists ? readFileSync(file, "utf8") : "";
+    const next = change(before);
+    if (next === undefined) return false;
+    const mode = exists ? statSync(file).mode & 0o777 : 0o600;
+    const tmp = `${file}.hmr-${process.pid}-${Date.now()}.tmp`;
+    const fd = openSync(tmp, "wx", mode);
+    try {
+      writeFileSync(fd, next);
+      fchmodSync(fd, mode);
+    } finally {
+      closeSync(fd);
+    }
+    const now = existsSync(file) ? readFileSync(file, "utf8") : "";
+    if (now !== before) {
+      unlinkSync(tmp);
+      throw new Error(`${file} changed while HMR was updating it; nothing was written`);
+    }
+    renameSync(tmp, file);
+    return true;
+  });
 }
 
 /** Claude Code's own trust record. Leaves the file alone when it already trusts the dir. */
 export function trustForClaude(dir: string, env: Env = process.env): boolean {
   const file = path.join(home(env), ".claude.json");
   if (!existsSync(file)) return false;
-  const data = JSON.parse(readFileSync(file, "utf8")) as {
-    projects?: Record<string, Record<string, unknown>>;
-  };
-  const projects = (data.projects ??= {});
-  const entry = (projects[dir] ??= {});
-  if (entry.hasTrustDialogAccepted === true) return false;
-  entry.hasTrustDialogAccepted = true;
-  writeAtomic(file, `${JSON.stringify(data, null, 2)}\n`);
-  return true;
+  return updateFile(file, (text) => {
+    const data = JSON.parse(text) as { projects?: Record<string, Record<string, unknown>> };
+    const projects = (data.projects ??= {});
+    const entry = (projects[dir] ??= {});
+    if (entry.hasTrustDialogAccepted === true) return undefined;
+    entry.hasTrustDialogAccepted = true;
+    return `${JSON.stringify(data, null, 2)}\n`;
+  });
+}
+
+const TOML_PROJECT_HEADER =
+  /^[ \t]*\[[ \t]*projects[ \t]*\.[ \t]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')[ \t]*\][ \t]*(?:#.*)?$/gm;
+
+/** The project paths that already have a `[projects."<dir>"]` table, any legal spacing. */
+export function codexProjectTables(text: string): string[] {
+  const found: string[] = [];
+  for (const match of text.matchAll(TOML_PROJECT_HEADER)) {
+    if (match[1] !== undefined) {
+      try {
+        found.push(JSON.parse(`"${match[1]}"`) as string);
+      } catch {
+        found.push(match[1]);
+      }
+    } else if (match[2] !== undefined) {
+      found.push(match[2]);
+    }
+  }
+  return found;
 }
 
 /** Codex's own trust record. Appends a project table only when none exists for the dir. */
 export function trustForCodex(dir: string, env: Env = process.env): boolean {
   const codexHome = env.CODEX_HOME ?? path.join(home(env), ".codex");
   const file = path.join(codexHome, "config.toml");
-  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const header = `[projects.${JSON.stringify(dir)}]`;
-  if (text.includes(header) || text.includes(`[projects.'${dir}']`)) return false;
   mkdirSync(codexHome, { recursive: true });
-  const sep = text === "" || text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
-  writeAtomic(file, `${text}${sep}${header}\ntrust_level = "trusted"\n`);
-  return true;
+  return updateFile(file, (text) => {
+    // Any other spelling of this project (dotted keys, inline tables) is left to the user.
+    if (codexProjectTables(text).includes(dir) || text.includes(JSON.stringify(dir))) {
+      return undefined;
+    }
+    const sep = text === "" || text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+    const next = `${text}${sep}[projects.${JSON.stringify(dir)}]\ntrust_level = "trusted"\n`;
+    if (codexProjectTables(next).filter((entry) => entry === dir).length !== 1) {
+      throw new Error("refusing to write a duplicate Codex project table");
+    }
+    return next;
+  });
 }
 
 /** Writes the trust record for one CLI kind, when HMR may trust the dir. Never throws. */
@@ -121,9 +212,9 @@ export function pretrust(
   dir: string,
   env: Env = process.env,
 ): { trusted: boolean; argv: string[]; note?: string } {
-  if (!isHmrTrusted(dir, env)) return { trusted: false, argv: [] };
-  const target = canonical(dir);
   try {
+    if (!isHmrTrusted(dir, env)) return { trusted: false, argv: [] };
+    const target = canonical(dir);
     if (kind === "cursor") return { trusted: true, argv: ["--trust"] };
     if (kind === "claude") trustForClaude(target, env);
     if (kind === "codex") trustForCodex(target, env);

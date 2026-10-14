@@ -1,8 +1,21 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isHmrTrusted, pretrust, trustDirectory } from "../../src/workspace/trust.js";
+import {
+  codexProjectTables,
+  isHmrTrusted,
+  pretrust,
+  trustDirectory,
+} from "../../src/workspace/trust.js";
 
 function sandbox() {
   const home = realpathSync(mkdtempSync(path.join(os.tmpdir(), "hmr-trust-")));
@@ -37,5 +50,32 @@ describe("workspace pre-trust", () => {
     const toml = readFileSync(path.join(home, ".codex", "config.toml"), "utf8");
     expect(toml.match(/trust_level = "trusted"/g)).toHaveLength(1);
     expect(toml).toContain(`[projects.${JSON.stringify(wt)}]`);
+  });
+
+  it("keeps a private config private", () => {
+    const { home, wt, env } = sandbox();
+    const file = path.join(home, ".claude.json");
+    chmodSync(file, 0o600);
+    pretrust("claude", wt, env);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("recognises a spaced TOML header and never duplicates it", () => {
+    const { home, wt, env } = sandbox();
+    mkdirSync(path.join(home, ".codex"));
+    const file = path.join(home, ".codex", "config.toml");
+    writeFileSync(file, `[ projects . ${JSON.stringify(wt)} ]  # mine\ntrust_level = "trusted"\n`);
+    expect(codexProjectTables(readFileSync(file, "utf8"))).toEqual([wt]);
+    pretrust("codex", wt, env);
+    expect(readFileSync(file, "utf8").match(/trust_level/g)).toHaveLength(1);
+  });
+
+  it("never throws when the trust list cannot be read", () => {
+    const { home, wt } = sandbox();
+    const list = path.join(home, "list-is-a-dir");
+    mkdirSync(list);
+    const result = pretrust("cursor", path.join(home, "x"), { HOME: home, HMR_TRUST_LIST: list });
+    expect(result.trusted).toBe(false);
+    expect(pretrust("cursor", wt, { HOME: home, HMR_TRUST_LIST: list }).trusted).toBe(true);
   });
 });

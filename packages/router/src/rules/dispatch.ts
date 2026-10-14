@@ -60,7 +60,7 @@ export interface DispatchDeps {
   store: DispatchRepository;
   herdr: HerdrClient;
   /** Agent lookup and screen reads, used only on panes this task owns. */
-  pane: Pick<HerdrPaneClient, "getAgent" | "readPane" | "sendText" | "sendKeys">;
+  pane: Pick<HerdrPaneClient, "getAgent" | "readPane" | "sendText" | "sendKeys" | "paneState">;
   /** Runs `<absolute executable> --help` without a shell. */
   probeHelp: (executable: string) => Promise<CommandResult>;
   /** Absolute path of an executable on the router's PATH, or undefined. Reads only. */

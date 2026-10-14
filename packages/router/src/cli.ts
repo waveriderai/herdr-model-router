@@ -553,7 +553,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .option("--stopped", "Confirm the writer has stopped", false)
     .option(
       "--stale",
-      "Release a stale lock: allowed only when no lane pane still runs an agent",
+      "Release a stale lock: allowed only when Herdr confirms every lane pane is gone",
       false,
     )
     .option("--evidence <text>", "What shows the writer stopped")

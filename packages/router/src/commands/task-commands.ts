@@ -35,12 +35,12 @@ export function workflowTaskRefusal(
 
 /**
  * `task release --stale`: a writer lock is stale only when no lane of the task still has a
- * live agent in its pane (the pane is gone, or Herdr reports no agent there). Any live pane,
- * or a pane Herdr cannot answer for, keeps the lock.
+ * recorded pane still exists (Herdr answers pane_not_found for each). A pane that still
+ * exists, or one Herdr cannot answer for, keeps the lock.
  */
 export async function staleLockEvidence(
   store: DispatchRepository,
-  pane: { getAgent(paneId: string): Promise<unknown> },
+  pane: { paneState?(paneId: string): Promise<"present" | "absent" | "unknown"> },
   id: string,
 ): Promise<{ stale: true; evidence: string } | { stale: false; reason: string }> {
   if (!store.getTask(id)) return { stale: false, reason: `Unknown task ${id}.` };
@@ -49,22 +49,28 @@ export async function staleLockEvidence(
     .map((lane) => lane.paneId)
     .filter((paneId): paneId is string => Boolean(paneId));
   for (const paneId of panes) {
-    let live: unknown;
+    let state: "present" | "absent" | "unknown";
     try {
-      live = await pane.getAgent(paneId);
+      state = pane.paneState ? await pane.paneState(paneId) : "unknown";
     } catch {
-      live = undefined;
+      state = "unknown";
     }
-    if (live) {
+    if (state === "present") {
       return {
         stale: false,
-        reason: `pane ${paneId} still runs an agent; stop it, or use \`task complete\` / \`task release --stopped\``,
+        reason: `pane ${paneId} still exists; close it first, or use \`task complete\` / \`task release --stopped\``,
+      };
+    }
+    if (state === "unknown") {
+      return {
+        stale: false,
+        reason: `Herdr could not confirm pane ${paneId} is gone, so the lock is kept`,
       };
     }
   }
   return {
     stale: true,
-    evidence: `stale lock: no live agent in ${panes.length ? `pane(s) ${panes.join(", ")}` : "any pane (none recorded)"}`,
+    evidence: `stale lock: Herdr reports no pane for ${panes.length ? `pane(s) ${panes.join(", ")}` : "any pane (none recorded)"}`,
   };
 }
 
