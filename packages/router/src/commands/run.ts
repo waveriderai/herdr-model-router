@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { addToTrustList } from "../workspace/trust.js";
 import { runCommand as defaultRunCommand, type runCommand } from "../collectors/command-runner.js";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import { resolveEnrichment, type Resolution } from "../enrich/resolver.js";
@@ -525,6 +526,12 @@ export async function executeRun(
       };
     }
     workspace = created.workspace;
+    // A worktree HMR created is its own: list it so CLIs launched there are pre-trusted.
+    try {
+      addToTrustList(intent.plan.path);
+    } catch {
+      // Not fatal: the CLI then shows its own trust dialog and the lane falls back.
+    }
   }
   if (!options.dryRun && intent?.action === "reuse" && previous) {
     const checked = await validateWorkspace(git(), intent.workspace);

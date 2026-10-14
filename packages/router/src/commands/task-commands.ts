@@ -33,6 +33,47 @@ export function workflowTaskRefusal(
     : undefined;
 }
 
+/**
+ * `task release --stale`: a writer lock is stale only when no lane of the task still has a
+ * recorded pane still exists (Herdr answers pane_not_found for each). A pane that still
+ * exists, or one Herdr cannot answer for, keeps the lock.
+ */
+export async function staleLockEvidence(
+  store: DispatchRepository,
+  pane: { paneState?(paneId: string): Promise<"present" | "absent" | "unknown"> },
+  id: string,
+): Promise<{ stale: true; evidence: string } | { stale: false; reason: string }> {
+  if (!store.getTask(id)) return { stale: false, reason: `Unknown task ${id}.` };
+  const panes = store
+    .lanes(id)
+    .map((lane) => lane.paneId)
+    .filter((paneId): paneId is string => Boolean(paneId));
+  for (const paneId of panes) {
+    let state: "present" | "absent" | "unknown";
+    try {
+      state = pane.paneState ? await pane.paneState(paneId) : "unknown";
+    } catch {
+      state = "unknown";
+    }
+    if (state === "present") {
+      return {
+        stale: false,
+        reason: `pane ${paneId} still exists; close it first, or use \`task complete\` / \`task release --stopped\``,
+      };
+    }
+    if (state === "unknown") {
+      return {
+        stale: false,
+        reason: `Herdr could not confirm pane ${paneId} is gone, so the lock is kept`,
+      };
+    }
+  }
+  return {
+    stale: true,
+    evidence: `stale lock: Herdr reports no pane for ${panes.length ? `pane(s) ${panes.join(", ")}` : "any pane (none recorded)"}`,
+  };
+}
+
 /** Everything recorded for one task: lanes, attempts, ownership. Read from the store only. */
 export function taskReport(store: DispatchRepository, id: string) {
   const task = store.getTask(id);

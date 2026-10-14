@@ -5,7 +5,7 @@ import { dispatchPlan, reviseTask } from "../../src/rules/dispatch.js";
 import { parseRules, type RuleSet } from "../../src/rules/mdc-parser.js";
 import { planRoute, type RoutePlan } from "../../src/rules/plan.js";
 import { detectQuota } from "../../src/rules/readiness.js";
-import { deps, fakeHerdr, READY_SCREEN, type FakeHerdr } from "../helpers/fake-herdr.js";
+import { deps, fakeHerdr, READY_SCREEN, screen, type FakeHerdr } from "../helpers/fake-herdr.js";
 
 const RULES = `---
 description: Synthetic fallback rules for tests
@@ -576,6 +576,33 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
       paneId: "w1:p1",
     });
     expect(d.store.getLane(result.lanes[0]!.laneId)?.skipped?.[0]?.attemptId).toBeUndefined();
+  });
+
+  it("falls back when a CLI fails to start on a dialog, and prints the reason (AGENT-285)", async () => {
+    const herdr = fakeHerdr({
+      detect: (_pane, executable) =>
+        executable === "claude" ? { screen: screen("claude-trust") } : {},
+    });
+    const { deps: d } = deps(herdr);
+    const result = await dispatchPlan({
+      plan: plan("feature"),
+      prompt: "Fix it",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(result.lanes[0]).toMatchObject({
+      descriptor: "codex:gpt-6.1-sol@high",
+      state: "prompted",
+      skipped: [
+        {
+          descriptor: "claude:claude-opus-5-5@high",
+          reason: "claude failed to start: workspace trust dialog",
+        },
+      ],
+    });
+    // The dialog was never answered and the stuck CLI never prompted.
+    expect(herdr.prompts).toHaveLength(1);
   });
 
   it("stops with a clear error and releases the worktree when every model hits its limit", async () => {

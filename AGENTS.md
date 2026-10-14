@@ -35,6 +35,7 @@ npx vitest --run <path> # one test file
   explicit per-run `hmr run --dangerously-bypass-permissions` opt-in for a writer. Never fall
   back to another model or an API key when a route is unavailable. The one exception is a
   role's own `# fallback:` order, followed only after the launched model reports a quota or
-  usage-limit error.
+  usage-limit error, or fails to start (a startup dialog, or no ready prompt before the
+  readiness timeout) with no prompt sent and its pane confirmed closed (Kai, AGENT-285).
 - Do not deploy the coordinator or publish packages.
 - Write code, docs, and commit messages in English.

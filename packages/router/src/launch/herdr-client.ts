@@ -179,6 +179,8 @@ export interface HerdrAgentInfo {
 /** Controls an already-running agent pane; used by in-place effort switching. */
 export interface HerdrPaneClient {
   getAgent(target: string): Promise<HerdrAgentInfo | undefined>;
+  /** Whether Herdr still has the pane: "unknown" when Herdr could not answer clearly. */
+  paneState?(target: string): Promise<"present" | "absent" | "unknown">;
   readPane(
     paneId: string,
     options: { source: "visible" | "recent" | "recent-unwrapped"; lines: number; ansi?: boolean },
@@ -243,6 +245,21 @@ export function createHerdrPaneClient(runCommand: RunCommand): HerdrPaneClient {
     async getAgent(target) {
       const result = await runCommand(["herdr", "agent", "get", target]);
       return result.ok ? parseHerdrAgentInfo(result.stdout) : undefined;
+    },
+    async paneState(target) {
+      const result = await runCommand(["herdr", "pane", "get", target]);
+      if (!result.ok) return "unknown";
+      try {
+        const data = JSON.parse(result.stdout.trim()) as {
+          result?: { pane?: { pane_id?: string } };
+          error?: { code?: string };
+        };
+        if (data.error?.code === "pane_not_found") return "absent";
+        if (data.result?.pane?.pane_id === target) return "present";
+        return "unknown";
+      } catch {
+        return "unknown";
+      }
     },
     async readPane(paneId, options) {
       const result = await runCommand([

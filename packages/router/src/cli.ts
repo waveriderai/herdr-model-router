@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { trustDirectory } from "./workspace/trust.js";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -74,6 +75,7 @@ import {
   executeTaskRecover,
   executeTaskRevise,
   executeTaskStatus,
+  staleLockEvidence,
 } from "./commands/task-commands.js";
 
 export interface CliIo {
@@ -549,20 +551,49 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .command("release")
     .argument("<id>", "Task id")
     .option("--stopped", "Confirm the writer has stopped", false)
-    .requiredOption("--evidence <text>", "What shows the writer stopped")
+    .option(
+      "--stale",
+      "Release a stale lock: allowed only when Herdr confirms every lane pane is gone",
+      false,
+    )
+    .option("--evidence <text>", "What shows the writer stopped")
     .option("--json", "Emit JSON", false)
-    .action((id: string, flags: { stopped?: boolean; evidence: string; json?: boolean }) =>
-      guarded(
-        withStore((deps) =>
-          executeTaskClose(
-            deps.store,
-            id,
-            { status: "released", evidence: flags.evidence, stopped: Boolean(flags.stopped) },
-            deps.workflows,
-          ),
+    .action(
+      (
+        id: string,
+        flags: { stopped?: boolean; stale?: boolean; evidence?: string; json?: boolean },
+      ) =>
+        guarded(
+          withStore(async (deps) => {
+            if (flags.stale) {
+              const check = await staleLockEvidence(deps.store, deps.pane, id);
+              if (!check.stale) {
+                return {
+                  output: `Not stale: ${check.reason}`,
+                  json: { ok: false, code: "not-stale", error: check.reason },
+                  code: 2,
+                };
+              }
+              return executeTaskClose(
+                deps.store,
+                id,
+                {
+                  status: "released",
+                  evidence: [check.evidence, flags.evidence].filter(Boolean).join("; "),
+                  stopped: true,
+                },
+                deps.workflows,
+              );
+            }
+            return executeTaskClose(
+              deps.store,
+              id,
+              { status: "released", evidence: flags.evidence, stopped: Boolean(flags.stopped) },
+              deps.workflows,
+            );
+          }),
+          flags.json,
         ),
-        flags.json,
-      ),
     );
   task
     .command("recover")
@@ -1058,6 +1089,15 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
       } finally {
         db?.close();
       }
+    });
+  program
+    .command("trust")
+    .description(
+      "Pre-trust a directory HMR or Herdr created for Cursor, Claude and Codex (each CLI's own trust record)",
+    )
+    .argument("<dir>", "Worktree directory")
+    .action((dir: string) => {
+      stdout.write(`${trustDirectory(dir, env).join("\n")}\n`);
     });
   program.command("accounts").action(() => {
     try {

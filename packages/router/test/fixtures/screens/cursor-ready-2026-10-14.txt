@@ -1,0 +1,30 @@
+
+
+  Cursor Agent
+  v2026.10.14-0f9edde
+  Tip: Use /mcp to connect Cursor to your tools and data sources.
+
+
+
+
+  → Plan, search, build anything
+
+
+  Composer 2.5                                                                      Run Everything
+  ~/repo · main
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
