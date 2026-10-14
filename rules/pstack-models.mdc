@@ -1,0 +1,41 @@
+---
+description: pstack per-role model choices (overrides skill defaults)
+alwaysApply: true
+---
+# pstack model configuration. One line per role. Delete a line to fall back to the skill default.
+# `inherit-parent` or `auto` as a value: the role runs on the parent chat model (omit Task `model`). HMR does not launch a parent alias that resolves to a model already in the panel. A selector written twice still runs twice.
+# Review panels name one lane per family at high effort. Implementation roles stay on the budget below.
+# budget: large (xhigh)
+# hmr: first-version cursor
+# hmr: fix-accounts claude,grok
+# hmr: review-only codex
+# hmr: readonly design consultant
+feature, refactoring, new product: claude:claude-opus-5-5@high
+# fallback: codex:gpt-6.1-sol@high, then claude:claude-sonnet-5-5@high
+bug-fix, ops maintenance: claude:claude-sonnet-5-5@high
+# fallback: grok-4.7-xhigh-fast, then codex:gpt-6.1-sol@high
+perf-issue: grok-4.7-xhigh-fast
+hillclimb: grok-4.7-xhigh-fast
+judgment and prose: inherit-parent
+hardest tasks: inherit-parent
+how explorer: grok-4.7-xhigh-fast
+how explainer: inherit-parent
+why investigators: grok-4.7-xhigh-fast
+why synthesizer: inherit-parent
+reflect tooling: inherit-parent
+reflect judgment, divergent, synthesizer: inherit-parent
+arena runners: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, grok:grok-4.7@high
+arena cross-judge pool: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, grok:grok-4.7@high
+swarm workers: grok-4.7-xhigh-fast
+architect runners: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, grok:grok-4.7@high
+interrogate reviewers: claude:claude-opus-5-5@high, codex:gpt-6.1-sol@high, grok:grok-4.7@high
+design consultant: codex:gpt-6.1-sol@xhigh
+# Design docs, specs and PRDs: visual + UX decisions and detailed implementer instructions; NO code (Kai 10/14). Cursor implements; Codex reviews. Mandatory for any visual or UX work. Astra only if Kai asks.
+# fallback: codex:gpt-6.1-sol@high, then claude:claude-opus-5-5@high
+design implementation: claude:claude-sonnet-5-5@high
+# UI code from the design consultant spec. fallback: codex:gpt-6.1-sol@high, then cursor:composer-2.5
+small fix, docs: claude:claude-sonnet-5-5@low
+# fallback: grok-4.7-xhigh-fast, then cursor:composer-2.5
+review gate: codex:gpt-6.1-sol@high
+# All SEV levels incl. SEV-1; no Astra, no xhigh. Gate fallback stays per pr-merge-tiered (claude/grok, manual Codex-unavailable marker).
+coordinator: grok:grok-4.7@high
