@@ -33,6 +33,41 @@ export function workflowTaskRefusal(
     : undefined;
 }
 
+/**
+ * `task release --stale`: a writer lock is stale only when no lane of the task still has a
+ * live agent in its pane (the pane is gone, or Herdr reports no agent there). Any live pane,
+ * or a pane Herdr cannot answer for, keeps the lock.
+ */
+export async function staleLockEvidence(
+  store: DispatchRepository,
+  pane: { getAgent(paneId: string): Promise<unknown> },
+  id: string,
+): Promise<{ stale: true; evidence: string } | { stale: false; reason: string }> {
+  if (!store.getTask(id)) return { stale: false, reason: `Unknown task ${id}.` };
+  const panes = store
+    .lanes(id)
+    .map((lane) => lane.paneId)
+    .filter((paneId): paneId is string => Boolean(paneId));
+  for (const paneId of panes) {
+    let live: unknown;
+    try {
+      live = await pane.getAgent(paneId);
+    } catch {
+      live = undefined;
+    }
+    if (live) {
+      return {
+        stale: false,
+        reason: `pane ${paneId} still runs an agent; stop it, or use \`task complete\` / \`task release --stopped\``,
+      };
+    }
+  }
+  return {
+    stale: true,
+    evidence: `stale lock: no live agent in ${panes.length ? `pane(s) ${panes.join(", ")}` : "any pane (none recorded)"}`,
+  };
+}
+
 /** Everything recorded for one task: lanes, attempts, ownership. Read from the store only. */
 export function taskReport(store: DispatchRepository, id: string) {
   const task = store.getTask(id);

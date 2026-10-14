@@ -212,7 +212,7 @@ describe("native CLI launch environment (process level)", () => {
       expect(paneCommands).toHaveLength(1);
       expect(paneCommands[0]).toMatch(/^\/bin\/sh '.+\/router home\/launch\/lane_[0-9a-f-]+\.sh'$/);
       expect(prompts).toEqual([
-        `${result.lanes[0]!.agentName}: Fix it\n\n(Writer task ${result.task.id} for role "bug-fix". Revisions for this task arrive in this same session.)`,
+        `${result.lanes[0]!.agentName}: Fix it\n\n(Writer task ${result.task.id} for role "bug-fix". Revisions for this task arrive in this same session. When the work is committed and you are done, run \`hmr task complete ${result.task.id} --evidence "<commit sha and what you checked>"\` as your last step; it frees this worktree.)`,
       ]);
     },
   );

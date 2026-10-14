@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { pretrust } from "../workspace/trust.js";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import type { CommandResult, HerdrClient, HerdrPaneClient } from "../launch/herdr-client.js";
 import { herdrError, parseHerdrPaneId } from "../launch/herdr-launcher.js";
@@ -282,7 +283,8 @@ function laneText(
     plan.kind === "panel"
       ? `Read-only panel lane ${lane.index} of ${plan.lanes.length} for role "${plan.role}". Do not modify files.`
       : plan.access === "write"
-        ? `Writer task ${task.id} for role "${plan.role}". Revisions for this task arrive in this same session.`
+        ? `Writer task ${task.id} for role "${plan.role}". Revisions for this task arrive in this same session. ` +
+          `When the work is committed and you are done, run \`hmr task complete ${task.id} --evidence "<commit sha and what you checked>"\` as your last step; it frees this worktree.`
         : `Read-only task for role "${plan.role}". Do not modify files.`;
   return `${prompt}\n\n(${role})`;
 }
@@ -356,6 +358,7 @@ async function observeAgent(
         return {
           ok: false,
           error: `${verdict.reason}. No prompt was sent and the pane was closed`,
+          quota: `${expected} failed to start: ${verdict.dialog} dialog`,
         };
       }
       if (verdict.state === "ready" && info.status === "idle" && info.interactiveReady !== false) {
@@ -370,6 +373,7 @@ async function observeAgent(
       return {
         ok: false,
         error: `${expected} did not become ready in pane ${paneId} (${last}); no prompt was sent`,
+        quota: `${expected} failed to start: not ready after ${Math.round(timeoutMs / 1000)}s (${last})`,
       };
     }
     await sleep(pollMs);
@@ -473,7 +477,13 @@ export async function startNativeAgent(input: {
   launch: ResolvedLaunch;
   onPaneCreated?: (paneId: string) => void;
 }): Promise<NativeStart> {
-  const { deps, launch } = input;
+  const { deps } = input;
+  // A worktree HMR or Herdr created is pre-trusted through the CLI's own trust record.
+  const trust = pretrust(input.launch.kind, input.cwd);
+  const launch: ResolvedLaunch =
+    trust.argv.length > 0 && !input.launch.argv.includes("--trust")
+      ? { ...input.launch, argv: [...input.launch.argv, ...trust.argv] }
+      : input.launch;
   const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
   const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
   if (!split.ok || !paneId) {

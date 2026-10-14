@@ -410,9 +410,14 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
     grok: (lines, compact) =>
       lines.some((line) => /│\s*❯/.test(line)) &&
       (compact.includes("ctrl+.:shortcuts") || compact.includes("grok")),
-    // `→` input line, plus the mode footer.
+    // `→` input line, plus the mode footer. cursor-agent 2026.10.14 dropped "shift+tab to
+    // cycle": its composer reads "→ Plan, search, build anything" over a status bar naming the
+    // run mode ("Run Everything" or "Auto-run"). Either footer counts.
     cursor: (lines, compact) =>
-      lines.some((line) => /^\s*→(\s|$)/.test(line)) && compact.includes("shift+tabtocycle"),
+      lines.some((line) => /^\s*→(\s|$)/.test(line)) &&
+      (compact.includes("shift+tabtocycle") ||
+        compact.includes("runeverything") ||
+        compact.includes("auto-run")),
     // `›` input line (not a numbered menu), plus the composer footer.
     codex: (lines, compact) =>
       lines.some((line) => /^\s*›(\s|$)/.test(line) && !NUMBERED_MENU.test(line)) &&

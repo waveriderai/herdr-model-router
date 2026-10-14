@@ -13,6 +13,8 @@ describe("screen readiness", () => {
     ["claude", "claude-ready-narrow"],
     ["grok", "grok-ready"],
     ["cursor", "cursor-ready"],
+    ["cursor", "cursor-ready-2026-10-14"],
+    ["cursor", "cursor-ready-auto-run"],
     ["codex", "codex-ready"],
   ] as const)("%s at its ordinary prompt (%s) is ready", (kind, name) => {
     expect(screenVerdict(kind, extractPaneText(screen(name)))).toEqual({ state: "ready" });
