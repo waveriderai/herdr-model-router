@@ -284,7 +284,7 @@ function laneText(
       ? `Read-only panel lane ${lane.index} of ${plan.lanes.length} for role "${plan.role}". Do not modify files.`
       : plan.access === "write"
         ? `Writer task ${task.id} for role "${plan.role}". Revisions for this task arrive in this same session. ` +
-          `When the work is committed and you are done, run \`hmr task complete ${task.id} --evidence "<commit sha and what you checked>"\` as your last step; it frees this worktree.`
+          `When the work is committed and you are done, run \`hmr task complete ${task.id} --evidence "<commit sha and what you checked>"\` as your last step; it frees this worktree. If it answers that the task is still dispatching, wait 30 seconds and run it again.`
         : `Read-only task for role "${plan.role}". Do not modify files.`;
   return `${prompt}\n\n(${role})`;
 }
@@ -567,15 +567,43 @@ export async function startNativeAgent(input: {
  * Reads the identity Herdr reports for a just-named writer and checks it is complete and in
  * the planned directory. The writer's first prompt and every revision need this exact session.
  */
+/** How long a writer's binding waits for a session hook that lands just after the prompt shows. */
+const SESSION_WAIT_MS = 15_000;
+
 export async function bindWriterIdentity(
-  deps: Pick<DispatchDeps, "pane">,
+  deps: Pick<DispatchDeps, "pane"> & Partial<Pick<DispatchDeps, "sleep" | "pollMs">>,
   input: { paneId: string; agentName: string; cwd: string },
 ): Promise<{ ok: true; identity: BoundIdentity } | { ok: false; error: string }> {
-  let live;
-  try {
-    live = await deps.pane.getAgent(input.paneId);
-  } catch {
-    live = undefined;
+  const read = async () => {
+    try {
+      return await deps.pane.getAgent(input.paneId);
+    } catch {
+      return undefined;
+    }
+  };
+  let live = await read();
+  // cursor-agent 2026.10.14 draws its prompt before its sessionStart hook reports the session.
+  if (live && !live.sessionId && live.agent === "cursor") {
+    const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
+    const sleep = deps.sleep ?? sleepFor;
+    const first = live;
+    for (let waited = 0; waited < SESSION_WAIT_MS && live && !live.sessionId; waited += pollMs) {
+      await sleep(pollMs);
+      live = await read();
+      // Every poll must still be the same Cursor agent in the same pane, name and directory.
+      if (
+        live &&
+        (live.paneId !== first.paneId ||
+          live.agent !== first.agent ||
+          live.name !== first.name ||
+          live.cwd !== first.cwd)
+      ) {
+        return {
+          ok: false,
+          error: `Pane ${input.paneId} changed agent while waiting for its session (now ${live.agent} in pane ${live.paneId}); no prompt was sent.`,
+        };
+      }
+    }
   }
   if (!live) {
     return {
