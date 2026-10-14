@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  codexProjectTables,
+  codexHasProject,
   isHmrTrusted,
   pretrust,
   trustDirectory,
@@ -65,7 +65,7 @@ describe("workspace pre-trust", () => {
     mkdirSync(path.join(home, ".codex"));
     const file = path.join(home, ".codex", "config.toml");
     writeFileSync(file, `[ projects . ${JSON.stringify(wt)} ]  # mine\ntrust_level = "trusted"\n`);
-    expect(codexProjectTables(readFileSync(file, "utf8"))).toEqual([wt]);
+    expect(codexHasProject(readFileSync(file, "utf8"), wt)).toBe(true);
     pretrust("codex", wt, env);
     expect(readFileSync(file, "utf8").match(/trust_level/g)).toHaveLength(1);
   });
@@ -77,5 +77,22 @@ describe("workspace pre-trust", () => {
     const result = pretrust("cursor", path.join(home, "x"), { HOME: home, HMR_TRUST_LIST: list });
     expect(result.trusted).toBe(false);
     expect(pretrust("cursor", wt, { HOME: home, HMR_TRUST_LIST: list }).trusted).toBe(true);
+  });
+
+  it("recognises inline-table and escaped spellings, and never touches invalid TOML", () => {
+    const { home, wt, env } = sandbox();
+    mkdirSync(path.join(home, ".codex"));
+    const file = path.join(home, ".codex", "config.toml");
+    const inline = `[projects]\n'${wt}' = { trust_level = 'trusted' }\n`;
+    writeFileSync(file, inline);
+    pretrust("codex", wt, env);
+    expect(readFileSync(file, "utf8")).toBe(inline);
+    const escaped = `[projects."${wt.replace(/\//g, "\\U0000002F")}"]\ntrust_level = "trusted"\n`;
+    writeFileSync(file, escaped);
+    pretrust("codex", wt, env);
+    expect(readFileSync(file, "utf8")).toBe(escaped);
+    writeFileSync(file, "not = [valid");
+    pretrust("codex", wt, env);
+    expect(readFileSync(file, "utf8")).toBe("not = [valid");
   });
 });

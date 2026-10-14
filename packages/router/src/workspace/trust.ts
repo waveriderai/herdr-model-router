@@ -23,6 +23,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
+import { parse as parseToml } from "smol-toml";
 import path from "node:path";
 
 type Env = NodeJS.Dict<string>;
@@ -126,7 +127,10 @@ function withFileLock<T>(file: string, action: () => T): T {
 /**
  * Read-modify-write under the lock: the temp file is created exclusively with the original
  * file's mode (0600 when new), and the update is abandoned if the file changed between the
- * read and the rename (another writer, such as the CLI itself).
+ * read and the rename. Residual risk, stated plainly: a native CLI does not take this lock, so
+ * a CLI write landing in the microseconds between the last check and the rename is lost. The
+ * CLIs replace these files the same way themselves, and the entry HMR adds is idempotent, so
+ * the next launch re-adds it.
  */
 function updateFile(file: string, change: (text: string) => string | undefined): boolean {
   return withFileLock(file, () => {
@@ -167,40 +171,28 @@ export function trustForClaude(dir: string, env: Env = process.env): boolean {
   });
 }
 
-const TOML_PROJECT_HEADER =
-  /^[ \t]*\[[ \t]*projects[ \t]*\.[ \t]*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')[ \t]*\][ \t]*(?:#.*)?$/gm;
-
-/** The project paths that already have a `[projects."<dir>"]` table, any legal spacing. */
-export function codexProjectTables(text: string): string[] {
-  const found: string[] = [];
-  for (const match of text.matchAll(TOML_PROJECT_HEADER)) {
-    if (match[1] !== undefined) {
-      try {
-        found.push(JSON.parse(`"${match[1]}"`) as string);
-      } catch {
-        found.push(match[1]);
-      }
-    } else if (match[2] !== undefined) {
-      found.push(match[2]);
-    }
-  }
-  return found;
+/** True when the parsed Codex config already has a `projects` entry for the dir. */
+export function codexHasProject(text: string, dir: string): boolean {
+  const data = parseToml(text) as { projects?: Record<string, unknown> };
+  return Boolean(data.projects && Object.prototype.hasOwnProperty.call(data.projects, dir));
 }
 
-/** Codex's own trust record. Appends a project table only when none exists for the dir. */
+/**
+ * Codex's own trust record. The config is parsed as TOML: an existing entry for the dir in
+ * any legal spelling is left alone, a config that does not parse is never touched, and the
+ * new text must parse with the dir trusted before it replaces the file.
+ */
 export function trustForCodex(dir: string, env: Env = process.env): boolean {
   const codexHome = env.CODEX_HOME ?? path.join(home(env), ".codex");
   const file = path.join(codexHome, "config.toml");
   mkdirSync(codexHome, { recursive: true });
   return updateFile(file, (text) => {
-    // Any other spelling of this project (dotted keys, inline tables) is left to the user.
-    if (codexProjectTables(text).includes(dir) || text.includes(JSON.stringify(dir))) {
-      return undefined;
-    }
+    if (codexHasProject(text, dir)) return undefined;
     const sep = text === "" || text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
     const next = `${text}${sep}[projects.${JSON.stringify(dir)}]\ntrust_level = "trusted"\n`;
-    if (codexProjectTables(next).filter((entry) => entry === dir).length !== 1) {
-      throw new Error("refusing to write a duplicate Codex project table");
+    const parsed = parseToml(next) as { projects?: Record<string, { trust_level?: unknown }> };
+    if (parsed.projects?.[dir]?.trust_level !== "trusted") {
+      throw new Error("the updated Codex config did not trust the directory; nothing was written");
     }
     return next;
   });
