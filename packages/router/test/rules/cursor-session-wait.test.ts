@@ -6,7 +6,7 @@ import { bindWriterIdentity } from "../../src/rules/dispatch.js";
 
 const cwd = realpathSync(mkdtempSync(path.join(os.tmpdir(), "hmr-bind-")));
 
-function pane(sessionAfter: number) {
+function pane(sessionAfter: number, later: Record<string, unknown> = {}) {
   let calls = 0;
   return {
     getAgent: async (paneId: string) => {
@@ -17,7 +17,7 @@ function pane(sessionAfter: number) {
         paneId,
         name: "hmr-cursor-1",
         cwd,
-        ...(calls > sessionAfter ? { sessionId: "sess-1" } : {}),
+        ...(calls > sessionAfter ? { sessionId: "sess-1", ...later } : {}),
       };
     },
     readPane: async () => undefined,
@@ -40,5 +40,19 @@ describe("writer binding waits for a late Cursor session hook (AGENT-285)", () =
       { paneId: "w1:p1", agentName: "hmr-cursor-1", cwd },
     );
     expect(bound).toMatchObject({ ok: false });
+  });
+  it("refuses when the pane, agent kind, name or cwd changes while waiting", async () => {
+    for (const later of [
+      { paneId: "w1:p9" },
+      { agent: "claude" },
+      { name: "other" },
+      { cwd: "/elsewhere" },
+    ]) {
+      const bound = await bindWriterIdentity(
+        { pane: pane(1, later), sleep: async () => {}, pollMs: 500 },
+        { paneId: "w1:p1", agentName: "hmr-cursor-1", cwd },
+      );
+      expect(bound).toMatchObject({ ok: false });
+    }
   });
 });

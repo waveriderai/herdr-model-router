@@ -586,9 +586,23 @@ export async function bindWriterIdentity(
   if (live && !live.sessionId && live.agent === "cursor") {
     const pollMs = deps.pollMs ?? DEFAULT_POLL_MS;
     const sleep = deps.sleep ?? sleepFor;
+    const first = live;
     for (let waited = 0; waited < SESSION_WAIT_MS && live && !live.sessionId; waited += pollMs) {
       await sleep(pollMs);
       live = await read();
+      // Every poll must still be the same Cursor agent in the same pane, name and directory.
+      if (
+        live &&
+        (live.paneId !== first.paneId ||
+          live.agent !== first.agent ||
+          live.name !== first.name ||
+          live.cwd !== first.cwd)
+      ) {
+        return {
+          ok: false,
+          error: `Pane ${input.paneId} changed agent while waiting for its session (now ${live.agent} in pane ${live.paneId}); no prompt was sent.`,
+        };
+      }
     }
   }
   if (!live) {
