@@ -97,8 +97,8 @@ describe("panel dispatch (AE4)", () => {
       "w1:p3",
     ]);
     expect(herdr.prompts.map((prompt) => prompt.text)).toEqual([
-      'Review the diff\n\n(Read-only panel lane 1 of 3 for role "reviewers". Do not modify files.)',
-      'Review the diff\n\n(Read-only panel lane 3 of 3 for role "reviewers". Do not modify files.)',
+      'Review the diff\n\nA read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).\n\n(Read-only panel lane 1 of 3 for role "reviewers". Do not modify files.)',
+      'Review the diff\n\nA read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).\n\n(Read-only panel lane 3 of 3 for role "reviewers". Do not modify files.)',
     ]);
     // A panel never takes the worktree's writer ownership.
     expect(d.store.ownerOf("/work/project")).toBeUndefined();

@@ -1,5 +1,6 @@
 import { HandoffSchema, type Handoff, type WorkflowPhase } from "../domain/session.js";
 import { redactCollectorText } from "../collectors/normalizer.js";
+import { PLANE_CLI_LINE } from "../launch/plane-cli-line.js";
 
 export function buildHandoff(input: {
   task: string;
@@ -55,7 +56,7 @@ export function formatHandoffPrompt(handoff: Handoff, router?: HandoffRouterCont
   section("Completed checks", handoff.completedChecks);
   section("Remaining acceptance criteria", handoff.remainingAcceptanceCriteria);
   const body = redactCollectorText(lines.join("\n"));
-  const tail: string[] = [];
+  const tail: string[] = ["", PLANE_CLI_LINE];
   if (router?.workspace) {
     // Router-generated paths are not redacted: the secret pattern also matches names like
     // `task-notes`, and a mangled path would send the agent to the wrong directory.
@@ -78,5 +79,5 @@ export function formatHandoffPrompt(handoff: Handoff, router?: HandoffRouterCont
       ),
     );
   }
-  return tail.length > 0 ? `${body}\n${tail.join("\n")}` : body;
+  return `${body}\n${tail.join("\n")}`;
 }

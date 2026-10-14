@@ -403,6 +403,8 @@ describe("router run", () => {
         "Phase: implementation",
         "Constraints:",
         "- Do not deploy or publish anything without asking the user.",
+        "",
+        "A read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).",
       ].join("\n"),
     );
   });

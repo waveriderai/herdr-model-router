@@ -129,6 +129,9 @@ describe("hmr start: task-only entry through the MDC coordinator (R3, R4, AE6)",
     expect(prompt).toContain(`--skills-root '${root}'`);
     expect(prompt).toContain("adds no authority of its own");
     expect(prompt).toContain("not read-only at the operating-system level");
+    expect(prompt).toContain(
+      "A read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).",
+    );
     const record = s.coordinators.list(1)[0]!;
     expect(record).toMatchObject({
       role: "coordinator",

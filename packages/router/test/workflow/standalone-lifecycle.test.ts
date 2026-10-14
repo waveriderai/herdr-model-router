@@ -51,6 +51,9 @@ describe("standalone workflow (AE5 without agent-collab)", () => {
     expect(h.herdr.prompts[0]!.text).toContain(
       `HMR workflow ${workflow.id}, attempt ${attempt.id}`,
     );
+    expect(h.herdr.prompts[0]!.text).toContain(
+      "A read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).",
+    );
     expect(h.dispatch.store.ownerOf(workflow.worktreeId)?.taskId).toBe(workflow.taskId);
     const identity = workflow.identity!;
     expect(identity).toMatchObject({ kind: "claude", sessionId: `sess-${identity.paneId}` });
@@ -101,6 +104,9 @@ describe("standalone workflow (AE5 without agent-collab)", () => {
     ]);
     expect(h.herdr.prompts).toHaveLength(3);
     expect(h.herdr.prompts[1]!.text).toContain(`read-only verification lane ${lanes[0]!.laneId}`);
+    expect(h.herdr.prompts[1]!.text).toContain(
+      "A read-only Plane CLI is available at ~/bin/plane on DevPro (plane list | plane get AGENT-123; run ~/bin/plane --help).",
+    );
     // Verifiers never take the worktree.
     expect(h.dispatch.store.ownerOf(workflow.worktreeId)?.taskId).toBe(workflow.taskId);
 
