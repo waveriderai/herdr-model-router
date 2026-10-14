@@ -84,8 +84,8 @@ export function permissionProfile(plan: {
 
 /**
  * Claude Code settings for a writer: Bash runs in Claude's sandbox and is auto-approved while
- * it stays inside the sandbox (no prompt per command); it may not ask to leave the sandbox, so
- * anything that needs to run outside it is refused and surfaces in the pane. `failIfUnavailable` makes Claude exit
+ * it stays inside the sandbox (no prompt per command); a command
+ * that must run outside the sandbox (network, git push, gh) asks for approval in the pane. `failIfUnavailable` makes Claude exit
  * at startup when the sandbox cannot start (a missing dependency, an unsupported platform);
  * without it Claude runs commands unsandboxed. The exit fails the lane's readiness check, so
  * the lane is not prompted.
@@ -95,7 +95,7 @@ export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
     enabled: true,
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: true,
-    allowUnsandboxedCommands: false,
+    allowUnsandboxedCommands: true,
   },
 });
 
