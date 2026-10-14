@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Log-only Herdr watcher: one tick every @START_INTERVAL@ seconds.
+  Render with the commands in docs/cli-watchers.md. Every value is a placeholder;
+  this template is not installed or loaded by anything in this repository.
+  No KeepAlive: launchd does not restart the watcher, and the watcher never restarts Herdr.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>-B</string>
+    <string>@WATCH_PY@</string>
+    <string>--state-dir</string>
+    <string>@STATE_DIR@</string>
+    <string>--session</string>
+    <string>@SESSION@</string>
+    <string>--herdr</string>
+    <string>@HERDR@</string>
+    <string>--discovery-interval</string>
+    <string>@DISCOVERY_INTERVAL@</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>@PATH@</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>@START_INTERVAL@</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>@STATE_DIR@/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@STATE_DIR@/launchd.err.log</string>
+</dict>
+</plist>

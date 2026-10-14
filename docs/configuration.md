@@ -59,9 +59,11 @@ Coordinator URLs must use HTTPS; HTTP is accepted only for `localhost`, `127.0.0
 ## Usage numbers
 
 Rules mode chooses the account for a lane's model by remaining quota (see
-[Accounts](rules.md#accounts)). It reads the usage collector's snapshot (AGENT-197,
-`tools/usage-collector/collect.py`), which runs every 5 minutes and writes
-`~/hmr-usage/usage.json`. Set `HMR_USAGE_FILE` to read another path.
+[Accounts](rules.md#accounts)). It reads the usage collector's snapshot, `~/hmr-usage/usage.json` by default. Set
+`HMR_USAGE_FILE` to read another path. Today an unmanaged local collector, outside this
+repository, owns that file and its 5-minute schedule. `scripts/cli-watchers/collect.py` (see
+[CLI watchers](cli-watchers.md)) is its candidate replacement. It is not installed or
+scheduled, and it writes only to the `--state-dir` it is given.
 
 ```json
 {

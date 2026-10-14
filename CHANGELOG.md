@@ -11,6 +11,13 @@ and released under a single tag.
 
 ### Added
 
+- CLI watchers in `scripts/cli-watchers/` (Python standard library; see
+  `docs/cli-watchers.md`). `collect.py` replaces the AGENT-197 usage collector: every CodexBar
+  window including extra meters such as Cursor `cursor-grok-bot`, anonymous account IDs, bounded
+  error codes, explicit stale readings with the last good value, a run lock, and timeouts.
+  `watch.py` is a read-only, log-only Herdr pane watcher with deduplicated lifecycle, output,
+  and blocker events, redacted private snapshots, and a launchd template. Neither is installed.
+
 - Per-role permission defaults (AGENT-198). Read-only lanes auto-approve file reads and web
   fetches only; writers auto-approve edits inside their own worktree with the CLI's sandbox on
   (a writer Claude exits at startup rather than run unsandboxed when its sandbox cannot start);
