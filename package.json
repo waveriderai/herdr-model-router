@@ -14,10 +14,11 @@
     "build": "npm run build --workspaces --if-present",
     "test": "vitest",
     "test:watch": "vitest --watch",
+    "test:cli-watchers": "python3 -B -m unittest discover -s scripts/cli-watchers/tests",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "verify": "npm run build --workspace @agent-router/hermes-heartbeat && npm run typecheck && npm run lint && npm run format:check && npm test -- --run && npm run build"
+    "verify": "npm run build --workspace @agent-router/hermes-heartbeat && npm run typecheck && npm run lint && npm run format:check && npm test -- --run && npm run test:cli-watchers && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
