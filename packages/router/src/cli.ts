@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { trustDirectory } from "./workspace/trust.js";
-import { hostCommit } from "./workspace/host-commit.js";
-import { createGitRunner } from "./workspace/git-worktree.js";
+import { createHostGit, hostCommit } from "./workspace/host-commit.js";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -578,7 +577,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
       ) =>
         guarded(
           withStore(async (deps) => {
-            const result = await hostCommit(deps.store, createGitRunner(env), {
+            const result = await hostCommit(deps.store, createHostGit(env), {
               taskId: id,
               branch: flags.branch,
               expectHead: flags.expectHead,

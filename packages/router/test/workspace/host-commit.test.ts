@@ -1,9 +1,9 @@
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DispatchTask, Ownership } from "../../src/store/dispatch-repository.js";
-import { createGitRunner } from "../../src/workspace/git-worktree.js";
+import type { DispatchTask } from "../../src/store/dispatch-repository.js";
 import {
+  createHostGit,
   hostCommit,
   normalizeAllow,
   pathAllowed,
@@ -33,10 +33,7 @@ function repo() {
   return { dir, head };
 }
 
-function store(
-  task: Partial<DispatchTask> & { cwd: string },
-  owner?: Ownership,
-): { getTask(id: string): DispatchTask | undefined; ownerOf(): Ownership | undefined } {
+function store(task: Partial<DispatchTask> & { cwd: string }, lockedBy?: string) {
   const full: DispatchTask = {
     id: "t1",
     role: "design implementation",
@@ -49,7 +46,22 @@ function store(
     updatedAt: "",
     ...task,
   };
-  return { getTask: (id) => (id === full.id ? full : undefined), ownerOf: () => owner };
+  let holder = lockedBy;
+  const events: string[] = [];
+  return {
+    events,
+    getTask: (id: string) => (id === full.id ? full : undefined),
+    acquireCommitLock: (_w: string, t: string) => {
+      if (holder) return false;
+      holder = t;
+      events.push("acquire");
+      return true;
+    },
+    releaseCommitLock: (_w: string, t: string) => {
+      if (holder === t) holder = undefined;
+      events.push("release");
+    },
+  };
 }
 
 function req(head: string, over: Partial<HostCommitRequest> = {}): HostCommitRequest {
@@ -78,7 +90,7 @@ describe("allowlist helpers", () => {
 });
 
 describe("hostCommit", () => {
-  const run = createGitRunner(env);
+  const run = createHostGit(env);
 
   it("commits only allowlisted changes on the expected head", async () => {
     const { dir, head } = repo();
@@ -120,13 +132,9 @@ describe("hostCommit", () => {
     expect(await hostCommit(store({ cwd: dir }), run, req(head, { branch: "main" }))).toMatchObject(
       { code: "wrong-branch" },
     );
-    expect(
-      await hostCommit(
-        store({ cwd: dir }, { worktreeId: "wt1", taskId: "other", acquiredAt: "" }),
-        run,
-        req(head),
-      ),
-    ).toMatchObject({ code: "locked" });
+    expect(await hostCommit(store({ cwd: dir }, "other"), run, req(head))).toMatchObject({
+      code: "locked",
+    });
     expect(
       await hostCommit(store({ cwd: dir, status: "dispatched" }), run, req(head)),
     ).toMatchObject({ code: "not-complete" });
@@ -140,7 +148,7 @@ describe("hostCommit", () => {
     mkdirSync(path.join(dir, "design"));
     symlinkSync("/etc/hosts", path.join(dir, "design", "link"));
     expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({
-      code: "symlink",
+      code: "bad-file",
     });
   });
 
@@ -152,5 +160,67 @@ describe("hostCommit", () => {
     mkdirSync(path.join(dir, "design"));
     writeFileSync(path.join(dir, "design", "a.md"), "a\n");
     expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({ ok: true });
+  });
+
+  it("holds the lock for the whole commit and releases it", async () => {
+    const { dir, head } = repo();
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    const s = store({ cwd: dir });
+    expect(await hostCommit(s, run, req(head))).toMatchObject({ ok: true });
+    expect(s.events).toEqual(["acquire", "release"]);
+  });
+
+  it("never runs a configured fsmonitor or hooks on add/index updates", async () => {
+    const { dir, head } = repo();
+    const marker = path.join(tempDir("router-mark-"), "ran");
+    const script = path.join(tempDir("router-fsm-"), "evil.sh");
+    writeFileSync(script, `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+    git(dir, "config", "core.fsmonitor", script);
+    const hooks = tempDir("router-hooks2-");
+    for (const h of ["post-index-change", "pre-commit", "post-commit", "reference-transaction"]) {
+      writeFileSync(path.join(hooks, h), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+    }
+    git(dir, "config", "core.hooksPath", hooks);
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({ ok: true });
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("commits the bytes it read and leaves the worktree clean", async () => {
+    const { dir, head } = repo();
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    const r = await hostCommit(store({ cwd: dir }), run, req(head));
+    expect(r.ok).toBe(true);
+    expect(git(dir, "show", "HEAD:design/a.md")).toBe("a\n");
+    expect(git(dir, "status", "--porcelain")).toBe("");
+  });
+
+  it("refuses when the branch no longer matches the checkout", async () => {
+    const { dir, head } = repo();
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    git(dir, "checkout", "-q", "-b", "other");
+    expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({
+      code: "wrong-branch",
+    });
+    expect(git(dir, "rev-parse", "feature/x").trim()).toBe(head);
+  });
+
+  it("pushes only the branch, no tags, and verifies the remote", async () => {
+    const { dir, head } = repo();
+    const bare = tempDir("router-bare-");
+    git(bare, "init", "-q", "--bare");
+    git(dir, "remote", "add", "origin", bare);
+    git(dir, "tag", "secret-tag");
+    git(dir, "config", "push.followTags", "true");
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    const r = await hostCommit(store({ cwd: dir }), run, req(head, { push: true }));
+    expect(r).toMatchObject({ ok: true, pushed: true });
+    if (r.ok) expect(git(bare, "rev-parse", "refs/heads/feature/x").trim()).toBe(r.sha);
+    expect(git(bare, "tag", "--list")).toBe("");
   });
 });

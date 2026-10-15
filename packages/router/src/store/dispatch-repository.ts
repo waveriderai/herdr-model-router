@@ -403,6 +403,29 @@ export class DispatchRepository {
       : undefined;
   }
 
+  /**
+   * Host commit lock: re-takes the worktree for a completed writer task for the duration of
+   * a host-side commit. Atomic (primary key on worktree_id); false when anyone owns it.
+   */
+  acquireCommitLock(worktreeId: string, taskId: string): boolean {
+    try {
+      this.db
+        .prepare(
+          "insert into writer_ownership (worktree_id, task_id, acquired_at) values (?, ?, ?)",
+        )
+        .run(worktreeId, taskId, new Date().toISOString());
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  releaseCommitLock(worktreeId: string, taskId: string): void {
+    this.db
+      .prepare("delete from writer_ownership where worktree_id = ? and task_id = ?")
+      .run(worktreeId, taskId);
+  }
+
   ownershipOfTask(taskId: string): Ownership | undefined {
     const row = this.db
       .prepare("select worktree_id, task_id, acquired_at from writer_ownership where task_id = ?")

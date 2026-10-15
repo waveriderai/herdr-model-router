@@ -173,8 +173,12 @@ hmr task commit <id> --branch <branch> --expect-head <40-char sha> \
   --allow design/r7-followups/ --allow e2e/r7-followups/ -m "message" [--push]
 ```
 
-It refuses unless the task is a completed writer task, no other task holds the worktree
-lock, the checkout is the task's own worktree on the expected branch, HEAD equals
-`--expect-head`, and every changed path is inside the allowlist (never `.git`, `..`, or a
-symlink). It stages exactly those paths, re-checks the index, commits with repo hooks
-disabled, and with `--push` pushes the new SHA to the branch without force.
+It atomically re-takes the worktree lock for the task and holds it until done, then refuses
+unless the checkout is the task's own worktree on the expected branch at `--expect-head`,
+and every changed path is inside the allowlist (never `.git` or `..`). Every git call runs
+with hooks, fsmonitor and the untracked cache off, and attributes pinned to the expected
+HEAD's tree. The host reads each allowed file once (no symlinks, regular files only),
+hashes those bytes with `--no-filters` into a temporary index seeded from HEAD, checks the
+built tree changes only those paths with regular-file modes, then `commit-tree` and a
+compare-and-swap `update-ref` on the named branch. `--push` pushes only that SHA to that
+branch (no force, no tags, no submodules) and confirms it with `ls-remote`.
