@@ -169,6 +169,15 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(config.permissions.allow).not.toContain("Shell(*)");
     expect(config.privacyCache).toBeUndefined();
     expect(config.authInfo).toEqual({ email: "e", userId: 1 });
+    // The worktree's live-loaded Cursor settings are never writable (review round 7).
+    for (const rule of [
+      "Write(./.cursor)",
+      "Write(./.cursor/**)",
+      `Write(${cwd}/.cursor)`,
+      `Write(${cwd}/.cursor/**)`,
+    ]) {
+      expect(config.permissions.deny).toContain(rule);
+    }
     // The global config is untouched.
     expect(
       JSON.parse(readFileSync(path.join(home, ".cursor", "cli-config.json"), "utf8")).approvalMode,

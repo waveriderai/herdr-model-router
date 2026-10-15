@@ -332,6 +332,7 @@ export function writeCursorConfig(
   const sandbox = (global.sandbox ?? {}) as Record<string, unknown>;
   const tmp = real(os.tmpdir()) ?? os.tmpdir();
   const stateHome = realpathSync(routerHome);
+  const workspace = real(cwd) ?? path.resolve(cwd);
   const config = {
     version: global.version ?? 1,
     authInfo: global.authInfo,
@@ -343,7 +344,17 @@ export function writeCursorConfig(
     showSandboxIntro: false,
     permissions: {
       allow: ["Write(./**)", `Write(${stateHome}/**)`, `Write(${tmp}/**)`],
-      deny: [`Write(${root})`, `Write(${root}/**)`, ...cursorDenyRules(cwd, [stateHome, tmp])],
+      // The worktree's own `.cursor` (sandbox.json, cli.json) is re-read live by Cursor and
+      // could widen the shell sandbox, so the writer may never edit it (review round 7).
+      deny: [
+        `Write(${root})`,
+        `Write(${root}/**)`,
+        "Write(./.cursor)",
+        "Write(./.cursor/**)",
+        `Write(${workspace}/.cursor)`,
+        `Write(${workspace}/.cursor/**)`,
+        ...cursorDenyRules(cwd, [stateHome, tmp]),
+      ],
     },
   };
   atomicWrite(path.join(dir, "cli-config.json"), JSON.stringify(config), 0o600);
