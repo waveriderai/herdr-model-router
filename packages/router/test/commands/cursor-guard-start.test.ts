@@ -35,11 +35,12 @@ describe("starting hmr's Cursor pane guard (AGENT-285 review round 6)", () => {
   it("passes the resolved router home and succeeds once the guard is ready there", async () => {
     // The fake guard marks ready only under the --home it was given, with no env at all.
     const cli = script(`
-      import { mkdirSync, writeFileSync } from "node:fs";
+      import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
       const args = process.argv.slice(2);
       const home = args[args.indexOf("--home") + 1];
-      mkdirSync(home + "/cursor-guard", { recursive: true });
-      writeFileSync(home + "/cursor-guard/lane_1.ready", "1");
+      const priv = realpathSync(home) + ".cursor-private";
+      mkdirSync(priv + "/cursor-guard", { recursive: true });
+      writeFileSync(priv + "/cursor-guard/lane_1.ready", "1");
       setTimeout(() => {}, 200);
     `);
     const home = tmp();

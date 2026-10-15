@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -19,6 +20,8 @@ import {
   ensureGrokProfiles,
   herdrHooks,
   prepareNativeLaunch,
+  resolveExisting,
+  cursorSandboxTracked,
 } from "../../src/rules/launch-prep.js";
 import { grokProfileNames, nativeLaunch } from "../../src/rules/native-argv.js";
 
@@ -164,7 +167,15 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(prep.ok).toBe(true);
     if (!prep.ok) return;
     const dir = prep.env.CURSOR_CONFIG_DIR!;
-    expect(dir.startsWith(path.join(router, "cursor-config"))).toBe(true);
+    // The config lives beside hmr's state folder, which the writer's shell may write.
+    expect(
+      dir.startsWith(path.join(`${realpathSync(router)}.cursor-private`, "cursor-config")),
+    ).toBe(true);
+    expect(dir.startsWith(realpathSync(router) + path.sep)).toBe(false);
+    // The worktree's sandbox.json gives the shell exactly hmr's state folder (Kai 12:21 AM PT).
+    expect(JSON.parse(readFileSync(path.join(cwd, ".cursor", "sandbox.json"), "utf8"))).toEqual({
+      additionalReadwritePaths: [realpathSync(router)],
+    });
     const file = path.join(dir, "cli-config.json");
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
@@ -187,6 +198,203 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(
       JSON.parse(readFileSync(path.join(home, ".cursor", "cli-config.json"), "utf8")).approvalMode,
     ).toBe("unrestricted");
+  });
+
+  it("keeps safe keys, re-accepts its own entry, and still refuses any other writable root", () => {
+    const home = tmp();
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(path.join(cwd, ".cursor"), { recursive: true });
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const router = path.join(home, "router");
+    const sandbox = path.join(cwd, ".cursor", "sandbox.json");
+    writeFileSync(sandbox, JSON.stringify({ additionalReadonlyPaths: ["/ro"] }));
+    const ctx = { cwd, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(true);
+    expect(JSON.parse(readFileSync(sandbox, "utf8"))).toEqual({
+      additionalReadonlyPaths: ["/ro"],
+      additionalReadwritePaths: [realpathSync(router)],
+    });
+    // A second launch in the same worktree accepts hmr's own entry.
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(true);
+    // Anything beyond exactly [state folder] refuses.
+    for (const paths of [
+      [realpathSync(router), "/outside"],
+      ["/outside"],
+      [`${realpathSync(router)}/..`],
+    ]) {
+      writeFileSync(sandbox, JSON.stringify({ additionalReadwritePaths: paths }));
+      expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    }
+  });
+
+  it("refuses a symlinked private folder, a tracked sandbox.json, and excludes subdir files (PR #23 review)", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const repo = path.join(tmp(), "repo");
+    const sub = path.join(repo, "pkg");
+    mkdirSync(sub, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    // Symlinked private folder pointing into the worktree.
+    const router = path.join(home, "router");
+    mkdirSync(router);
+    mkdirSync(path.join(repo, "inside"));
+    symlinkSync(path.join(repo, "inside"), `${realpathSync(router)}.cursor-private`);
+    const ctx = { cwd: repo, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(`${realpathSync(router)}.cursor-private`);
+    // Subdirectory launch: the exclude rule is anchored to pkg/.cursor/sandbox.json.
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), { ...ctx, cwd: sub }).ok).toBe(
+      true,
+    );
+    expect(git("status", "--porcelain", "--untracked-files=all")).not.toContain("sandbox.json");
+    // A tracked sandbox.json refuses and is left unchanged.
+    mkdirSync(path.join(repo, ".cursor"));
+    writeFileSync(path.join(repo, ".cursor", "sandbox.json"), "{}");
+    git("add", "-f", ".cursor/sandbox.json");
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    expect(readFileSync(path.join(repo, ".cursor", "sandbox.json"), "utf8")).toBe("{}");
+  });
+
+  it("refuses symlinked private subdirs and a temp dir inside the private folder; escapes exclude paths (PR #23 review 2)", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const repo = path.join(tmp(), "repo");
+    const sub = path.join(repo, "pkg[1]");
+    mkdirSync(sub, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    const router = path.join(home, "router");
+    mkdirSync(router);
+    const priv = `${realpathSync(router)}.cursor-private`;
+    const ctx = { cwd: repo, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    // cursor-config, then the lane dir, as symlinks into the state folder.
+    mkdirSync(priv, { mode: 0o700 });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-config"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-config"));
+    mkdirSync(path.join(priv, "cursor-config"), { mode: 0o700 });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-config", "l"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-config", "l"));
+    // The guard's folder as a symlink into the state folder refuses (review 3).
+    rmSync(path.join(priv, "cursor-guard"), { recursive: true, force: true });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-guard"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-guard"));
+    // A temp dir inside the private folder refuses.
+    mkdirSync(path.join(priv, "cursor-config", "t"), { recursive: true });
+    expect(
+      prepareNativeLaunch(launchFor("cursor", "writer", home), {
+        ...ctx,
+        tempDir: path.join(priv, "cursor-config", "t"),
+      }).ok,
+    ).toBe(false);
+    // A subdirectory with gitignore special characters is still excluded exactly.
+    writeFileSync(path.join(repo, "pkg1"), "");
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), { ...ctx, cwd: sub }).ok).toBe(
+      true,
+    );
+    expect(git("status", "--porcelain", "--untracked-files=all")).not.toContain("sandbox.json");
+  });
+
+  it("compares not-yet-created paths through symlinked parents (PR #23 review 4)", () => {
+    const base = tmp();
+    mkdirSync(path.join(base, "real"));
+    symlinkSync(path.join(base, "real"), path.join(base, "link"));
+    expect(resolveExisting(path.join(base, "link", "a", "b"))).toBe(
+      path.join(realpathSync(base), "real", "a", "b"),
+    );
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(cwd, { recursive: true });
+    const router = path.join(base, "real", "state");
+    mkdirSync(router);
+    // The temp dir names the private folder through the symlinked parent, before it exists.
+    const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: path.join(base, "link", "state.cursor-private"),
+      routerHome: router,
+      home,
+    });
+    expect(prep.ok).toBe(false);
+    // A dangling temp symlink to the not-yet-created private folder also refuses (review 5).
+    const router2 = path.join(base, "real", "state2");
+    mkdirSync(router2);
+    const dangling = path.join(base, "tmp-link");
+    symlinkSync(`${realpathSync(router2)}.cursor-private`, dangling);
+    const prep2 = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: dangling,
+      routerHome: router2,
+      home,
+    });
+    expect(prep2.ok).toBe(false);
+    // ...and to any not-yet-created private subfolder (review 6).
+    for (const sub of ["cursor-config", path.join("cursor-config", "l"), "cursor-guard"]) {
+      const router3 = path.join(base, "real", `state-${sub.replace(/\W/g, "_")}`);
+      mkdirSync(router3);
+      const link = path.join(base, `tmp-${sub.replace(/\W/g, "_")}`);
+      symlinkSync(path.join(`${realpathSync(router3)}.cursor-private`, sub), link);
+      expect(
+        prepareNativeLaunch(launchFor("cursor", "writer", home), {
+          cwd,
+          laneId: "l",
+          tempDir: link,
+          routerHome: router3,
+          home,
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
+  it("finds a tracked sandbox.json under any letter case (PR #23 review 5)", () => {
+    const repo = path.join(tmp(), "repo");
+    mkdirSync(path.join(repo, ".CURSOR"), { recursive: true });
+    execFileSync("git", ["-C", repo, "init", "-q"]);
+    writeFileSync(path.join(repo, ".CURSOR", "Sandbox.json"), "{}");
+    execFileSync("git", ["-C", repo, "add", "-f", ".CURSOR/Sandbox.json"]);
+    expect(cursorSandboxTracked(repo)).toBe(true);
+  });
+
+  it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {
+    const home = tmp();
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: home,
+      routerHome: path.join(home, "router"),
+      home,
+    });
+    expect(prep.ok).toBe(false);
   });
 
   it("refuses a Cursor writer when any sandbox.json could widen its shell sandbox", () => {

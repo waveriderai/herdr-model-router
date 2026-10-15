@@ -1,6 +1,7 @@
-import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { HerdrPaneClient } from "../launch/herdr-client.js";
+import { cursorPrivateHome, realPrivateDir, writePrivateFile } from "./cursor-private.js";
 
 /**
  * Cursor writer pane guard (AGENT-285, Kai 2026-10-14 10:39 PM PT: "Auto-decline Cursor's
@@ -250,25 +251,28 @@ export async function runCursorGuard(
   return { declines, outcome: "ended" };
 }
 
-/** Appends one JSON line per decline to `<router home>/cursor-guard.log` (0600). */
+/** Appends one JSON line per decline to `<cursor private home>/cursor-guard.log` (0600). */
 export function cursorGuardLogger(routerHome: string): (entry: Record<string, unknown>) => void {
   return (entry) => {
-    mkdirSync(routerHome, { recursive: true });
-    appendFileSync(path.join(routerHome, "cursor-guard.log"), `${JSON.stringify(entry)}\n`, {
-      mode: 0o600,
-    });
+    const dir = cursorPrivateHome(routerHome);
+    realPrivateDir(dir);
+    writePrivateFile(path.join(dir, "cursor-guard.log"), `${JSON.stringify(entry)}\n`, true);
   };
 }
 
 /** The file a guard writes once it watches its pane; the launcher waits for it. */
 export function cursorGuardReadyFile(routerHome: string, laneId: string): string {
-  return path.join(routerHome, "cursor-guard", `${laneId.replace(/[^A-Za-z0-9_-]/g, "_")}.ready`);
+  return path.join(
+    cursorPrivateHome(routerHome),
+    "cursor-guard",
+    `${laneId.replace(/[^A-Za-z0-9_-]/g, "_")}.ready`,
+  );
 }
 
 export function markCursorGuardReady(routerHome: string, laneId: string): void {
   const file = cursorGuardReadyFile(routerHome, laneId);
-  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${process.pid}\n`, { mode: 0o600 });
+  realPrivateDir(path.dirname(path.dirname(file)));
+  writePrivateFile(file, `${process.pid}\n`, false);
 }
 
 /**
