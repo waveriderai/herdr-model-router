@@ -7,6 +7,8 @@ import { chmodSync, statSync } from "node:fs";
  */
 export function ensureMode(file: string, mode: number): void {
   if (process.platform === "win32") return;
-  if ((statSync(file).mode & 0o777) === mode) return;
+  // Compare all permission bits, setuid/setgid/sticky included, so a stray special bit is
+  // still cleared as the plain chmod did (PR #24 review).
+  if ((statSync(file).mode & 0o7777) === mode) return;
   chmodSync(file, mode);
 }

@@ -15,6 +15,10 @@ describe("ensureMode (AGENT-285: no chmod a Cursor sandbox would refuse)", () =>
     expect(statSync(dir).ctimeMs).toBe(before);
     chmodSync(dir, 0o755);
     ensureMode(dir, 0o700);
-    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(dir).mode & 0o7777).toBe(0o700);
+    // A special bit (sticky) with the right rwx bits is still cleared.
+    chmodSync(dir, 0o1700);
+    ensureMode(dir, 0o700);
+    expect(statSync(dir).mode & 0o7777).toBe(0o700);
   });
 });
