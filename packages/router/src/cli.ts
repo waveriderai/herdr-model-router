@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { trustDirectory } from "./workspace/trust.js";
+import { hostCommit } from "./workspace/host-commit.js";
+import { createGitRunner } from "./workspace/git-worktree.js";
 import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -546,6 +548,54 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         ),
         flags.json,
       ),
+    );
+  task
+    .command("commit")
+    .description(
+      "Host-side controlled commit of a completed writer task (agents never get .git write)",
+    )
+    .argument("<id>", "Completed writer task id")
+    .requiredOption("--branch <name>", "Branch the worktree must be on")
+    .requiredOption("--expect-head <sha>", "Full SHA HEAD must equal before committing")
+    .requiredOption(
+      "--allow <path...>",
+      "Allowed changed paths; a trailing / allows a directory (repeatable)",
+    )
+    .requiredOption("-m, --message <text>", "Commit message")
+    .option("--push", "Push the branch (no force) after committing", false)
+    .option("--json", "Emit JSON", false)
+    .action(
+      (
+        id: string,
+        flags: {
+          branch: string;
+          expectHead: string;
+          allow: string[];
+          message: string;
+          push?: boolean;
+          json?: boolean;
+        },
+      ) =>
+        guarded(
+          withStore(async (deps) => {
+            const result = await hostCommit(deps.store, createGitRunner(env), {
+              taskId: id,
+              branch: flags.branch,
+              expectHead: flags.expectHead,
+              allow: flags.allow,
+              message: flags.message,
+              push: Boolean(flags.push),
+            });
+            return result.ok
+              ? {
+                  output: `Committed ${result.sha} (${result.files.length} files)${result.pushed ? `, pushed ${flags.branch}` : ""}`,
+                  json: result,
+                  code: 0,
+                }
+              : { output: result.error, json: result, code: 2 };
+          }),
+          flags.json,
+        ),
     );
   task
     .command("release")

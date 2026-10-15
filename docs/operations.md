@@ -162,3 +162,19 @@ Live `TYPESAFE_API_KEY` calls are opt-in. Default tests use a fake client. A loc
 `router run --dry-run` without that key reports `typesafe-unavailable` rather than
 inventing a semantic ranking. Task text containing a recognized credential is rejected
 locally with a sanitized error before any TypeSafe request.
+
+## Host-side controlled commit (AGENT-285)
+
+Sandboxed writer agents never get write access to `.git`. After a writer task is complete
+(`hmr task complete <id> --evidence ...`), the host commits for it outside the sandbox:
+
+```sh
+hmr task commit <id> --branch <branch> --expect-head <40-char sha> \
+  --allow design/r7-followups/ --allow e2e/r7-followups/ -m "message" [--push]
+```
+
+It refuses unless the task is a completed writer task, no other task holds the worktree
+lock, the checkout is the task's own worktree on the expected branch, HEAD equals
+`--expect-head`, and every changed path is inside the allowlist (never `.git`, `..`, or a
+symlink). It stages exactly those paths, re-checks the index, commits with repo hooks
+disabled, and with `--push` pushes the new SHA to the branch without force.
