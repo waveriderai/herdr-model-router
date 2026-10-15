@@ -14,7 +14,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { cursorPrivateHome } from "./cursor-private.js";
+import { cursorPrivateHome, realPrivateDir } from "./cursor-private.js";
 import { grokProfileNames, type NativeLaunch } from "./native-argv.js";
 
 /**
@@ -394,6 +394,9 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
       error: `${ownSandbox} is tracked by git; hmr will not edit it to add its state folder, so a Cursor writer was not launched`,
     };
   }
+  // The guard's ready files and log must also really live in the private folder (review 3).
+  realPrivateDir(privateHome);
+  realPrivateDir(path.join(privateHome, "cursor-guard"));
   const configDir = writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd, tempDir);
   writeCursorStateSandbox(ownSandbox, stateHome, ctx.cwd);
   return { ok: true, argv, env: { CURSOR_CONFIG_DIR: configDir } };
@@ -443,25 +446,6 @@ export function writeCursorStateSandbox(file: string, stateHome: string, cwd: st
       `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`,
     );
   }
-}
-
-/**
- * Creates (0700) or checks one level of hmr's Cursor private folder: it must be a real
- * directory, never a symlink, and resolve to exactly its own path, so the live config can never
- * be redirected into a root the writer's shell may write (PR #23 review 2). Throws otherwise.
- */
-function realPrivateDir(dir: string): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(dir);
-  const parent = real(path.dirname(dir)) ?? path.dirname(dir);
-  if (
-    stat.isSymbolicLink() ||
-    !stat.isDirectory() ||
-    realpathSync(dir) !== path.join(parent, path.basename(dir))
-  ) {
-    throw new Error(`${dir} is not a real directory; a Cursor writer was not launched`);
-  }
-  chmodSync(dir, 0o700);
 }
 
 /** Escapes a path segment for a gitignore pattern, so it matches only itself. */

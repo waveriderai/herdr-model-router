@@ -289,6 +289,11 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     symlinkSync(realpathSync(router), path.join(priv, "cursor-config", "l"));
     expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
     rmSync(path.join(priv, "cursor-config", "l"));
+    // The guard's folder as a symlink into the state folder refuses (review 3).
+    rmSync(path.join(priv, "cursor-guard"), { recursive: true, force: true });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-guard"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-guard"));
     // A temp dir inside the private folder refuses.
     mkdirSync(path.join(priv, "cursor-config", "t"), { recursive: true });
     expect(

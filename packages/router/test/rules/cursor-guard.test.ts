@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +14,7 @@ import {
   CURSOR_DECLINE_REASON,
   CURSOR_GUARD_KEYS,
   cursorGuardLogger,
+  markCursorGuardReady,
   detectCursorOutOfWorkspacePrompt,
   runCursorGuard,
 } from "../../src/rules/cursor-guard.js";
@@ -293,6 +302,20 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
       { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 3 },
     );
     expect(keys).toEqual([]);
+  });
+
+  it("never follows a symlinked guard log or ready folder (PR #23 review 3)", () => {
+    const home = path.join(root, "home-sym");
+    mkdirSync(home, { recursive: true });
+    const priv = `${realpathSync(home)}.cursor-private`;
+    mkdirSync(priv, { recursive: true, mode: 0o700 });
+    const target = path.join(home, "alias.log");
+    symlinkSync(target, path.join(priv, "cursor-guard.log"));
+    expect(() => cursorGuardLogger(home)({ a: 1 })).toThrow();
+    expect(existsSync(target)).toBe(false);
+    symlinkSync(home, path.join(priv, "cursor-guard"));
+    expect(() => markCursorGuardReady(home, "lane1")).toThrow();
+    expect(existsSync(path.join(home, "lane1.ready"))).toBe(false);
   });
 
   it("logs each decline as a 0600 JSON line in the router home", () => {
