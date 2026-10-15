@@ -183,16 +183,16 @@ Each lane gets the permission defaults of its role
 
 - **Read-only lanes** auto-approve file reads and web fetches only, and cannot edit:
   `claude --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`,
-  `codex --sandbox read-only --search`,
+  `codex --sandbox read-only --ask-for-approval never --search`,
   `grok --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write`,
   Cursor `--mode plan`.
-- **Writers** auto-approve edits inside their own working directory (the worktree), with the
-  CLI's sandbox on: `claude --permission-mode acceptEdits` with Bash sandboxed (a writer
+- **Writers** never prompt and stay sandboxed to their worktree (plus $TMPDIR and hmr's state
+  directory): `claude --permission-mode dontAsk` with an allow list and Bash sandboxed (no unsandboxed commands) (a writer
   Claude that cannot start its sandbox exits instead of running unsandboxed),
-  `codex --sandbox workspace-write --ask-for-approval on-request`,
-  `grok --sandbox workspace --allow 'Edit(./**)'`, Cursor `--sandbox enabled`.
+  `codex --ask-for-approval never` under the `hmr-writer` profile,
+  `grok --sandbox workspace --allow 'Edit(./**)' --always-approve`, Cursor `--sandbox enabled`.
 - **Full bypass** (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
-  `--always-approve`, Cursor `--force`) is never a default. Only
+  unsandboxed grok `--always-approve`, Cursor `--force`) is never a default. Only
   `hmr run ... --dangerously-bypass-permissions` passes it, for that one writer run.
 
 Each lane starts in a new pane: the router types one fixed command into the pane's shell, which

@@ -166,7 +166,7 @@ describe("offline rules preview (AE1, AE2)", () => {
           "-c",
           'model_reasoning_effort="high"',
           "--ask-for-approval",
-          "on-request",
+          "never",
           "-c",
           'default_permissions="hmr-writer"',
           "-c",
@@ -209,7 +209,7 @@ describe("offline rules preview (AE1, AE2)", () => {
     ]);
     expect(result.out.match(/^ {2}argv: .*$/gm)).toEqual([
       "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
-      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --search',
+      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --ask-for-approval never --search',
       "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
     ]);
     expect(result.out).toContain(
@@ -363,7 +363,8 @@ describe("per-role permission defaults (AGENT-198)", () => {
     expect(result.out).toContain(
       "  argv: grok --model grok-4.7 --reasoning-effort medium --sandbox workspace --allow Edit(./**)",
     );
-    expect(result.out).not.toContain("--always-approve");
+    // --always-approve only ever appears together with an OS sandbox profile.
+    expect(result.out).toContain("--sandbox workspace --allow Edit(./**) --always-approve");
     expectNoEffects(box, result);
   });
 

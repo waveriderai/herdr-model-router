@@ -87,8 +87,9 @@ export function permissionProfile(plan: {
 
 /**
  * Claude Code settings for a writer: Bash runs in Claude's sandbox and is auto-approved while
- * it stays inside the sandbox (no prompt per command); a command
- * that must run outside the sandbox (network, git push, gh) asks for approval in the pane. `failIfUnavailable` makes Claude exit
+ * it stays inside the sandbox (no prompt per command); `allowUnsandboxedCommands: false` means a
+ * command can never escape the sandbox, and the writer runs in `dontAsk` mode (see
+ * claudeWriterSettings), so anything outside the allow list is denied instead of prompting. `failIfUnavailable` makes Claude exit
  * at startup when the sandbox cannot start (a missing dependency, an unsupported platform);
  * without it Claude runs commands unsandboxed. The exit fails the lane's readiness check, so
  * the lane is not prompted.
@@ -98,7 +99,7 @@ export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
     enabled: true,
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: true,
-    allowUnsandboxedCommands: true,
+    allowUnsandboxedCommands: false,
     // Kai GO 2026-10-14 5:04 PM PT: Next.js font fetches and local dev/preview servers
     // (next build/start + Playwright) run inside the sandbox. allowLocalBinding is a
     // boolean in Claude Code: on macOS it allows listening on any local port and
@@ -109,6 +110,33 @@ export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
     },
   },
 });
+
+/**
+ * Claude writer settings for one launch (Kai 2026-10-14 7:37 PM PT: skip prompts, keep the
+ * worktree sandbox). `dontAsk` never prompts: a tool call not allowed below is denied. Edits
+ * are allowed in the working directory and hmr's state directory only; Bash is allowed and
+ * runs in the sandbox (`allowUnsandboxedCommands: false`), whose writable paths follow these
+ * Edit rules, so a write outside them fails instead of asking.
+ */
+export function claudeWriterSettings(routerHome: string): string {
+  const base = JSON.parse(CLAUDE_WRITER_SETTINGS) as Record<string, unknown>;
+  const home = `/${path.resolve(routerHome)}/**`;
+  return JSON.stringify({
+    permissions: {
+      allow: [
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash",
+        "Edit(./**)",
+        "Write(./**)",
+        `Edit(${home})`,
+        `Write(${home})`,
+      ],
+    },
+    ...base,
+  });
+}
 
 /** Tools a read-only Claude lane may use without a prompt. Plan mode still blocks edits. */
 const CLAUDE_READ_TOOLS = "Read,Grep,Glob,WebFetch,WebSearch";
@@ -173,8 +201,8 @@ export function nativeLaunch(
             values: ["plan"],
           },
           writer: {
-            args: ["--permission-mode", "acceptEdits", "--settings", CLAUDE_WRITER_SETTINGS],
-            values: ["acceptEdits"],
+            args: ["--permission-mode", "dontAsk", "--settings", claudeWriterSettings(routerHome)],
+            values: ["dontAsk"],
           },
           control: NONE,
           bypass: { args: ["--dangerously-skip-permissions"] },
@@ -197,14 +225,18 @@ export function nativeLaunch(
         "codex",
         [["--model", model], effort ? ["-c", `model_reasoning_effort="${effort}"`] : []],
         pick({
-          "read-only": { args: ["--sandbox", "read-only", "--search"], values: ["read-only"] },
+          "read-only": {
+            args: ["--sandbox", "read-only", "--ask-for-approval", "never", "--search"],
+            values: ["read-only", "never"],
+          },
           writer: {
             // The writer must reach hmr's own state (`hmr task status`, `hmr task complete`).
             // Only that exact directory is added; never a parent such as ~/Library or ~.
             // No `--sandbox`: that flag overrides `default_permissions`. The writer profile
             // extends Codex's built-in `:workspace` sandbox (see codexWriterProfile).
-            args: ["--ask-for-approval", "on-request", ...roots.flatMap((c) => ["-c", c])],
-            values: ["on-request"],
+            // Kai 2026-10-14 7:37 PM PT: never prompt; anything the sandbox blocks fails.
+            args: ["--ask-for-approval", "never", ...roots.flatMap((c) => ["-c", c])],
+            values: ["never"],
           },
           control: NONE,
           bypass: { args: ["--dangerously-bypass-approvals-and-sandbox"] },
@@ -221,8 +253,14 @@ export function nativeLaunch(
         "grok",
         [["--model", model], effort ? ["--reasoning-effort", effort] : []],
         pick({
-          "read-only": { args: ["--sandbox", "read-only", ...GROK_READ_RULES.flat()] },
-          writer: { args: ["--sandbox", "workspace", ...GROK_WRITER_RULES.flat()] },
+          // `--always-approve` only inside an OS sandbox profile (Kai 2026-10-14 7:37 PM PT):
+          // no prompts, and the sandbox still blocks writes outside the workspace.
+          "read-only": {
+            args: ["--sandbox", "read-only", ...GROK_READ_RULES.flat(), "--always-approve"],
+          },
+          writer: {
+            args: ["--sandbox", "workspace", ...GROK_WRITER_RULES.flat(), "--always-approve"],
+          },
           control: NONE,
           bypass: { args: ["--always-approve"] },
         }),
