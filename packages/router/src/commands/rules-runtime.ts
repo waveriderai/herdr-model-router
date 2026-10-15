@@ -1,4 +1,6 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ensureHome, loadConfig } from "../config/config-loader.js";
 import type { AgentId } from "../domain/ids.js";
@@ -109,6 +111,7 @@ export function openDispatchDeps(
         home: userHome(env),
         ...(env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
       }),
+    startCursorGuard: (input) => startCursorGuardProcess(input, childEnv),
     ...(env.MODEL_ROUTER_HOME
       ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
       : {}),
@@ -198,4 +201,33 @@ export function openWorkflowDeps(
 /** Refusal when the router home would be created inside the checkout at `cwd`. */
 export function homeRefusal(env: NodeJS.Dict<string>, cwd: string): string | undefined {
   return privateHomeRefusal(loadConfig({ env }).home, cwd);
+}
+
+/** Runs `hmr guard cursor` detached for one pane; it exits when the pane closes. */
+export function startCursorGuardProcess(
+  input: { paneId: string; worktree: string; laneId: string },
+  env: NodeJS.ProcessEnv,
+): { ok: true } | { ok: false; error: string } {
+  try {
+    const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
+    const child = spawn(
+      process.execPath,
+      [
+        cli,
+        "guard",
+        "cursor",
+        "--pane",
+        input.paneId,
+        "--worktree",
+        input.worktree,
+        "--lane",
+        input.laneId,
+      ],
+      { detached: true, stdio: "ignore", env },
+    );
+    child.unref();
+    return child.pid ? { ok: true } : { ok: false, error: "hmr's Cursor pane guard did not start" };
+  } catch (error) {
+    return { ok: false, error: `hmr's Cursor pane guard did not start: ${String(error)}` };
+  }
 }

@@ -482,6 +482,30 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         }
       },
     );
+  program
+    .command("guard")
+    .description("Internal: hmr's pane guard for a launched writer")
+    .command("cursor")
+    .description("Decline Cursor's out-of-worktree Write prompt in one pane until it closes")
+    .requiredOption("--pane <id>", "Herdr pane id")
+    .requiredOption("--worktree <path>", "The writer's worktree")
+    .requiredOption("--lane <id>", "Lane id, for the log")
+    .action(async (flags: { pane: string; worktree: string; lane: string }) => {
+      const { runCursorGuard, cursorGuardLogger } = await import("./rules/cursor-guard.js");
+      const { createHerdrPaneClient, createProcessCommandAdapter } =
+        await import("./launch/herdr-client.js");
+      const { loadConfig } = await import("./config/config-loader.js");
+      const home = loadConfig({ env }).home;
+      const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
+      await runCursorGuard(
+        {
+          pane,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          log: cursorGuardLogger(home),
+        },
+        { paneId: flags.pane, worktree: flags.worktree, laneId: flags.lane },
+      );
+    });
   const task = program
     .command("task")
     .description("Inspect and close rules-mode tasks; revise a writer in its own pane");

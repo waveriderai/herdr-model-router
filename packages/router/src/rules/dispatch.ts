@@ -82,6 +82,15 @@ export interface DispatchDeps {
     launch: ResolvedLaunch,
     ctx: { cwd: string; laneId: string },
   ) => { ok: true; argv: string[]; env: Record<string, string> } | { ok: false; error: string };
+  /**
+   * Starts the background pane guard for a Cursor writer (cursor-guard.ts), which declines
+   * Cursor's out-of-worktree Write prompt. A Cursor writer without it fails closed.
+   */
+  startCursorGuard?: (input: {
+    paneId: string;
+    worktree: string;
+    laneId: string;
+  }) => { ok: true } | { ok: false; error: string };
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -486,6 +495,7 @@ export async function startNativeAgent(input: {
     | "launchEnvNames"
     | "launchFixedEnv"
     | "prepareLaunch"
+    | "startCursorGuard"
     | "sleep"
     | "timeoutMs"
     | "pollMs"
@@ -579,6 +589,16 @@ export async function startNativeAgent(input: {
   const renamed = await deps.herdr.renameAgent(paneId, agentName);
   if (!renamed.ok) {
     return closeWith(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
+  }
+  if (launch.kind === "cursor" && launch.prepare === "cursor-config") {
+    // Kai 2026-10-14 10:39 PM PT: Cursor's out-of-workspace Write prompt is declined, never shown.
+    if (!deps.startCursorGuard) {
+      return closeWith(
+        "a Cursor writer needs hmr's pane guard, which this caller does not provide; no prompt was sent",
+      );
+    }
+    const guard = deps.startCursorGuard({ paneId, worktree: input.cwd, laneId: input.laneId });
+    if (!guard.ok) return closeWith(`${guard.error}; no prompt was sent`);
   }
   if (launch.kind === "codex") {
     // Codex's hook reports its session only with the first model turn; see codex-identity.
