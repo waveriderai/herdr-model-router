@@ -17,6 +17,7 @@ import type { DispatchDeps, LaunchFiles } from "../rules/dispatch.js";
 import { launchEnvNames, resolveExecutable } from "../rules/launch-script.js";
 import { prepareNativeLaunch } from "../rules/launch-prep.js";
 import { cursorGuardReadyFile } from "../rules/cursor-guard.js";
+import { pathWithoutShim } from "../launch/cursor-lead.js";
 import { createLiveTypeSafeClient, type TypeSafePort } from "../semantic/typesafe-client.js";
 import { openDatabase } from "../store/database.js";
 import { DispatchRepository } from "../store/dispatch-repository.js";
@@ -102,7 +103,8 @@ export function openDispatchDeps(
     herdr: (overrides.createHerdr ?? createHerdrClient)(adapter),
     pane: (overrides.createHerdrPane ?? createHerdrPaneClient)(quick),
     probeHelp: (executable) => quick([executable, "--help"]),
-    resolveExecutable: (name) => resolveExecutable(name, env.PATH),
+    // The Herdr-only cursor-agent shim is never an hmr lane's executable.
+    resolveExecutable: (name) => resolveExecutable(name, pathWithoutShim(env.PATH, home)),
     launchFiles: launchFilesIn(home),
     launchEnvNames: launchEnvNames(env),
     prepareLaunch: (launch, ctx) =>

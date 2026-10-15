@@ -491,26 +491,140 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .requiredOption("--worktree <path>", "The writer's worktree")
     .requiredOption("--lane <id>", "Lane id, for the log")
     .requiredOption("--home <path>", "The router home the launcher resolved")
-    .action(async (flags: { pane: string; worktree: string; lane: string; home: string }) => {
-      const { runCursorGuard, cursorGuardLogger, markCursorGuardReady } =
-        await import("./rules/cursor-guard.js");
-      const { createHerdrPaneClient, createProcessCommandAdapter } =
-        await import("./launch/herdr-client.js");
-      const home = flags.home;
-      const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
-      await runCursorGuard(
-        {
-          pane,
-          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-          log: cursorGuardLogger(home),
-        },
-        {
-          paneId: flags.pane,
-          worktree: flags.worktree,
-          laneId: flags.lane,
-          onReady: () => markCursorGuardReady(home, flags.lane),
-        },
+    .option("--wait-for-agent <ms>", "Wait this long for Cursor to start in the pane (lead panes)")
+    .action(
+      async (flags: {
+        pane: string;
+        worktree: string;
+        lane: string;
+        home: string;
+        waitForAgent?: string;
+      }) => {
+        const { runCursorGuard, cursorGuardLogger, markCursorGuardReady } =
+          await import("./rules/cursor-guard.js");
+        const { createHerdrPaneClient, createProcessCommandAdapter } =
+          await import("./launch/herdr-client.js");
+        const home = flags.home;
+        const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
+        const waitMs = Number.parseInt(flags.waitForAgent ?? "0", 10) || 0;
+        for (let waited = 0; waited < waitMs; waited += 500) {
+          const info = await pane.getAgent(flags.pane).catch(() => undefined);
+          if (info?.agent === "cursor") break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        await runCursorGuard(
+          {
+            pane,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            log: cursorGuardLogger(home),
+          },
+          {
+            paneId: flags.pane,
+            worktree: flags.worktree,
+            laneId: flags.lane,
+            onReady: () => markCursorGuardReady(home, flags.lane),
+          },
+        );
+      },
+    );
+  program
+    .command("cursor-lead")
+    .description("Internal: run cursor-agent in a Herdr pane with hmr's sandboxed lead config")
+    .option("--passthrough", "Run the real cursor-agent unchanged (outside Herdr)", false)
+    .argument("[args...]", "cursor-agent arguments")
+    .allowUnknownOption(true)
+    .action(async (args: string[], flags: { passthrough?: boolean }) => {
+      const lead = await import("./launch/cursor-lead.js");
+      const { loadConfig } = await import("./config/config-loader.js");
+      const routerHome = loadConfig({ env }).home;
+      const real = lead.realCursorAgent(env, routerHome);
+      if (!real) {
+        stderr.write("hmr cursor-lead: the real cursor-agent is not on PATH\n");
+        program.exitCode = 127;
+        return;
+      }
+      const childEnv = { ...process.env, PATH: lead.pathWithoutShim(env.PATH, routerHome) };
+      if (flags.passthrough) {
+        program.exitCode = await lead.runAttached(real, args, childEnv);
+        return;
+      }
+      const loosened = lead.loosenedCursorArgs(args);
+      if (loosened.length > 0) {
+        stderr.write(
+          `hmr cursor-lead: ${loosened.join(", ")} would loosen the sandbox or approvals; not started\n`,
+        );
+        program.exitCode = 2;
+        return;
+      }
+      const { nativeLaunch } = await import("./rules/native-argv.js");
+      const { prepareNativeLaunch } = await import("./rules/launch-prep.js");
+      const { userHome } = await import("./commands/rules-commands.js");
+      const { pretrust } = await import("./workspace/trust.js");
+      const built = nativeLaunch(
+        { provider: "cursor", model: "lead", effort: null },
+        "writer",
+        routerHome,
       );
+      const laneId = `lead-${(env.HERDR_PANE_ID ?? "pane").replace(/[^A-Za-z0-9_-]/g, "_")}-${Date.now()}`;
+      const prep = built.ok
+        ? prepareNativeLaunch(built.launch, {
+            cwd,
+            laneId,
+            routerHome,
+            home: userHome(env),
+          })
+        : { ok: false as const, error: built.error };
+      if (!prep.ok) {
+        stderr.write(`hmr cursor-lead: ${prep.error}; cursor-agent was not started\n`);
+        program.exitCode = 2;
+        return;
+      }
+      const trust = pretrust("cursor", cwd, env).argv;
+      if (env.HERDR_PANE_ID) {
+        const { spawn } = await import("node:child_process");
+        const { fileURLToPath } = await import("node:url");
+        spawn(
+          process.execPath,
+          [
+            fileURLToPath(import.meta.url),
+            "guard",
+            "cursor",
+            "--pane",
+            env.HERDR_PANE_ID,
+            "--worktree",
+            cwd,
+            "--lane",
+            laneId,
+            "--home",
+            routerHome,
+            "--wait-for-agent",
+            "60000",
+          ],
+          { detached: true, stdio: "ignore", env: childEnv },
+        ).unref();
+      }
+      program.exitCode = await lead.runAttached(
+        real,
+        ["--sandbox", "enabled", ...trust.filter((arg) => !args.includes(arg)), ...args],
+        { ...childEnv, ...prep.env },
+      );
+    });
+  program
+    .command("cursor-shim")
+    .description("Install the Herdr-only cursor-agent shim (sandboxed lead config)")
+    .command("install")
+    .action(async () => {
+      const lead = await import("./launch/cursor-lead.js");
+      const { loadConfig } = await import("./config/config-loader.js");
+      const { userHome } = await import("./commands/rules-commands.js");
+      const { fileURLToPath } = await import("node:url");
+      const lines = lead.installCursorShim({
+        routerHome: loadConfig({ env }).home,
+        home: userHome(env),
+        nodePath: process.execPath,
+        cliPath: fileURLToPath(import.meta.url),
+      });
+      stdout.write(`${lines.join("\n")}\n`);
     });
   const task = program
     .command("task")
