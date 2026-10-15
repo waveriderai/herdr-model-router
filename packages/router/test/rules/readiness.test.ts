@@ -147,6 +147,8 @@ describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
     for (const footer of ["  ? for  ⚠ 2 · f2", "  ? fo…", "  ? for"]) {
       const screen = `› Ask Codex to do\n\n  GPT-6.1-Sol xhi…\n${footer}\n`;
       expect(screenVerdict("codex", screen).state).toBe("ready");
+      // Through the production path, which NFKC-normalizes "…" to "..." (PR #25 review).
+      expect(screenVerdict("codex", extractPaneText(screen)).state).toBe("ready");
     }
   });
 

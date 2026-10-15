@@ -428,9 +428,9 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
     codex: (lines, compact) =>
       lines.some((line) => /^\s*›(\s|$)/.test(line) && !NUMBERED_MENU.test(line)) &&
       (/(contextleft|forshortcuts|⏎send)/.test(compact) ||
-        // A narrow Herdr split cuts the footer to "? for  ⚠ 2 · f2" or "? fo…" (AGENT-285),
+        // A narrow Herdr split cuts the footer to "? for  ⚠ 2 · f2" or "? fo…" (NFKC: "? fo...") (AGENT-285),
         // the same way Claude's narrow footer is accepted above.
-        lines.some((line) => /^\s*\?\s+f(?:or?)?(?:\s|…|$)/.test(line))),
+        lines.some((line) => /^\s*\?\s+f(?:or?)?(?:\s|…|\.\.\.|$)/.test(line))),
     // No verified composer evidence for OpenCode: never ready.
     opencode: undefined,
   };
