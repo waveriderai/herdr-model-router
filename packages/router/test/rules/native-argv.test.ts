@@ -44,7 +44,7 @@ const CLAUDE_WRITER_SETTINGS_JSON = expect.stringContaining(
 );
 const GROK_READ = [
   "--sandbox",
-  "read-only",
+  "hmr-read-only",
   "--allow",
   "Read",
   "--allow",
@@ -76,6 +76,8 @@ describe("native argv", () => {
         "xhigh",
         "--permission-mode",
         "dontAsk",
+        "--setting-sources",
+        "project,local",
         "--settings",
         CLAUDE_WRITER_SETTINGS_JSON,
       ],
@@ -137,7 +139,7 @@ describe("native argv", () => {
         "--reasoning-effort",
         "xhigh",
         "--sandbox",
-        "workspace",
+        "hmr-writer",
         "--allow",
         "Edit(./**)",
         "--always-approve",
@@ -394,6 +396,7 @@ describe("native argv", () => {
       "--model",
       "--effort",
       "--permission-mode",
+      "--setting-sources",
       "--settings",
       "dontAsk",
     ]);

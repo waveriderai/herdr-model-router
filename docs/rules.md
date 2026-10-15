@@ -73,20 +73,36 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 | control   | Nothing beyond the CLI's ordinary prompts                          | The coordinator (`hmr start`)                              |
 | bypass    | Everything: the CLI's full approval and sandbox bypass             | Only a writer run with `--dangerously-bypass-permissions`  |
 
-| Provider   | read-only                                                                                                                    | writer                                                                   | bypass                                       |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------------------- |
-| `claude`   | `--permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`                                                    | `--permission-mode dontAsk --settings <allow list + sandbox JSON>`       | `--dangerously-skip-permissions`             |
-| `codex`    | `--sandbox read-only --ask-for-approval never --search`                                                                      | `--ask-for-approval never` + the `hmr-writer` permission profile (below) | `--dangerously-bypass-approvals-and-sandbox` |
-| `grok`     | `--sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write --always-approve` | `--sandbox workspace --allow 'Edit(./**)' --always-approve`              | `--always-approve`                           |
-| `cursor`   | `--mode plan`                                                                                                                | `--sandbox enabled`                                                      | `--force`                                    |
-| `opencode` | refused: no enforceable read-only mode                                                                                       | no flags                                                                 | refused: no known bypass flag                |
+| Provider   | read-only                                                                                                                        | writer                                                                                                           | bypass                                       |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `claude`   | `--permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`                                                        | `--permission-mode dontAsk --setting-sources project,local --settings <allow list + sandbox + Herdr hooks JSON>` | `--dangerously-skip-permissions`             |
+| `codex`    | `--sandbox read-only --ask-for-approval never --search`                                                                          | `--ask-for-approval never` + the `hmr-writer` permission profile (below)                                         | `--dangerously-bypass-approvals-and-sandbox` |
+| `grok`     | `--sandbox hmr-read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write --always-approve` | `--sandbox hmr-writer --allow 'Edit(./**)' --always-approve`                                                     | `--always-approve`                           |
+| `cursor`   | `--mode plan`                                                                                                                    | `--sandbox enabled` + own `CURSOR_CONFIG_DIR` (allowlist, sandbox on)                                            | `--force`                                    |
+| `opencode` | refused: no enforceable read-only mode                                                                                           | no flags                                                                                                         | refused: no known bypass flag                |
 
 - Claude's writer settings are
   `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}`:
   Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); no command may run outside it. The writer's `permissions.allow` covers Read/Glob/Grep and Edit/Write under the worktree and hmr's state directory; `dontAsk` denies everything else without prompting (no `bypassPermissions`), including any `excludedCommands` entry that would run outside the sandbox. A lane whose screen shows a sandbox-not-applied warning (Grok continues without enforcement) fails closed: no prompt, no fallback. If the sandbox
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. Writers never stop for an approval (Kai, 2026-10-14: "Skip prompts, keep the worktree
-  sandbox"). Grok's `--always-approve` is only ever combined with a `--sandbox` profile. Known exceptions (open, AGENT-285): a Grok shell `ask` rule from any config source still prompts under `--always-approve`; a Claude `permissions.allow` rule inherited from user/project settings that matches a `sandbox.excludedCommands` entry can still run that command outside the sandbox; the Grok sandbox-failure guard relies on the warning being visible at launch.
+  sandbox"). Grok's `--always-approve` is only ever combined with a `--sandbox` profile. Launch preparation (Kai 2026-10-14 8:25 PM PT, `src/rules/launch-prep.ts`, fails closed):
+  - Claude writer: loads only project and local settings, so no user allow rule can approve a
+    command the sandbox excludes; Herdr's status hooks are copied from `~/.claude/settings.json`
+    into hmr's `--settings`. A project/local setting with `sandbox.excludedCommands`,
+    `sandbox.enabled: false` or `allowUnsandboxedCommands: true` refuses the launch.
+  - Grok: hmr keeps the `hmr-writer` (extends `workspace`, plus hmr's state dir) and
+    `hmr-read-only` (extends `read-only`) custom profiles in a managed block of
+    `~/.grok/sandbox.toml`. Grok refuses to start when a custom profile cannot apply; the
+    sandbox-warning screen guard stays as a second check.
+  - Cursor writer: a per-launch `CURSOR_CONFIG_DIR` under `<hmr home>/cursor-config/<lane>`
+    (0700 dir, 0600 file) with `approvalMode: allowlist`, sandbox on, `Write(./**)` allowed and
+    deny rules for every existing sibling of the worktree's ancestors. Only `authInfo` (the login
+    record; the token stays in the keychain) is copied from `~/.cursor/cli-config.json`, on every
+    launch; the global config is never changed and hmr never logs in. Dirs older than 7 days are pruned.
+- Known gaps: a Grok shell `ask` rule still prompts under `--always-approve` (none are configured);
+  Cursor's own Write tool still prompts for a NEW file directly inside an ancestor of the worktree
+  (Cursor globs have no negation and `*` crosses `/`).
 - A Codex writer runs under hmr's own permission profile `hmr-writer` (no `--sandbox` flag, which
   would override `default_permissions`). It extends Codex's built-in `:workspace` sandbox and adds
   only: write access to exactly hmr's state directory (`resolveHome()`: `MODEL_ROUTER_HOME`, else

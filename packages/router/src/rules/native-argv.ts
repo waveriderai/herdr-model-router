@@ -169,6 +169,8 @@ export interface NativeLaunch {
    * `sandbox_mode` silently wins over `default_permissions`, so the launch checks the live card.
    */
   expectedPermissionProfile?: string;
+  /** Per-launch preparation (see launch-prep.ts); a launch that needs one never starts without it. */
+  prepare?: "claude-writer" | "grok-profiles" | "cursor-config";
 }
 
 /**
@@ -193,21 +195,32 @@ export function nativeLaunch(
   const pick = (byProfile: Record<PermissionProfile, Permission>): Permission => byProfile[profile];
   switch (provider) {
     case "claude":
-      return built(
-        "claude",
-        [["--model", model], effort ? ["--effort", effort] : []],
-        pick({
-          "read-only": {
-            args: ["--permission-mode", "plan", "--allowedTools", CLAUDE_READ_TOOLS],
-            values: ["plan"],
-          },
-          writer: {
-            args: ["--permission-mode", "dontAsk", "--settings", claudeWriterSettings(routerHome)],
-            values: ["dontAsk"],
-          },
-          control: NONE,
-          bypass: { args: ["--dangerously-skip-permissions"] },
-        }),
+      return withPrepare(
+        profile === "writer" ? "claude-writer" : undefined,
+        built(
+          "claude",
+          [["--model", model], effort ? ["--effort", effort] : []],
+          pick({
+            "read-only": {
+              args: ["--permission-mode", "plan", "--allowedTools", CLAUDE_READ_TOOLS],
+              values: ["plan"],
+            },
+            writer: {
+              // Only project and local settings: no user allow rule can approve an excluded command.
+              args: [
+                "--permission-mode",
+                "dontAsk",
+                "--setting-sources",
+                "project,local",
+                "--settings",
+                claudeWriterSettings(routerHome),
+              ],
+              values: ["dontAsk"],
+            },
+            control: NONE,
+            bypass: { args: ["--dangerously-skip-permissions"] },
+          }),
+        ),
       );
     case "codex": {
       // Only a writer gets the extra root, so only a writer depends on the router home.
@@ -250,32 +263,39 @@ export function nativeLaunch(
       return launch;
     }
     case "grok":
-      return built(
-        "grok",
-        [["--model", model], effort ? ["--reasoning-effort", effort] : []],
-        pick({
-          // `--always-approve` only inside an OS sandbox profile (Kai 2026-10-14 7:37 PM PT):
-          // no prompts, and the sandbox still blocks writes outside the workspace.
-          "read-only": {
-            args: ["--sandbox", "read-only", ...GROK_READ_RULES.flat(), "--always-approve"],
-          },
-          writer: {
-            args: ["--sandbox", "workspace", ...GROK_WRITER_RULES.flat(), "--always-approve"],
-          },
-          control: NONE,
-          bypass: { args: ["--always-approve"] },
-        }),
+      return withPrepare(
+        profile === "writer" || profile === "read-only" ? "grok-profiles" : undefined,
+        built(
+          "grok",
+          [["--model", model], effort ? ["--reasoning-effort", effort] : []],
+          pick({
+            // `--always-approve` only inside an OS sandbox profile (Kai 2026-10-14 7:37 PM PT):
+            // no prompts, and the sandbox still blocks writes outside the workspace.
+            "read-only": {
+              // hmr's custom profiles (~/.grok/sandbox.toml): Grok refuses to start when one cannot apply.
+              args: ["--sandbox", "hmr-read-only", ...GROK_READ_RULES.flat(), "--always-approve"],
+            },
+            writer: {
+              args: ["--sandbox", "hmr-writer", ...GROK_WRITER_RULES.flat(), "--always-approve"],
+            },
+            control: NONE,
+            bypass: { args: ["--always-approve"] },
+          }),
+        ),
       );
     case "cursor":
-      return built(
-        "cursor",
-        [["--model", model]],
-        pick({
-          "read-only": { args: ["--mode", "plan"], values: ["plan"] },
-          writer: { args: ["--sandbox", "enabled"], values: ["enabled"] },
-          control: NONE,
-          bypass: { args: ["--force"] },
-        }),
+      return withPrepare(
+        profile === "writer" ? "cursor-config" : undefined,
+        built(
+          "cursor",
+          [["--model", model]],
+          pick({
+            "read-only": { args: ["--mode", "plan"], values: ["plan"] },
+            writer: { args: ["--sandbox", "enabled"], values: ["enabled"] },
+            control: NONE,
+            bypass: { args: ["--force"] },
+          }),
+        ),
       );
     case "opencode":
       if (profile === "read-only") {
@@ -334,6 +354,14 @@ interface Permission {
 }
 
 const NONE: Permission = { args: [] };
+
+function withPrepare(
+  prepare: NativeLaunch["prepare"],
+  result: { ok: true; launch: NativeLaunch },
+): { ok: true; launch: NativeLaunch } {
+  if (prepare) result.launch.prepare = prepare;
+  return result;
+}
 
 function built(
   provider: Adapted,

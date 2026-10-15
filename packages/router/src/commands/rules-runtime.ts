@@ -13,6 +13,7 @@ import {
 import type { Provider } from "../rules/descriptor.js";
 import type { DispatchDeps, LaunchFiles } from "../rules/dispatch.js";
 import { launchEnvNames, resolveExecutable } from "../rules/launch-script.js";
+import { prepareNativeLaunch } from "../rules/launch-prep.js";
 import { createLiveTypeSafeClient, type TypeSafePort } from "../semantic/typesafe-client.js";
 import { openDatabase } from "../store/database.js";
 import { DispatchRepository } from "../store/dispatch-repository.js";
@@ -101,6 +102,8 @@ export function openDispatchDeps(
     resolveExecutable: (name) => resolveExecutable(name, env.PATH),
     launchFiles: launchFilesIn(home),
     launchEnvNames: launchEnvNames(env),
+    prepareLaunch: (launch, ctx) =>
+      prepareNativeLaunch(launch, { ...ctx, routerHome: home, home: userHome(env) }),
     ...(env.MODEL_ROUTER_HOME
       ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
       : {}),

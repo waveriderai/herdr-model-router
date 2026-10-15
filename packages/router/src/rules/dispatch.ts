@@ -74,6 +74,14 @@ export interface DispatchDeps {
    * so a launched CLI's own `hmr` calls open the same router home.
    */
   launchFixedEnv?: Readonly<Record<string, string>>;
+  /**
+   * Per-launch preparation (launch-prep.ts): Claude writer hooks/settings, Grok sandbox
+   * profiles, a Cursor writer's own config dir. A launch that needs it fails closed without it.
+   */
+  prepareLaunch?: (
+    launch: ResolvedLaunch,
+    ctx: { cwd: string; laneId: string },
+  ) => { ok: true; argv: string[]; env: Record<string, string> } | { ok: false; error: string };
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -477,6 +485,7 @@ export async function startNativeAgent(input: {
     | "launchFiles"
     | "launchEnvNames"
     | "launchFixedEnv"
+    | "prepareLaunch"
     | "sleep"
     | "timeoutMs"
     | "pollMs"
@@ -487,12 +496,28 @@ export async function startNativeAgent(input: {
   onPaneCreated?: (paneId: string) => void;
 }): Promise<NativeStart> {
   const { deps } = input;
+  // Per-launch preparation runs before any pane exists; it fails closed.
+  let prepared: ResolvedLaunch = input.launch;
+  let prepEnv: Record<string, string> = {};
+  if (input.launch.prepare) {
+    if (!deps.prepareLaunch) {
+      return {
+        ok: false,
+        error: `${input.launch.kind} needs launch preparation (${input.launch.prepare}) that this caller does not provide; it was not launched`,
+      };
+    }
+    const prep = deps.prepareLaunch(input.launch, { cwd: input.cwd, laneId: input.laneId });
+    if (!prep.ok) return { ok: false, error: `${prep.error}; no pane was created` };
+    prepared = { ...input.launch, argv: [input.launch.argv[0]!, ...prep.argv.slice(1)] };
+    prepEnv = prep.env;
+  }
   // A worktree HMR or Herdr created is pre-trusted through the CLI's own trust record.
-  const trust = pretrust(input.launch.kind, input.cwd);
+  const trust = pretrust(prepared.kind, input.cwd);
   const launch: ResolvedLaunch =
-    trust.argv.length > 0 && !input.launch.argv.includes("--trust")
-      ? { ...input.launch, argv: [...input.launch.argv, ...trust.argv] }
-      : input.launch;
+    trust.argv.length > 0 && !prepared.argv.includes("--trust")
+      ? { ...prepared, argv: [...prepared.argv, ...trust.argv] }
+      : prepared;
+  const fixedEnv = { ...(deps.launchFixedEnv ?? {}), ...prepEnv };
   const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
   const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
   if (!split.ok || !paneId) {
@@ -525,7 +550,7 @@ export async function startNativeAgent(input: {
         args: launch.argv.slice(1),
         cwd: input.cwd,
         envNames: deps.launchEnvNames,
-        ...(deps.launchFixedEnv ? { fixedEnv: deps.launchFixedEnv } : {}),
+        ...(Object.keys(fixedEnv).length > 0 ? { fixedEnv } : {}),
         // Codex gives its tool commands only what its shell environment policy sets, so the
         // new pane's Herdr context (and the router home) is set there for this launch alone.
         ...(launch.kind === "codex"

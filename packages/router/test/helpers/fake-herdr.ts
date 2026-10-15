@@ -18,7 +18,7 @@ export const failed = (stdout: string, stderr = ""): CommandResult => ({
 
 export const HELP: Record<string, string> = {
   claude:
-    '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n--allowedTools, --allowed-tools <tools...>\n--settings <file-or-json>',
+    '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n--allowedTools, --allowed-tools <tools...>\n--settings <file-or-json>\n--setting-sources <sources>',
   codex:
     "-m, --model <MODEL>\n-c, --config <k=v>\n-s, --sandbox <MODE> [possible values: read-only, workspace-write]\n-a, --ask-for-approval <POLICY>\n  - on-request: The model decides\n  - never: Never ask\n--search",
   grok: "-m, --model <MODEL>\n--reasoning-effort <E>\n--allow <RULE>\n--deny <RULE>\n--sandbox <PROFILE>\n--always-approve",
@@ -321,6 +321,8 @@ export function deps(
     resolveExecutable: (name) => (name in HELP ? `/opt/fake bin/${name}` : undefined),
     launchFiles: launchFilesIn(home),
     launchEnvNames: ["HERDR_PANE_ID", "HOME", "PATH"],
+    // Records each preparation and passes the argv through (the real one is in launch-prep.test).
+    prepareLaunch: (launch) => ({ ok: true, argv: launch.argv, env: {} }),
     sleep: async () => {},
     pollMs: 10,
     timeoutMs: 50,

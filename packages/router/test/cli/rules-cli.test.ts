@@ -271,7 +271,7 @@ describe("offline rules preview (AE1, AE2)", () => {
       "note: skipped inherit-parent (claude:claude-opus-5-5@max): that model is already in this panel",
     );
     expect(result.out).toContain(
-      "  argv: grok --model grok-4.7 --reasoning-effort xhigh --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write",
+      "  argv: grok --model grok-4.7 --reasoning-effort xhigh --sandbox hmr-read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write",
     );
     expect(result.out).toContain(
       "  note: legacy Cursor selector grok-4.7-xhigh-fast mapped to native grok:grok-4.7@xhigh; Cursor's fast variant has no native grok equivalent",
@@ -361,10 +361,10 @@ describe("per-role permission defaults (AGENT-198)", () => {
     expect(result.code).toBe(0);
     expect(result.out).toContain("access: writer; permissions: writer");
     expect(result.out).toContain(
-      "  argv: grok --model grok-4.7 --reasoning-effort medium --sandbox workspace --allow Edit(./**)",
+      "  argv: grok --model grok-4.7 --reasoning-effort medium --sandbox hmr-writer --allow Edit(./**)",
     );
     // --always-approve only ever appears together with an OS sandbox profile.
-    expect(result.out).toContain("--sandbox workspace --allow Edit(./**) --always-approve");
+    expect(result.out).toContain("--sandbox hmr-writer --allow Edit(./**) --always-approve");
     expectNoEffects(box, result);
   });
 
