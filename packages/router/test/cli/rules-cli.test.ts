@@ -169,6 +169,11 @@ describe("offline rules preview (AE1, AE2)", () => {
           "workspace-write",
           "--ask-for-approval",
           "on-request",
+          "-c",
+          // The writer's one extra root is the router process's own home (resolveHome()).
+          expect.stringMatching(
+            /^sandbox_workspace_write\.writable_roots=\["\/.*model-router[^"]*"\]$/,
+          ),
         ],
       },
     ]);

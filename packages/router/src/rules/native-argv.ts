@@ -1,3 +1,5 @@
+import path from "node:path";
+import { resolveHome } from "../config/config-loader.js";
 import type { ReasoningEffort } from "../domain/model-profile.js";
 import type { Provider } from "./descriptor.js";
 import type { Access } from "./plan.js";
@@ -142,6 +144,7 @@ export interface NativeLaunch {
 export function nativeLaunch(
   lane: { provider: Provider; model: string; effort: ReasoningEffort | null },
   profile: PermissionProfile,
+  routerHome: string = resolveHome(),
 ): { ok: true; launch: NativeLaunch } | { ok: false; error: string } {
   const { model, effort } = lane;
   const provider = lane.provider;
@@ -178,7 +181,16 @@ export function nativeLaunch(
         pick({
           "read-only": { args: ["--sandbox", "read-only", "--search"], values: ["read-only"] },
           writer: {
-            args: ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"],
+            // The writer must reach hmr's own state (`hmr task status`, `hmr task complete`).
+            // Only that exact directory is added; never a parent such as ~/Library or ~.
+            args: [
+              "--sandbox",
+              "workspace-write",
+              "--ask-for-approval",
+              "on-request",
+              "-c",
+              codexWritableRoots(routerHome),
+            ],
             values: ["workspace-write", "on-request"],
           },
           control: NONE,
@@ -224,6 +236,18 @@ export function nativeLaunch(
       }
       return built("opencode", [["--model", model]], NONE);
   }
+}
+
+/**
+ * The Codex `-c` override that adds exactly hmr's state directory (resolveHome: MODEL_ROUTER_HOME,
+ * else the per-OS default) as the writer's one extra writable root. The value is a TOML array of
+ * one basic string; JSON string escaping is valid TOML for it.
+ */
+export function codexWritableRoots(routerHome: string): string {
+  if (!path.isAbsolute(routerHome)) {
+    throw new Error(`router home "${routerHome}" is not an absolute path`);
+  }
+  return `sandbox_workspace_write.writable_roots=[${JSON.stringify(path.normalize(routerHome))}]`;
 }
 
 /** A profile's argv and the enum values in it that the CLI's --help must also list. */
