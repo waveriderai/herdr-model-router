@@ -73,13 +73,13 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 | control   | Nothing beyond the CLI's ordinary prompts                          | The coordinator (`hmr start`)                              |
 | bypass    | Everything: the CLI's full approval and sandbox bypass             | Only a writer run with `--dangerously-bypass-permissions`  |
 
-| Provider   | read-only                                                                                                   | writer                                                    | bypass                                       |
-| ---------- | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------- |
-| `claude`   | `--permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`                                   | `--permission-mode acceptEdits --settings <sandbox JSON>` | `--dangerously-skip-permissions`             |
-| `codex`    | `--sandbox read-only --search`                                                                              | `--sandbox workspace-write --ask-for-approval on-request` | `--dangerously-bypass-approvals-and-sandbox` |
-| `grok`     | `--sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write` | `--sandbox workspace --allow 'Edit(./**)'`                | `--always-approve`                           |
-| `cursor`   | `--mode plan`                                                                                               | `--sandbox enabled`                                       | `--force`                                    |
-| `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                  | refused: no known bypass flag                |
+| Provider   | read-only                                                                                                   | writer                                                                                                             | bypass                                       |
+| ---------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| `claude`   | `--permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch`                                   | `--permission-mode acceptEdits --settings <sandbox JSON>`                                                          | `--dangerously-skip-permissions`             |
+| `codex`    | `--sandbox read-only --search`                                                                              | `--sandbox workspace-write --ask-for-approval on-request -c sandbox_workspace_write.writable_roots=["<hmr home>"]` | `--dangerously-bypass-approvals-and-sandbox` |
+| `grok`     | `--sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write` | `--sandbox workspace --allow 'Edit(./**)'`                                                                         | `--always-approve`                           |
+| `cursor`   | `--mode plan`                                                                                               | `--sandbox enabled`                                                                                                | `--force`                                    |
+| `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                                                                           | refused: no known bypass flag                |
 
 - Claude's writer settings are
   `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}`:
@@ -87,6 +87,10 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. `acceptEdits` covers
   the working directory only.
+- A Codex writer gets one extra writable root: hmr's own state directory, exactly as `resolveHome()`
+  resolves it (`MODEL_ROUTER_HOME` if set, else `~/Library/Application Support/model-router` on macOS,
+  `$XDG_CONFIG_HOME/model-router` on Linux), so `hmr task status` / `hmr task complete` work from
+  inside the sandbox. No parent directory is ever added.
 - Writer lanes also get `network.allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"]`
   (Next.js font downloads) and `network.allowLocalBinding: true` (Kai, 2026-10-14) so `next build`,
   `next start` and Playwright run inside the sandbox. `allowLocalBinding` is all-or-nothing in Claude

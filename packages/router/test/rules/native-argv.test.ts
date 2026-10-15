@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   BYPASS_FLAGS,
   missingCapabilities,
+  codexWritableRoots,
   nativeLaunch,
   permissionProfile,
   type PermissionProfile,
 } from "../../src/rules/native-argv.js";
+
+const ROUTER_HOME = "/Users/u/Library/Application Support/model-router";
+const ROUTER_ROOTS = `sandbox_workspace_write.writable_roots=["${ROUTER_HOME}"]`;
 
 function argv(
   provider: Parameters<typeof nativeLaunch>[0]["provider"],
@@ -13,7 +17,7 @@ function argv(
   effort: Parameters<typeof nativeLaunch>[0]["effort"],
   profile: PermissionProfile,
 ) {
-  const built = nativeLaunch({ provider, model, effort }, profile);
+  const built = nativeLaunch({ provider, model, effort }, profile, ROUTER_HOME);
   if (!built.ok) throw new Error(built.error);
   return built.launch;
 }
@@ -88,6 +92,8 @@ describe("native argv", () => {
         "workspace-write",
         "--ask-for-approval",
         "on-request",
+        "-c",
+        ROUTER_ROOTS,
       ],
     ],
     [
@@ -162,6 +168,64 @@ describe("native argv", () => {
     expect(launch.kind).toBe(kind);
     expect(launch.argv).toEqual(expected);
     expect(launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
+  });
+
+  it("gives a writer Codex exactly hmr's state directory as its one extra writable root", () => {
+    const launch = argv("codex", "m", "high", "writer");
+    expect(launch.argv).toContain("workspace-write");
+    expect(launch.argv).not.toContain("danger-full-access");
+    const roots = launch.argv.filter((a) => a.startsWith("sandbox_workspace_write."));
+    expect(roots).toEqual([`sandbox_workspace_write.writable_roots=["${ROUTER_HOME}"]`]);
+    expect(launch.argv.join(" ")).not.toMatch(/writable_roots=\["\/Users\/u\/Library"\]/);
+  });
+
+  it("adds no writable roots to read-only, control or bypass Codex lanes", () => {
+    for (const profile of ["read-only", "control"] as const) {
+      expect(argv("codex", "m", "high", profile).argv.join(" ")).not.toContain("writable_roots");
+    }
+  });
+
+  it("uses MODEL_ROUTER_HOME exactly when set, and refuses a relative home", () => {
+    expect(codexWritableRoots("/srv/hmr-home/")).toBe(
+      'sandbox_workspace_write.writable_roots=["/srv/hmr-home/"]',
+    );
+    expect(codexWritableRoots('/a "q"/b')).toBe(
+      'sandbox_workspace_write.writable_roots=["/a \\"q\\"/b"]',
+    );
+    expect(() => codexWritableRoots("rel/home")).toThrow(/not an absolute path/);
+  });
+
+  it("escapes control characters in the root as TOML, not JSON", () => {
+    expect(codexWritableRoots("/a\u007fb")).toBe(
+      'sandbox_workspace_write.writable_roots=["/a\\u007Fb"]',
+    );
+  });
+
+  it("refuses a Codex writer with a relative home but leaves the other Codex profiles alone", () => {
+    const lane = { provider: "codex" as const, model: "m", effort: null };
+    const writer = nativeLaunch(lane, "writer", "../hmr-state");
+    expect(writer.ok).toBe(false);
+    if (!writer.ok) expect(writer.error).toMatch(/not an absolute path/);
+    for (const profile of ["read-only", "control", "bypass"] as const) {
+      const built = nativeLaunch(lane, profile, "../hmr-state");
+      expect(built.ok).toBe(true);
+      if (built.ok) expect(built.launch.argv.join(" ")).not.toContain("writable_roots");
+    }
+  });
+
+  it("defaults the Codex writer root to resolveHome()", () => {
+    const prev = process.env.MODEL_ROUTER_HOME;
+    process.env.MODEL_ROUTER_HOME = "/tmp/hmr-test-home";
+    try {
+      const built = nativeLaunch({ provider: "codex", model: "m", effort: null }, "writer");
+      if (!built.ok) throw new Error(built.error);
+      expect(built.launch.argv).toContain(
+        'sandbox_workspace_write.writable_roots=["/tmp/hmr-test-home"]',
+      );
+    } finally {
+      if (prev === undefined) delete process.env.MODEL_ROUTER_HOME;
+      else process.env.MODEL_ROUTER_HOME = prev;
+    }
   });
 
   it("makes a writer Claude exit, not run unsandboxed, when its sandbox cannot start", () => {
