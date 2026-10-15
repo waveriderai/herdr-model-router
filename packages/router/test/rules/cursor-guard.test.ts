@@ -233,6 +233,22 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(lost.keys.flat()).toEqual(["esc"]);
   });
 
+  it("ends stuck when the field appears a poll later after an esc that reported failure (review round 16)", async () => {
+    const target = path.join(root, "parent", "late2.txt");
+    const { pane, keys, texts } = fakePane([prompt(target), prompt(target), REASON]);
+    pane.sendKeys = async (_: string, k: readonly string[]) => {
+      keys.push([...k]);
+      return { ok: false, stdout: "", stderr: "", code: 1 } as never;
+    };
+    const result = await runCursorGuard(
+      { pane, sleep: async () => {}, log: () => {} },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 100 },
+    );
+    expect(result).toEqual({ declines: 0, outcome: "stuck" });
+    expect(keys.flat()).toEqual(["esc"]);
+    expect(texts).toEqual([]);
+  });
+
   it("ends stuck at once when the reason cannot be typed or submitted (review round 14)", async () => {
     const target = path.join(root, "parent", "r.txt");
     for (const fail of ["text", "enter", "still-open"] as const) {

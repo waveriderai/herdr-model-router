@@ -134,6 +134,10 @@ export async function runCursorGuard(
   let declines = 0;
   let blind = 0;
   let failedDeclines = 0;
+  // An esc that reported failure may still have reached Cursor; until a decline completes, a
+  // reason field seen on any later poll means Cursor is waiting on a decline we cannot finish
+  // (review round 16).
+  let pendingDecline = false;
   const maxFailed = input.maxFailedDeclines ?? 3;
   let ready = false;
   const log = (entry: Record<string, unknown>) => {
@@ -165,6 +169,17 @@ export async function runCursorGuard(
       ready = true;
       input.onReady?.();
     }
+    if (pendingDecline && detectCursorReasonField(screen)) {
+      log({
+        at: now().toISOString(),
+        event: "cursor-out-of-workspace-decline-failed",
+        pane: input.paneId,
+        lane: input.laneId,
+        worktree: input.worktree,
+        reasonOpenedLate: true,
+      });
+      return { declines, outcome: "stuck" };
+    }
     const target = detectCursorOutOfWorkspacePrompt(screen, input.worktree);
     if (target) {
       const sent = await deps.pane.sendKeys(input.paneId, [CURSOR_DECLINE_KEY]);
@@ -195,8 +210,10 @@ export async function runCursorGuard(
       if (submitted) {
         declines++;
         failedDeclines = 0;
+        pendingDecline = false;
       } else {
         failedDeclines++;
+        pendingDecline = true;
       }
       log({
         at: now().toISOString(),
