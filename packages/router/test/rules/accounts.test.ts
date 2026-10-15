@@ -233,6 +233,37 @@ describe("account choice: the model first, then the account", () => {
     );
   });
 
+  it("routes one role's fixes to its own fix accounts (fix-accounts-for), others unchanged", () => {
+    const text =
+      "# hmr: first-version cursor\n# hmr: fix-accounts claude, grok\n" +
+      "# hmr: fix-accounts-for design implementation = codex\n" +
+      "design implementation: codex:gpt-6.1-sol@high\n# fallback: claude:claude-sonnet-5-5@high\n" +
+      ROLES;
+    expect(
+      route(
+        place("design implementation", { text, phase: "fix", used: { claude: 0, codex: 90 } }),
+      )[0],
+    ).toEqual(["codex:gpt-6.1-sol@high"]);
+    expect(
+      route(place("feature", { text, phase: "fix", used: { claude: 10, codex: 0 } }))[0],
+    ).toEqual(["claude:claude-opus-5-5@high"]);
+    // A role whose order no fix account can run is refused, not silently re-routed.
+    const only = text.replace("= codex", "= grok");
+    expect(place("design implementation", { text: only, phase: "fix" })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("rejects malformed or duplicate fix-accounts-for lines", () => {
+    for (const bad of [
+      "# hmr: fix-accounts-for design implementation codex\n",
+      "# hmr: fix-accounts-for design implementation = nope\n",
+      "# hmr: fix-accounts-for x = codex\n# hmr: fix-accounts-for x = claude\n",
+    ]) {
+      expect(parseRules(bad + ROLES).ok).toBe(false);
+    }
+  });
+
   it("sends a fix after review to Claude Code or grok, whichever has more quota", () => {
     // bug-fix lists a Grok model in its fallback order, so grok can take the fix.
     expect(route(place("bug-fix", { phase: "fix", used: { claude: 70, grok: 10 } }))).toEqual([

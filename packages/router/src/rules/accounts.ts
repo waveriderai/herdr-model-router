@@ -41,7 +41,12 @@ export interface AccountInput {
  * `# fallback:` models, each on its accounts by remaining quota.
  */
 export function assignAccounts(plan: RoutePlan, input: AccountInput): RoutePlan | PlanRefusal {
-  const rules = input.accounts ?? { reviewOnly: [] };
+  const base = input.accounts ?? { reviewOnly: [] };
+  // A per-role fix list (`fix-accounts-for <role> = ...`) replaces the global one for that role.
+  const roleFix = plan.roleNames
+    .map((name) => base.fixAccountsByRole?.[normalizeRoleName(name)])
+    .find((ids) => ids !== undefined);
+  const rules = roleFix ? { ...base, fixAccounts: roleFix } : base;
   const writer = plan.access === "write";
   const reviewOnly = writer ? rules.reviewOnly : [];
   const allowed = input.policy?.allowedProviders;

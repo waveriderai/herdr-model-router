@@ -36,6 +36,11 @@ export interface AccountRules {
   firstVersion?: string;
   /** `# hmr: fix-accounts claude, grok`: `--phase fix` writers run on the one with most quota. */
   fixAccounts?: string[];
+  /**
+   * `# hmr: fix-accounts-for design implementation = codex`: per-role fix accounts (normalized
+   * role name). For that role they replace `fix-accounts`; other roles keep the global list.
+   */
+  fixAccountsByRole?: Record<string, string[]>;
   /** `# hmr: review-only codex`: these accounts never run a writer (coding) lane. */
   reviewOnly: string[];
 }
@@ -58,6 +63,7 @@ export type ParseRulesResult = { ok: true; rules: RuleSet } | { ok: false; error
 const HMR_DIRECTIVE = /^\s*#\s*hmr:/i;
 const READONLY_BODY = /^readonly\s+(.+)$/i;
 const ACCOUNT_BODY = /^(first-version|fix-accounts|review-only)\s+(.+)$/i;
+const FIX_FOR_BODY = /^fix-accounts-for\s+(.+?)\s*=\s*(.+)$/i;
 /**
  * `fallback: a, then b` at the start of a comment, or after a sentence in it
  * (`# UI code from the spec. fallback: a, then b`). `Gate fallback stays ...` is prose.
@@ -142,6 +148,27 @@ export function parseRules(text: string): ParseRulesResult {
       const body = lines[index]!.replace(HMR_DIRECTIVE, "")
         .replace(/\s+#.*$/, "")
         .trim();
+      const fixFor = FIX_FOR_BODY.exec(body);
+      if (fixFor) {
+        const role = normalizeRoleName(fixFor[1]!);
+        const ids = fixFor[2]!.split(",").map((id) => id.trim().toLowerCase());
+        const unknown = ids.find((id) => !providerIds().includes(id));
+        if (role === "" || unknown !== undefined) {
+          return {
+            ok: false,
+            error: `line ${lineNumber}: fix-accounts-for needs "<role> = <account>[, account]" with known accounts (${providerIds().join(", ")})`,
+          };
+        }
+        const byRole = (accounts.fixAccountsByRole ??= {});
+        if (byRole[role]) {
+          return {
+            ok: false,
+            error: `line ${lineNumber}: fix-accounts-for "${role}" is set twice`,
+          };
+        }
+        byRole[role] = ids;
+        continue;
+      }
       const account = ACCOUNT_BODY.exec(body);
       if (account) {
         const keyword = account[1]!.toLowerCase();
