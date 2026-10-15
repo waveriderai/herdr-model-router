@@ -26,6 +26,29 @@ const SESSION_LINE = /^([\s│|]*)Session:(.*)$/;
 /** Any row: its indentation (the card's border counts) and its content. */
 const ROW = /^([\s│|]*)(.*?)[\s│|]*$/;
 
+/** The `/status` card's `Permissions:` field, inside the card's border or not. */
+const PERMISSIONS_LINE = /^[\s│|]*Permissions:\s*(.*?)[\s│|]*$/;
+
+/**
+ * The permission profile named on the `/status` card ("Permissions: Profile <name> (...)"),
+ * "none" when the card has no Permissions field, or "other" when it names no profile (for
+ * example a legacy `sandbox_mode` such as "Full access"). Two different values are "other".
+ */
+export function codexStatusPermissionProfile(
+  text: string,
+): { state: "none" } | { state: "other"; value: string } | { state: "profile"; name: string } {
+  const values = new Set<string>();
+  for (const line of text.replace(/\r/g, "").split("\n")) {
+    const match = PERMISSIONS_LINE.exec(line);
+    if (match) values.add(match[1]!);
+  }
+  if (values.size === 0) return { state: "none" };
+  if (values.size > 1) return { state: "other", value: [...values].join(" / ") };
+  const value = [...values][0]!;
+  const profile = /^Profile\s+(\S+)(?:\s|$)/.exec(value);
+  return profile ? { state: "profile", name: profile[1]! } : { state: "other", value };
+}
+
 export type StatusSession =
   | { state: "none" }
   /** A Session field whose id is still being painted: a bare label or a UUID prefix. */
@@ -101,12 +124,22 @@ type Outcome = { ok: true; probed: boolean } | { ok: false; error: string };
  */
 export async function ensureCodexSession(
   deps: CodexIdentityDeps,
-  input: { paneId: string; agentName: string; cwd: string },
+  input: {
+    paneId: string;
+    agentName: string;
+    cwd: string;
+    /** A writer's permission profile; its /status card must name it or nothing is prompted. */
+    expectedPermissionProfile?: string;
+  },
 ): Promise<Outcome> {
   const { paneId } = input;
   const fail = (reason: string): Outcome => ({
     ok: false,
     error: `Codex in pane ${paneId} has not reported its session to Herdr, and ${reason}; no prompt was sent`,
+  });
+  const failProfile = (reason: string): Outcome => ({
+    ok: false,
+    error: `Codex in pane ${paneId} could not be confirmed to run under permission profile ${input.expectedPermissionProfile}: ${reason}; no prompt was sent`,
   });
   const expected = canonicalCwd(input.cwd);
   // The same pane, kind, name and directory, idle: anything else is not this launch's Codex.
@@ -137,22 +170,36 @@ export async function ensureCodexSession(
     if (live.status !== "idle") return { ok: false, reason: `it is ${live.status}, not idle` };
     return { ok: true, ...(live.sessionId ? { sessionId: live.sessionId } : {}) };
   };
-  // A session Herdr already reports is left entirely to the caller's identity binding.
+  // A session Herdr already reports is left entirely to the caller's identity binding, but a
+  // writer's permission profile is only visible on /status, so a writer still types it once.
+  const mustCheckProfile = input.expectedPermissionProfile !== undefined;
   const reported = await deps.pane.getAgent(paneId).catch(() => undefined);
-  if (reported?.paneId === paneId && reported.sessionId) return { ok: true, probed: false };
+  let sessionKnown = reported?.paneId === paneId && Boolean(reported.sessionId);
+  if (sessionKnown && !mustCheckProfile) return { ok: true, probed: false };
   const before = await check();
-  if (!before.ok) return fail(`its identity cannot be confirmed (${before.reason})`);
-  if (before.sessionId) return { ok: true, probed: false };
+  if (!before.ok) {
+    // A reported session in another directory is the caller's identity binding to refuse
+    // (cwd-changed); it never reaches a prompt, so no profile check is needed first.
+    if (sessionKnown && before.reason.startsWith("it runs in ")) return { ok: true, probed: false };
+    return fail(`its identity cannot be confirmed (${before.reason})`);
+  }
+  if (before.sessionId) {
+    if (!mustCheckProfile) return { ok: true, probed: false };
+    sessionKnown = true;
+  }
 
   const recent = () =>
     deps.pane
       .readPane(paneId, { source: "recent-unwrapped", lines: STATUS_LINES })
       .catch(() => undefined);
+  const permissionLines = (text: string) =>
+    text.split("\n").filter((line) => /^[\s│|]*Permissions:/.test(line)).length;
   const baseline = await recent();
   if (baseline === undefined) return fail("its screen could not be read");
-  if (codexStatusSession(baseline).state !== "none") {
+  if (!sessionKnown && codexStatusSession(baseline).state !== "none") {
     return fail("its screen already shows a Session line, so a new one could not be told apart");
   }
+  const permissionsBefore = permissionLines(baseline);
   const typed = await deps.pane.sendText(paneId, STATUS_COMMAND);
   if (!typed.ok) return fail(herdrError(typed, "typing /status failed"));
   // Enter only when the box holds exactly `/status`; anything else would be a message. Codex
@@ -181,10 +228,47 @@ export async function ensureCodexSession(
   const entered = await deps.pane.sendKeys(paneId, ["enter"]);
   if (!entered.ok) return fail(herdrError(entered, "pressing Enter failed"));
 
+  const checkProfile = (text: string | undefined): Outcome | undefined => {
+    if (!mustCheckProfile) return undefined;
+    if (text === undefined || permissionLines(text) <= permissionsBefore) {
+      return failProfile(`its /status showed no new Permissions line within ${deps.timeoutMs}ms`);
+    }
+    const shown = codexStatusPermissionProfile(text);
+    if (shown.state === "none") return failProfile("its /status showed no Permissions line");
+    if (shown.state === "other") {
+      return failProfile(
+        `its /status shows "${shown.value}" (a loaded Codex config's sandbox_mode probably overrides default_permissions)`,
+      );
+    }
+    if (shown.name !== input.expectedPermissionProfile) {
+      return failProfile(`its /status shows profile ${shown.name}`);
+    }
+    return undefined;
+  };
+
+  if (sessionKnown) {
+    let text: string | undefined;
+    for (let waited = 0; ; waited += deps.pollMs) {
+      text = await recent();
+      if (text !== undefined && permissionLines(text) > permissionsBefore) break;
+      if (waited >= deps.timeoutMs) break;
+      await deps.sleep(deps.pollMs);
+    }
+    const refused = checkProfile(text);
+    if (refused) return refused;
+    const after = await check();
+    if (!after.ok) return fail(`its identity changed during /status (${after.reason})`);
+    return { ok: true, probed: false };
+  }
+
   let seen: StatusSession = { state: "none" };
+  let lastText: string | undefined;
   for (let waited = 0; ; waited += deps.pollMs) {
     const text = await recent();
-    if (text !== undefined) seen = codexStatusSession(text);
+    if (text !== undefined) {
+      lastText = text;
+      seen = codexStatusSession(text);
+    }
     // A bare or partly painted Session field is waited for, like no field at all.
     if (seen.state !== "none" && seen.state !== "partial") break;
     if (waited >= deps.timeoutMs) break;
@@ -199,6 +283,9 @@ export async function ensureCodexSession(
   if (seen.state === "ambiguous") return fail("its /status showed more than one Session id");
   if (seen.state === "malformed") return fail("its /status Session line is not a session UUID");
   const sessionId = seen.sessionId;
+
+  const refused = checkProfile(lastText);
+  if (refused) return refused;
 
   // /status starts no turn: the agent must still be idle and the same one.
   const after = await check();

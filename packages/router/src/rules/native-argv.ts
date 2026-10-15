@@ -134,6 +134,12 @@ export interface NativeLaunch {
   argv: string[];
   /** Flags and values the installed CLI's --help must list before this argv may run. */
   requiredHelp: string[];
+  /**
+   * Set for a Codex writer: the permission profile its `/status` card must show
+   * ("Permissions: Profile <name>") before it is prompted. Codex documents that a loaded
+   * `sandbox_mode` silently wins over `default_permissions`, so the launch checks the live card.
+   */
+  expectedPermissionProfile?: string;
 }
 
 /**
@@ -176,7 +182,7 @@ export function nativeLaunch(
       );
     case "codex": {
       // Only a writer gets the extra root, so only a writer depends on the router home.
-      let roots = "";
+      let roots: string[] = [];
       if (profile === "writer") {
         if (!path.isAbsolute(routerHome)) {
           return {
@@ -184,10 +190,10 @@ export function nativeLaunch(
             error: `router home "${routerHome}" is not an absolute path; a Codex writer cannot be given it as a writable root`,
           };
         }
-        roots = codexWritableRoots(routerHome);
+        roots = codexWriterProfile(routerHome);
       }
       // `-c` is always required: a launch also sets the pane's Herdr context with it.
-      return built(
+      const launch = built(
         "codex",
         [["--model", model], effort ? ["-c", `model_reasoning_effort="${effort}"`] : []],
         pick({
@@ -195,14 +201,20 @@ export function nativeLaunch(
           writer: {
             // The writer must reach hmr's own state (`hmr task status`, `hmr task complete`).
             // Only that exact directory is added; never a parent such as ~/Library or ~.
-            args: ["--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", roots],
-            values: ["workspace-write", "on-request"],
+            // No `--sandbox`: that flag overrides `default_permissions`. The writer profile
+            // extends Codex's built-in `:workspace` sandbox (see codexWriterProfile).
+            args: ["--ask-for-approval", "on-request", ...roots.flatMap((c) => ["-c", c])],
+            values: ["on-request"],
           },
           control: NONE,
           bypass: { args: ["--dangerously-bypass-approvals-and-sandbox"] },
         }),
         ["-c"],
       );
+      if (roots.length > 0) {
+        launch.launch.expectedPermissionProfile = CODEX_WRITER_PROFILE;
+      }
+      return launch;
     }
     case "grok":
       return built(
@@ -244,16 +256,36 @@ export function nativeLaunch(
   }
 }
 
+/** The Codex permission profile hmr defines for writer lanes. */
+export const CODEX_WRITER_PROFILE = "hmr-writer";
+
+/** Hosts a Codex writer may reach through Codex's network proxy (Kai GO 2026-10-14 5:04 PM PT). */
+export const CODEX_WRITER_DOMAINS = ["fonts.googleapis.com", "fonts.gstatic.com"] as const;
+
 /**
- * The Codex `-c` override that adds exactly hmr's state directory (resolveHome: MODEL_ROUTER_HOME,
- * else the per-OS default) as the writer's one extra writable root. The value is a TOML array of
- * one TOML basic string.
+ * The Codex `-c` overrides for a writer: a named permission profile that extends the built-in
+ * `:workspace` sandbox and adds only
+ *  - write access to exactly hmr's state directory (resolveHome: MODEL_ROUTER_HOME, else the
+ *    per-OS default), so `hmr task status` / `hmr task complete` work;
+ *  - command networking through Codex's proxy, allowlisted to the two Google Fonts hosts;
+ *  - `allow_local_binding`, so dev servers can listen on and be reached at localhost.
+ * Every other destination stays blocked by the proxy; the sandbox stays on.
  */
-export function codexWritableRoots(routerHome: string): string {
+export function codexWriterProfile(routerHome: string): string[] {
   if (!path.isAbsolute(routerHome)) {
     throw new Error(`router home "${routerHome}" is not an absolute path`);
   }
-  return `sandbox_workspace_write.writable_roots=[${tomlBasicString(path.normalize(routerHome))}]`;
+  const p = `permissions.${CODEX_WRITER_PROFILE}`;
+  const domains = CODEX_WRITER_DOMAINS.map((d) => `${tomlBasicString(d)}="allow"`).join(",");
+  return [
+    `default_permissions=${tomlBasicString(CODEX_WRITER_PROFILE)}`,
+    `${p}.extends=":workspace"`,
+    `${p}.filesystem={${tomlBasicString(path.normalize(routerHome))}="write"}`,
+    "features.network_proxy.enabled=true",
+    `${p}.network.enabled=true`,
+    `${p}.network.allow_local_binding=true`,
+    `${p}.network.domains={${domains}}`,
+  ];
 }
 
 /** A profile's argv and the enum values in it that the CLI's --help must also list. */

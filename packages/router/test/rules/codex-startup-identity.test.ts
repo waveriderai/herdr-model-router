@@ -277,12 +277,36 @@ describe("native Codex startup identity (U8)", () => {
     expect(herdr.prompts).toEqual([]);
   });
 
-  it("skips the probe when Herdr already reports the session", async () => {
+  it("reports no session when Herdr already has one, but still checks the writer's profile", async () => {
     const herdr = fakeHerdr();
     const { lane } = await writer(herdr);
     expect(lane.state).toBe("prompted");
-    expect(probeCalls(herdr)).toEqual([]);
+    const calls = probeCalls(herdr).map((call) => call[1]);
+    expect(calls).not.toContain("report-agent-session");
+    expect(calls.filter((c) => c === "send-text")).toHaveLength(1);
     expect(herdr.prompts).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "Full access (a loaded sandbox_mode wins)",
+      "│  Permissions:          Full access                                      │\n",
+      /shows "Full access"/,
+    ],
+    [
+      "another profile",
+      "│  Permissions:          Profile other (workspace)                        │\n",
+      /shows profile other/,
+    ],
+    ["no Permissions line", "\n", /no new Permissions line/],
+  ])("never prompts a Codex writer whose /status shows %s", async (_name, card, why) => {
+    const herdr = fakeHerdr({
+      detect: fresh({ statusCard: `${CARD.replace(/^.*Permissions:.*\n/m, "")}${card}` }) as never,
+    });
+    const { lane } = await writer(herdr);
+    expect(lane.state).toBe("failed");
+    expect(lane.error).toMatch(why);
+    expect(herdr.prompts).toEqual([]);
   });
 
   it("leaves other providers unchanged: a Claude writer without a session is refused as before", async () => {

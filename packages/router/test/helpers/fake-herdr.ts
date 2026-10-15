@@ -85,6 +85,13 @@ export interface FakePane {
   submitted?: string[];
 }
 
+/**
+ * What a Codex prints for `/status` when a test sets no card: the Permissions field of a
+ * writer launched under hmr's profile, and no Session line.
+ */
+export const DEFAULT_STATUS_CARD =
+  "│  Permissions:          Profile hmr-writer (workspace with network access) │\n";
+
 /** The screen Herdr shows for a pane: its history, then its screen with the typed input. */
 function renderPane(pane: FakePane): string | undefined {
   if (pane.screen === undefined) return undefined;
@@ -281,7 +288,7 @@ export function fakeHerdr(
           // Codex runs `/status` locally: it prints the card and starts no model turn.
           if (pane.kind === "codex" && line === "/status") {
             if (pane.statusFrames) pane.statusFrame = 0;
-            else pane.history = `${pane.history ?? ""}${pane.statusCard ?? ""}`;
+            else pane.history = `${pane.history ?? ""}${pane.statusCard ?? DEFAULT_STATUS_CARD}`;
           } else if (line !== "") {
             pane.submitted = [...(pane.submitted ?? []), line];
             pane.status = "working";
