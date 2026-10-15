@@ -13,6 +13,8 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { cursorPrivateHome } from "./cursor-private.js";
 import { grokProfileNames, type NativeLaunch } from "./native-argv.js";
 
 /**
@@ -234,7 +236,7 @@ const CURSOR_SANDBOX_SAFE_KEYS = new Set(["additionalReadonlyPaths", "networkPol
  * Why a Cursor `sandbox.json` must stop a writer launch, or undefined when it is absent or
  * only narrows. Fails closed: unreadable JSON or any key not known to be safe refuses.
  */
-export function cursorSandboxRefusal(file: string): string | undefined {
+export function cursorSandboxRefusal(file: string, ownStateHome?: string): string | undefined {
   if (!existsSync(file)) return undefined;
   let settings: Record<string, unknown> | undefined;
   try {
@@ -245,7 +247,17 @@ export function cursorSandboxRefusal(file: string): string | undefined {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     return `${file} is not a JSON object; a Cursor writer was not launched`;
   }
-  const unsafe = Object.keys(settings).filter((key) => !CURSOR_SANDBOX_SAFE_KEYS.has(key));
+  // The worktree's own file may carry exactly hmr's state folder as its one writable root:
+  // hmr writes that entry itself before every Cursor launch (Kai 2026-10-15 12:21 AM PT).
+  const ownEntry = (key: string) =>
+    ownStateHome !== undefined &&
+    key === "additionalReadwritePaths" &&
+    Array.isArray(settings![key]) &&
+    (settings![key] as unknown[]).length === 1 &&
+    (settings![key] as unknown[])[0] === ownStateHome;
+  const unsafe = Object.keys(settings).filter(
+    (key) => !CURSOR_SANDBOX_SAFE_KEYS.has(key) && !ownEntry(key),
+  );
   if (unsafe.length > 0) {
     return `${file} sets ${unsafe.join(", ")}, which could widen the writer's shell sandbox; a Cursor writer was not launched`;
   }
@@ -330,28 +342,75 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
       };
     }
   }
+  mkdirSync(ctx.routerHome, { recursive: true });
+  const stateHome = realpathSync(ctx.routerHome);
+  const workspace = real(ctx.cwd) ?? path.resolve(ctx.cwd);
+  const ownSandbox = path.join(workspace, ".cursor", "sandbox.json");
   for (const file of sandboxFiles) {
-    const refusal = cursorSandboxRefusal(file);
+    const own = (real(path.dirname(path.dirname(file))) ?? "") === workspace;
+    const refusal = cursorSandboxRefusal(file, own ? stateHome : undefined);
     if (refusal) return { ok: false, error: refusal };
   }
   // The writer's extra allow roots (temp dir, router home) would let its native Write reach the
   // worktree's live `.cursor` settings under a case alias the deny rules miss, so a worktree
   // inside either refuses the launch (review round 8). Compared case-insensitively.
   const tempDir = ctx.tempDir ?? os.tmpdir();
-  const nested = cursorWorktreeInsideAllowRoot(ctx.cwd, [tempDir, ctx.routerHome]);
+  const privateHome = cursorPrivateHome(ctx.routerHome);
+  const nested = cursorWorktreeInsideAllowRoot(ctx.cwd, [tempDir, ctx.routerHome, privateHome]);
   if (nested) {
     return {
       ok: false,
       error: `the worktree is inside ${nested}, which a Cursor writer may write freely; a Cursor writer was not launched`,
     };
   }
-  return {
-    ok: true,
-    argv,
-    env: {
-      CURSOR_CONFIG_DIR: writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd, tempDir),
-    },
-  };
+  // The private folder (config dirs, guard records) must stay out of every root the writer's
+  // shell or Write tool may reach: never inside the temp dir or hmr's state folder.
+  const exposed = cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome]);
+  if (exposed) {
+    return {
+      ok: false,
+      error: `hmr's Cursor private folder ${privateHome} is inside ${exposed}, which a Cursor writer may write; a Cursor writer was not launched`,
+    };
+  }
+  const configDir = writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd, tempDir);
+  writeCursorStateSandbox(ownSandbox, stateHome, ctx.cwd);
+  return { ok: true, argv, env: { CURSOR_CONFIG_DIR: configDir } };
+}
+
+/**
+ * Lets the writer's sandboxed shell write hmr's state folder and nothing else, so
+ * `hmr task complete` works without an approval prompt (Kai 2026-10-15 12:21 AM PT: "same as
+ * Codex", mirroring PR #19). Cursor reads extra writable roots only from `.cursor/sandbox.json`
+ * (not from CURSOR_CONFIG_DIR), so hmr writes the worktree's file: the keys already checked as
+ * safe are kept and `additionalReadwritePaths` is exactly [state folder]. The writer cannot
+ * change it: its Write tool is denied the worktree `.cursor` and Cursor's shell sandbox blocks
+ * writes under `.cursor`. The file is git-excluded so it is never committed.
+ */
+export function writeCursorStateSandbox(file: string, stateHome: string, cwd: string): void {
+  const existing = readJson(file) ?? {};
+  const content = { ...existing, additionalReadwritePaths: [stateHome] };
+  mkdirSync(path.dirname(file), { recursive: true });
+  atomicWrite(file, `${JSON.stringify(content)}\n`, 0o644);
+  try {
+    const tracked = execFileSync("git", ["-C", cwd, "ls-files", "--", ".cursor/sandbox.json"], {
+      encoding: "utf8",
+    }).trim();
+    if (tracked) return;
+    const exclude = execFileSync("git", ["-C", cwd, "rev-parse", "--git-path", "info/exclude"], {
+      encoding: "utf8",
+    }).trim();
+    const excludeFile = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude);
+    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
+    if (!current.split("\n").includes("/.cursor/sandbox.json")) {
+      mkdirSync(path.dirname(excludeFile), { recursive: true });
+      writeFileSync(
+        excludeFile,
+        `${current}${current && !current.endsWith("\n") ? "\n" : ""}/.cursor/sandbox.json\n`,
+      );
+    }
+  } catch {
+    /* not a git checkout: nothing to exclude */
+  }
 }
 
 /**
@@ -376,7 +435,10 @@ export function writeCursorConfig(
     );
   }
   mkdirSync(routerHome, { recursive: true });
-  const root = path.join(realpathSync(routerHome), "cursor-config");
+  const privateHome = cursorPrivateHome(routerHome);
+  mkdirSync(privateHome, { recursive: true, mode: 0o700 });
+  chmodSync(privateHome, 0o700);
+  const root = path.join(privateHome, "cursor-config");
   mkdirSync(root, { recursive: true, mode: 0o700 });
   chmodSync(root, 0o700);
   for (const entry of readdirSync(root)) {
@@ -410,6 +472,8 @@ export function writeCursorConfig(
       // The worktree's own `.cursor` (sandbox.json, cli.json) is re-read live by Cursor and
       // could widen the shell sandbox, so the writer may never edit it (review round 7).
       deny: [
+        `Write(${privateHome})`,
+        `Write(${privateHome}/**)`,
         `Write(${root})`,
         `Write(${root}/**)`,
         "Write(./.cursor)",

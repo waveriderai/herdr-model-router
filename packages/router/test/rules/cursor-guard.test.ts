@@ -300,7 +300,8 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     const log = cursorGuardLogger(home);
     log({ event: "a" });
     log({ event: "b" });
-    const file = path.join(home, "cursor-guard.log");
+    // Beside the state folder, never inside it: a writer's shell may write the state folder.
+    const file = path.join(`${home}.cursor-private`, "cursor-guard.log");
     expect(
       readFileSync(file, "utf8")
         .trim()

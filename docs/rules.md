@@ -95,13 +95,19 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
     `hmr-read-only-<tag>` (extends `read-only`) custom profiles in one managed block per router
     home (`<tag>` = first 8 hex of sha256 of the home) of `~/.grok/sandbox.toml`, written atomically. Grok refuses to start when a custom profile cannot apply; the
     sandbox-warning screen guard stays as a second check.
-  - Cursor writer: a per-launch `CURSOR_CONFIG_DIR` under `<hmr home>/cursor-config/<lane>`
+  - Cursor writer: a per-launch `CURSOR_CONFIG_DIR` under `<hmr home>.cursor-private/cursor-config/<lane>`
     (0700 dir, 0600 file) with `approvalMode: allowlist`, sandbox on, `Write(./**)` allowed, the
     whole `cursor-config` tree denied (the writer cannot edit its live permissions), and exact +
     `/**` deny rules for every existing entry outside the worktree, hmr's state dir and $TMPDIR.
     A `.cursor/cli.json` in the worktree or any parent directory that sets `permissions` refuses the launch. Only `authInfo` (the login
     record; the token stays in the keychain) is copied from `~/.cursor/cli-config.json`, on every
     launch; the global config is never changed and hmr never logs in. Dirs older than 7 days are pruned.
+    Shell writes to hmr's state dir (Kai 2026-10-15 12:21 AM PT, same as Codex, so `hmr task
+complete` runs without a prompt): Cursor reads extra writable roots only from
+    `.cursor/sandbox.json`, so hmr writes the worktree's file with `additionalReadwritePaths`
+    exactly `[<hmr home>]` (other safe keys kept; git-excluded). The writer cannot change it (Write
+    denied on `.cursor`, Cursor's shell sandbox blocks `.cursor`). The config dirs and the guard's
+    ready files and log live in `<hmr home>.cursor-private` (0700), outside every writable root.
 - Known gaps: a Grok shell `ask` rule still prompts under `--always-approve` (none are configured);
   Cursor's own Write tool still prompts for a NEW file directly inside an ancestor of the worktree
   (Cursor globs have no negation and `*` crosses `/`).

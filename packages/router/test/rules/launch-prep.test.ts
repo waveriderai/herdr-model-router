@@ -164,7 +164,15 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(prep.ok).toBe(true);
     if (!prep.ok) return;
     const dir = prep.env.CURSOR_CONFIG_DIR!;
-    expect(dir.startsWith(path.join(router, "cursor-config"))).toBe(true);
+    // The config lives beside hmr's state folder, which the writer's shell may write.
+    expect(
+      dir.startsWith(path.join(`${realpathSync(router)}.cursor-private`, "cursor-config")),
+    ).toBe(true);
+    expect(dir.startsWith(realpathSync(router) + path.sep)).toBe(false);
+    // The worktree's sandbox.json gives the shell exactly hmr's state folder (Kai 12:21 AM PT).
+    expect(JSON.parse(readFileSync(path.join(cwd, ".cursor", "sandbox.json"), "utf8"))).toEqual({
+      additionalReadwritePaths: [realpathSync(router)],
+    });
     const file = path.join(dir, "cli-config.json");
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
@@ -187,6 +195,56 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(
       JSON.parse(readFileSync(path.join(home, ".cursor", "cli-config.json"), "utf8")).approvalMode,
     ).toBe("unrestricted");
+  });
+
+  it("keeps safe keys, re-accepts its own entry, and still refuses any other writable root", () => {
+    const home = tmp();
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(path.join(cwd, ".cursor"), { recursive: true });
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const router = path.join(home, "router");
+    const sandbox = path.join(cwd, ".cursor", "sandbox.json");
+    writeFileSync(sandbox, JSON.stringify({ additionalReadonlyPaths: ["/ro"] }));
+    const ctx = { cwd, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(true);
+    expect(JSON.parse(readFileSync(sandbox, "utf8"))).toEqual({
+      additionalReadonlyPaths: ["/ro"],
+      additionalReadwritePaths: [realpathSync(router)],
+    });
+    // A second launch in the same worktree accepts hmr's own entry.
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(true);
+    // Anything beyond exactly [state folder] refuses.
+    for (const paths of [
+      [realpathSync(router), "/outside"],
+      ["/outside"],
+      [`${realpathSync(router)}/..`],
+    ]) {
+      writeFileSync(sandbox, JSON.stringify({ additionalReadwritePaths: paths }));
+      expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    }
+  });
+
+  it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {
+    const home = tmp();
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: home,
+      routerHome: path.join(home, "router"),
+      home,
+    });
+    expect(prep.ok).toBe(false);
   });
 
   it("refuses a Cursor writer when any sandbox.json could widen its shell sandbox", () => {
