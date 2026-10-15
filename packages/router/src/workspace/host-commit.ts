@@ -308,7 +308,7 @@ export async function neutralizeFilters(git: HostGit, cwd: string): Promise<Host
   for (const key of list.stdout.split("\0").filter(Boolean)) {
     const rest = key.slice("filter.".length);
     const dot = rest.lastIndexOf(".");
-    if (dot > 0) names.add(rest.slice(0, dot));
+    if (dot >= 0) names.add(rest.slice(0, dot)); // "" is a valid (empty) driver name
   }
   const extra: string[] = [];
   for (const name of names) {

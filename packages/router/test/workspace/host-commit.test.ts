@@ -280,6 +280,18 @@ describe("hostCommit", () => {
     expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({ ok: true });
     expect(existsSync(marker)).toBe(false);
   });
+
+  it("never runs an empty-named filter driver", async () => {
+    const { dir, head } = repo();
+    const marker = path.join(tempDir("router-mark4-"), "ran");
+    mkdirSync(path.join(dir, ".git", "info"), { recursive: true });
+    writeFileSync(path.join(dir, ".git", "info", "attributes"), "*.md filter=\n");
+    git(dir, "config", "filter..clean", `sh -c 'touch ${marker}; cat'`);
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({ ok: true });
+    expect(existsSync(marker)).toBe(false);
+  });
 });
 
 function rmMarker(p: string): void {
