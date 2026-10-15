@@ -21,6 +21,7 @@ import {
   herdrHooks,
   prepareNativeLaunch,
   resolveExisting,
+  cursorSandboxTracked,
 } from "../../src/rules/launch-prep.js";
 import { grokProfileNames, nativeLaunch } from "../../src/rules/native-argv.js";
 
@@ -337,6 +338,28 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       home,
     });
     expect(prep.ok).toBe(false);
+    // A dangling temp symlink to the not-yet-created private folder also refuses (review 5).
+    const router2 = path.join(base, "real", "state2");
+    mkdirSync(router2);
+    const dangling = path.join(base, "tmp-link");
+    symlinkSync(`${realpathSync(router2)}.cursor-private`, dangling);
+    const prep2 = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: dangling,
+      routerHome: router2,
+      home,
+    });
+    expect(prep2.ok).toBe(false);
+  });
+
+  it("finds a tracked sandbox.json under any letter case (PR #23 review 5)", () => {
+    const repo = path.join(tmp(), "repo");
+    mkdirSync(path.join(repo, ".CURSOR"), { recursive: true });
+    execFileSync("git", ["-C", repo, "init", "-q"]);
+    writeFileSync(path.join(repo, ".CURSOR", "Sandbox.json"), "{}");
+    execFileSync("git", ["-C", repo, "add", "-f", ".CURSOR/Sandbox.json"]);
+    expect(cursorSandboxTracked(repo)).toBe(true);
   });
 
   it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {

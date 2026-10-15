@@ -393,6 +393,9 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
   } catch {
     /* absent: created below as a real 0700 dir */
   }
+  // Create the private folder first, so the check below compares real, existing paths (a
+  // dangling symlink to it now resolves; PR #23 review 5).
+  realPrivateDir(privateHome);
   // Either direction: the private folder inside a writable root, or a root inside it.
   const exposed =
     cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome, workspace]) ??
@@ -471,11 +474,14 @@ function gitignoreLiteral(segment: string): string {
   return segment.replace(/[\\*?[\]!# ]/g, (c) => `\\${c}`);
 }
 
-/** Whether git tracks `.cursor/sandbox.json` in `cwd` (false outside a git checkout). */
+/**
+ * Whether git tracks `.cursor/sandbox.json` in `cwd` under any letter case (a case-insensitive
+ * filesystem maps `.CURSOR/Sandbox.json` to the same file; PR #23 review 5). False outside git.
+ */
 export function cursorSandboxTracked(cwd: string): boolean {
   try {
     return (
-      execFileSync("git", ["-C", cwd, "ls-files", "--", ".cursor/sandbox.json"], {
+      execFileSync("git", ["-C", cwd, "ls-files", "--", ":(icase).cursor/sandbox.json"], {
         encoding: "utf8",
       }).trim() !== ""
     );
