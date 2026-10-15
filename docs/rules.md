@@ -82,11 +82,18 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 | `opencode` | refused: no enforceable read-only mode                                                                      | no flags                                                  | refused: no known bypass flag                |
 
 - Claude's writer settings are
-  `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true}}`:
+  `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}`:
   Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); a command that must run outside the sandbox asks for approval in the pane. If the sandbox
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. `acceptEdits` covers
   the working directory only.
+- Writer lanes also get `network.allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"]`
+  (Next.js font downloads) and `network.allowLocalBinding: true` (Kai, 2026-10-14) so `next build`,
+  `next start` and Playwright run inside the sandbox. `allowLocalBinding` is all-or-nothing in Claude
+  Code: on macOS a sandboxed command may listen on any local address and connect to any localhost
+  port (it cannot be limited to specific ports); bind dev servers to `127.0.0.1`. It has no effect on
+  Linux, where each sandboxed command has its own loopback. No extra filesystem paths are granted:
+  the worktree and the per-user `$TMPDIR` are writable by default.
 - Grok accepts `--permission-mode plan` but ignores it, so read-only Grok lanes use `--allow`
   and `--deny` rules (a `deny` always wins in Grok) plus Grok's `read-only` OS sandbox. A writer's
   `Edit(./**)` is rooted at its working directory, and the `workspace` sandbox lets it write

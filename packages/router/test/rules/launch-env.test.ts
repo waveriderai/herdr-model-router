@@ -184,7 +184,7 @@ describe("native CLI launch environment (process level)", () => {
         "arg=--permission-mode",
         "arg=acceptEdits",
         "arg=--settings",
-        'arg={"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true}}',
+        'arg={"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}',
       ]);
       expect(lines[0]).toBe(`cwd=${realpathSync(project)}`);
       const env = Object.fromEntries(

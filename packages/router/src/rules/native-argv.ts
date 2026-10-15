@@ -96,6 +96,14 @@ export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
     failIfUnavailable: true,
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: true,
+    // Kai GO 2026-10-14 5:04 PM PT: Next.js font fetches and local dev/preview servers
+    // (next build/start + Playwright) run inside the sandbox. allowLocalBinding is a
+    // boolean in Claude Code: on macOS it allows listening on any local port and
+    // connecting to any localhost port; it cannot be narrowed to specific ports.
+    network: {
+      allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"],
+      allowLocalBinding: true,
+    },
   },
 });
 
