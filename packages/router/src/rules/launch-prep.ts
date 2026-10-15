@@ -375,11 +375,16 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
   } catch {
     /* absent: created below as a real 0700 dir */
   }
-  const exposed = cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome, workspace]);
+  // Either direction: the private folder inside a writable root, or a root inside it.
+  const exposed =
+    cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome, workspace]) ??
+    [tempDir, stateHome, workspace].find(
+      (rootDir) => cursorWorktreeInsideAllowRoot(rootDir, [privateHome]) !== undefined,
+    );
   if (exposed) {
     return {
       ok: false,
-      error: `hmr's Cursor private folder ${privateHome} is inside ${exposed}, which a Cursor writer may write; a Cursor writer was not launched`,
+      error: `hmr's Cursor private folder ${privateHome} overlaps ${exposed}, which a Cursor writer may write; a Cursor writer was not launched`,
     };
   }
   // A tracked sandbox.json would be changed in the repo (git exclude cannot hide it): refuse.
@@ -428,7 +433,7 @@ export function writeCursorStateSandbox(file: string, stateHome: string, cwd: st
     )
     .split(path.sep)
     .filter(Boolean);
-  const pattern = `/${[...rel, ".cursor", "sandbox.json"].join("/")}`;
+  const pattern = `/${[...rel, ".cursor", "sandbox.json"].map(gitignoreLiteral).join("/")}`;
   const excludeFile = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude);
   const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
   if (!current.split("\n").includes(pattern)) {
@@ -438,6 +443,30 @@ export function writeCursorStateSandbox(file: string, stateHome: string, cwd: st
       `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`,
     );
   }
+}
+
+/**
+ * Creates (0700) or checks one level of hmr's Cursor private folder: it must be a real
+ * directory, never a symlink, and resolve to exactly its own path, so the live config can never
+ * be redirected into a root the writer's shell may write (PR #23 review 2). Throws otherwise.
+ */
+function realPrivateDir(dir: string): void {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(dir);
+  const parent = real(path.dirname(dir)) ?? path.dirname(dir);
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isDirectory() ||
+    realpathSync(dir) !== path.join(parent, path.basename(dir))
+  ) {
+    throw new Error(`${dir} is not a real directory; a Cursor writer was not launched`);
+  }
+  chmodSync(dir, 0o700);
+}
+
+/** Escapes a path segment for a gitignore pattern, so it matches only itself. */
+function gitignoreLiteral(segment: string): string {
+  return segment.replace(/[\\*?[\]!# ]/g, (c) => `\\${c}`);
 }
 
 /** Whether git tracks `.cursor/sandbox.json` in `cwd` (false outside a git checkout). */
@@ -476,11 +505,9 @@ export function writeCursorConfig(
   }
   mkdirSync(routerHome, { recursive: true });
   const privateHome = cursorPrivateHome(routerHome);
-  mkdirSync(privateHome, { recursive: true, mode: 0o700 });
-  chmodSync(privateHome, 0o700);
+  realPrivateDir(privateHome);
   const root = path.join(privateHome, "cursor-config");
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  chmodSync(root, 0o700);
+  realPrivateDir(root);
   for (const entry of readdirSync(root)) {
     const dir = path.join(root, entry);
     try {
@@ -492,8 +519,7 @@ export function writeCursorConfig(
     }
   }
   const dir = path.join(root, laneId.replace(/[^A-Za-z0-9_-]/g, "_"));
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
+  realPrivateDir(dir);
   const sandbox = (global.sandbox ?? {}) as Record<string, unknown>;
   const tmp = real(tempDir) ?? tempDir;
   const stateHome = realpathSync(routerHome);

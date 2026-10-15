@@ -263,6 +263,48 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(readFileSync(path.join(repo, ".cursor", "sandbox.json"), "utf8")).toBe("{}");
   });
 
+  it("refuses symlinked private subdirs and a temp dir inside the private folder; escapes exclude paths (PR #23 review 2)", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const repo = path.join(tmp(), "repo");
+    const sub = path.join(repo, "pkg[1]");
+    mkdirSync(sub, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    const router = path.join(home, "router");
+    mkdirSync(router);
+    const priv = `${realpathSync(router)}.cursor-private`;
+    const ctx = { cwd: repo, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    // cursor-config, then the lane dir, as symlinks into the state folder.
+    mkdirSync(priv, { mode: 0o700 });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-config"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-config"));
+    mkdirSync(path.join(priv, "cursor-config"), { mode: 0o700 });
+    symlinkSync(realpathSync(router), path.join(priv, "cursor-config", "l"));
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(path.join(priv, "cursor-config", "l"));
+    // A temp dir inside the private folder refuses.
+    mkdirSync(path.join(priv, "cursor-config", "t"), { recursive: true });
+    expect(
+      prepareNativeLaunch(launchFor("cursor", "writer", home), {
+        ...ctx,
+        tempDir: path.join(priv, "cursor-config", "t"),
+      }).ok,
+    ).toBe(false);
+    // A subdirectory with gitignore special characters is still excluded exactly.
+    writeFileSync(path.join(repo, "pkg1"), "");
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), { ...ctx, cwd: sub }).ok).toBe(
+      true,
+    );
+    expect(git("status", "--porcelain", "--untracked-files=all")).not.toContain("sandbox.json");
+  });
+
   it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {
     const home = tmp();
     const cwd = path.join(tmp(), "wt");
