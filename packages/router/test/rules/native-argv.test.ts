@@ -26,7 +26,7 @@ const CLAUDE_READ = [
 ];
 /** Written out, not imported: a missing key in the source must fail this test. */
 const CLAUDE_WRITER_SETTINGS_JSON =
-  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true}}';
+  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}';
 const GROK_READ = [
   "--sandbox",
   "read-only",
@@ -173,8 +173,35 @@ describe("native argv", () => {
         failIfUnavailable: true,
         autoAllowBashIfSandboxed: true,
         allowUnsandboxedCommands: true,
+        network: {
+          allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"],
+          allowLocalBinding: true,
+        },
       },
     });
+  });
+
+  it("allows a writer Claude only the Google Fonts hosts and local binding, nothing broader (Kai 2026-10-14)", () => {
+    const launch = argv("claude", "m", "high", "writer");
+    const settings = JSON.parse(launch.argv[launch.argv.indexOf("--settings") + 1] ?? "");
+    expect(settings.sandbox.network.allowedDomains).toEqual([
+      "fonts.googleapis.com",
+      "fonts.gstatic.com",
+    ]);
+    expect(settings.sandbox.network.allowedDomains.some((d: string) => d.includes("*"))).toBe(
+      false,
+    );
+    expect(settings.sandbox.network.allowLocalBinding).toBe(true);
+    expect(settings.sandbox.filesystem).toBeUndefined();
+    expect(settings.sandbox.network.allowAllUnixSockets).toBeUndefined();
+    expect(settings.sandbox.enabled).toBe(true);
+    expect(settings.sandbox.failIfUnavailable).toBe(true);
+  });
+
+  it("gives read-only Claude lanes no writer network settings", () => {
+    const launch = argv("claude", "m", "high", "read-only");
+    expect(launch.argv.join(" ")).not.toContain("allowLocalBinding");
+    expect(launch.argv.join(" ")).not.toContain("fonts.googleapis.com");
   });
 
   it("gives a read-only Grok lane enforced rules, never the plan mode Grok ignores", () => {
