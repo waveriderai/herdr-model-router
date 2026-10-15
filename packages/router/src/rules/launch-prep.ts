@@ -1,17 +1,19 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { NativeLaunch } from "./native-argv.js";
+import { grokProfileNames, type NativeLaunch } from "./native-argv.js";
 
 /**
  * Per-launch preparation that native argv alone cannot express (Kai 2026-10-14 8:25 PM PT,
@@ -23,8 +25,10 @@ export interface PrepContext {
   cwd: string;
   laneId: string;
   routerHome: string;
-  /** The user's home directory (where ~/.claude, ~/.grok and ~/.cursor live). */
+  /** The user's home directory (where ~/.grok and ~/.cursor live). */
   home?: string;
+  /** Claude's config dir the launch uses (`CLAUDE_CONFIG_DIR`, else ~/.claude). */
+  claudeConfigDir?: string;
 }
 
 export type PrepResult =
@@ -40,16 +44,16 @@ export function prepareNativeLaunch(
       case undefined:
         return { ok: true, argv: launch.argv, env: {} };
       case "claude-writer":
-        return prepareClaudeWriter(launch.argv, ctx.cwd, home);
+        return prepareClaudeWriter(
+          launch.argv,
+          ctx.cwd,
+          ctx.claudeConfigDir ?? path.join(home, ".claude"),
+        );
       case "grok-profiles":
         ensureGrokProfiles(home, ctx.routerHome);
         return { ok: true, argv: launch.argv, env: {} };
       case "cursor-config":
-        return {
-          ok: true,
-          argv: launch.argv,
-          env: { CURSOR_CONFIG_DIR: writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd) },
-        };
+        return prepareCursorWriter(launch.argv, home, ctx);
     }
   } catch (error) {
     return {
@@ -86,7 +90,7 @@ export function herdrHooks(
  * carried over from the user settings in hmr's own `--settings`. A project or local setting
  * that lets a command run outside the sandbox refuses the launch.
  */
-function prepareClaudeWriter(argv: string[], cwd: string, home: string): PrepResult {
+function prepareClaudeWriter(argv: string[], cwd: string, claudeDir: string): PrepResult {
   for (const name of ["settings.json", "settings.local.json"]) {
     const file = path.join(cwd, ".claude", name);
     const settings = readJson(file);
@@ -106,7 +110,7 @@ function prepareClaudeWriter(argv: string[], cwd: string, home: string): PrepRes
   if (index < 0 || index + 1 >= argv.length)
     return { ok: false, error: "writer Claude argv has no --settings" };
   const settings = JSON.parse(argv[index + 1]!) as Record<string, unknown>;
-  const hooks = herdrHooks(readJson(path.join(home, ".claude", "settings.json")));
+  const hooks = herdrHooks(readJson(path.join(claudeDir, "settings.json")));
   const next = [...argv];
   next[index + 1] = JSON.stringify(
     Object.keys(hooks).length > 0 ? { ...settings, hooks } : settings,
@@ -114,87 +118,146 @@ function prepareClaudeWriter(argv: string[], cwd: string, home: string): PrepRes
   return { ok: true, argv: next, env: {} };
 }
 
-export const GROK_WRITER_PROFILE = "hmr-writer";
-export const GROK_READ_PROFILE = "hmr-read-only";
-const BEGIN = "# >>> hmr managed (herdr-model-router AGENT-285) — do not edit inside this block";
-const END = "# <<< hmr managed";
-
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
 
-/** The managed block hmr keeps in ~/.grok/sandbox.toml. Custom profiles fail closed. */
+function markers(tag: string): { begin: string; end: string } {
+  return {
+    begin: `# >>> hmr managed ${tag} (herdr-model-router AGENT-285) — do not edit inside this block`,
+    end: `# <<< hmr managed ${tag}`,
+  };
+}
+
+/** The managed block for one router home in ~/.grok/sandbox.toml. Custom profiles fail closed. */
 export function grokProfilesBlock(routerHome: string): string {
+  const names = grokProfileNames(routerHome);
+  const { begin, end } = markers(names.tag);
   return [
-    BEGIN,
-    `[profiles.${GROK_WRITER_PROFILE}]`,
+    begin,
+    `[profiles.${names.writer}]`,
     'extends = "workspace"',
     `read_write = [${tomlString(path.resolve(routerHome))}]`,
     "",
-    `[profiles.${GROK_READ_PROFILE}]`,
+    `[profiles.${names.readOnly}]`,
     'extends = "read-only"',
-    END,
+    end,
     "",
   ].join("\n");
 }
 
+/** Writes a file through a temp file and rename, so a reader never sees a partial file. */
+function atomicWrite(file: string, content: string | Buffer, mode?: number): void {
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(temp, content, mode === undefined ? {} : { mode });
+  if (mode !== undefined) chmodSync(temp, mode);
+  renameSync(temp, file);
+}
+
+/**
+ * Keeps this router home's block in ~/.grok/sandbox.toml, leaving every other line alone.
+ * A lost race between two homes drops a block, and Grok then refuses to start (fails closed).
+ */
 export function ensureGrokProfiles(home: string, routerHome: string): string {
   const file = path.join(home, ".grok", "sandbox.toml");
   const current = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const names = grokProfileNames(routerHome);
+  const { begin, end } = markers(names.tag);
   const block = grokProfilesBlock(routerHome);
-  const start = current.indexOf(BEGIN);
-  const end = current.indexOf(END);
+  const start = current.indexOf(begin);
+  const stop = current.indexOf(end);
   let next: string;
-  if (start >= 0 && end > start) {
-    next = current.slice(0, start) + block + current.slice(end + END.length).replace(/^\n/, "");
+  if (start >= 0 && stop > start) {
+    next = current.slice(0, start) + block + current.slice(stop + end.length).replace(/^\n/, "");
   } else {
-    if (/\[profiles\.hmr-(writer|read-only)\]/.test(current)) {
+    const outside = new RegExp(`\\[profiles\\.(${names.writer}|${names.readOnly})\\]`);
+    if (outside.test(current)) {
       throw new Error(`${file} defines an hmr profile outside hmr's managed block`);
     }
     next = (current && !current.endsWith("\n") ? current + "\n" : current) + block;
   }
   if (next !== current) {
     mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, next);
+    atomicWrite(file, next);
   }
   return file;
 }
 
+function real(dir: string): string | undefined {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Deny rules for Cursor's own Write tool: every existing sibling of every ancestor of the
- * worktree, so writes outside are denied rather than prompted. Cursor globs have no negation,
- * and `*` crosses `/`, so a NEW file directly inside an ancestor directory is not covered.
+ * Deny rules for Cursor's own Write tool covering everything outside `allowed` that exists
+ * now: walking down from `/` along each allowed root, every other entry is denied both exactly
+ * and with `/**`. Cursor globs have no negation and `*` crosses `/`, so a NEW entry created
+ * directly inside a directory on one of those paths is the one thing this cannot cover.
  */
 export function cursorDenyRules(worktree: string, keep: readonly string[] = []): string[] {
-  const target = realpathSync(worktree);
-  const keepReal = keep.filter((dir) => existsSync(dir)).map((dir) => realpathSync(dir));
+  const allowed = [worktree, ...keep].map(real).filter((dir): dir is string => dir !== undefined);
   const deny: string[] = [];
-  let ancestor = path.parse(target).root;
-  for (const part of target.split(path.sep).filter(Boolean)) {
+  const walk = (dir: string): void => {
     let children: string[];
     try {
-      children = readdirSync(ancestor);
+      children = readdirSync(dir);
     } catch {
-      children = [];
+      return;
     }
     for (const child of children) {
-      if (child === part) continue;
-      const full = path.join(ancestor, child);
-      if (keepReal.some((dir) => dir === full || dir.startsWith(full + path.sep))) continue;
-      deny.push(`Write(${full}/**)`);
+      const full = path.join(dir, child);
+      if (allowed.includes(full)) continue;
+      if (allowed.some((root) => root.startsWith(full + path.sep))) {
+        let isDir: boolean;
+        try {
+          isDir = lstatSync(full).isDirectory();
+        } catch {
+          isDir = false;
+        }
+        if (isDir) {
+          walk(full);
+          continue;
+        }
+      }
+      deny.push(`Write(${full})`, `Write(${full}/**)`);
     }
-    ancestor = path.join(ancestor, part);
-  }
+  };
+  walk(path.parse(allowed[0] ?? "/").root);
   return deny;
 }
 
 const CURSOR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * A Cursor writer's own config dir (Kai 2026-10-14 8:25 PM PT). A project `.cursor/cli.json`
+ * with permissions could widen the writer, so one refuses the launch.
+ */
+function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): PrepResult {
+  const project = path.join(ctx.cwd, ".cursor", "cli.json");
+  const settings = readJson(project);
+  if (settings && "permissions" in settings) {
+    return {
+      ok: false,
+      error: `${project} sets permissions, which would merge into the writer's allowlist; a Cursor writer was not launched`,
+    };
+  }
+  return {
+    ok: true,
+    argv,
+    env: { CURSOR_CONFIG_DIR: writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd) },
+  };
+}
+
+/**
  * A per-launch Cursor config dir inside hmr's state folder: allowlist approvals, sandbox on,
  * and only the login record (`authInfo`) copied from ~/.cursor/cli-config.json. The token
  * itself stays in the OS keychain, so a refresh there is picked up; the record is re-copied
- * on every launch. The global config is never modified. Files are 0600 in a 0700 dir.
+ * on every launch. The global config is never modified. Files are 0600 in a 0700 dir. The
+ * writer's own Write tool is denied the whole cursor-config tree (deny beats allow), and its
+ * sandboxed shell cannot write there, so it cannot change its live permissions.
  */
 export function writeCursorConfig(
   home: string,
@@ -208,14 +271,16 @@ export function writeCursorConfig(
       "cursor-agent is not logged in (no authInfo in ~/.cursor/cli-config.json); log in yourself, hmr never authorizes",
     );
   }
-  const root = path.join(routerHome, "cursor-config");
+  mkdirSync(routerHome, { recursive: true });
+  const root = path.join(realpathSync(routerHome), "cursor-config");
   mkdirSync(root, { recursive: true, mode: 0o700 });
   chmodSync(root, 0o700);
   for (const entry of readdirSync(root)) {
     const dir = path.join(root, entry);
     try {
-      if (Date.now() - statSync(dir).mtimeMs > CURSOR_PRUNE_MS)
+      if (Date.now() - statSync(dir).mtimeMs > CURSOR_PRUNE_MS) {
         rmSync(dir, { recursive: true, force: true });
+      }
     } catch {
       /* best effort */
     }
@@ -224,7 +289,8 @@ export function writeCursorConfig(
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const sandbox = (global.sandbox ?? {}) as Record<string, unknown>;
-  const tmp = os.tmpdir();
+  const tmp = real(os.tmpdir()) ?? os.tmpdir();
+  const stateHome = realpathSync(routerHome);
   const config = {
     version: global.version ?? 1,
     authInfo: global.authInfo,
@@ -235,16 +301,12 @@ export function writeCursorConfig(
     },
     showSandboxIntro: false,
     permissions: {
-      allow: ["Write(./**)", `Write(${path.resolve(routerHome)}/**)`, `Write(${tmp}/**)`],
-      deny: cursorDenyRules(cwd, [routerHome, tmp]),
+      allow: ["Write(./**)", `Write(${stateHome}/**)`, `Write(${tmp}/**)`],
+      deny: [`Write(${root})`, `Write(${root}/**)`, ...cursorDenyRules(cwd, [stateHome, tmp])],
     },
   };
-  const file = path.join(dir, "cli-config.json");
-  writeFileSync(file, JSON.stringify(config), { mode: 0o600 });
-  chmodSync(file, 0o600);
+  atomicWrite(path.join(dir, "cli-config.json"), JSON.stringify(config), 0o600);
   const hooks = path.join(home, ".cursor", "hooks.json");
-  if (existsSync(hooks)) {
-    writeFileSync(path.join(dir, "hooks.json"), readFileSync(hooks), { mode: 0o600 });
-  }
+  if (existsSync(hooks)) atomicWrite(path.join(dir, "hooks.json"), readFileSync(hooks), 0o600);
   return dir;
 }

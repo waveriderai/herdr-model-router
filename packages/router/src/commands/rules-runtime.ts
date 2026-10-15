@@ -103,7 +103,12 @@ export function openDispatchDeps(
     launchFiles: launchFilesIn(home),
     launchEnvNames: launchEnvNames(env),
     prepareLaunch: (launch, ctx) =>
-      prepareNativeLaunch(launch, { ...ctx, routerHome: home, home: userHome(env) }),
+      prepareNativeLaunch(launch, {
+        ...ctx,
+        routerHome: home,
+        home: userHome(env),
+        ...(env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+      }),
     ...(env.MODEL_ROUTER_HOME
       ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
       : {}),

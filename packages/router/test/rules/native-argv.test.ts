@@ -44,7 +44,7 @@ const CLAUDE_WRITER_SETTINGS_JSON = expect.stringContaining(
 );
 const GROK_READ = [
   "--sandbox",
-  "hmr-read-only",
+  expect.stringMatching(/^hmr-read-only-[0-9a-f]{8}$/),
   "--allow",
   "Read",
   "--allow",
@@ -139,7 +139,7 @@ describe("native argv", () => {
         "--reasoning-effort",
         "xhigh",
         "--sandbox",
-        "hmr-writer",
+        expect.stringMatching(/^hmr-writer-[0-9a-f]{8}$/),
         "--allow",
         "Edit(./**)",
         "--always-approve",

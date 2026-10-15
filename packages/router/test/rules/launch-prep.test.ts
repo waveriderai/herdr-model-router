@@ -15,7 +15,7 @@ import {
   herdrHooks,
   prepareNativeLaunch,
 } from "../../src/rules/launch-prep.js";
-import { nativeLaunch } from "../../src/rules/native-argv.js";
+import { grokProfileNames, nativeLaunch } from "../../src/rules/native-argv.js";
 
 function tmp(): string {
   return realpathSync(mkdtempSync(path.join(os.tmpdir(), "hmr-prep-")));
@@ -97,21 +97,29 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     if (!prep.ok) expect(prep.error).toMatch(error);
   });
 
-  it("keeps hmr's Grok profiles in a managed block and leaves the rest of sandbox.toml alone", () => {
+  it("keeps one managed Grok block per router home and leaves the rest of sandbox.toml alone", () => {
     const home = tmp();
     mkdirSync(path.join(home, ".grok"));
     const file = path.join(home, ".grok", "sandbox.toml");
     writeFileSync(file, '[profiles.mine]\nextends = "strict"\n');
     ensureGrokProfiles(home, "/state/hmr");
     ensureGrokProfiles(home, "/state/hmr2");
+    const once = readFileSync(file, "utf8");
+    ensureGrokProfiles(home, "/state/hmr");
     const text = readFileSync(file, "utf8");
+    expect(text).toBe(once);
+    const one = grokProfileNames("/state/hmr");
+    const two = grokProfileNames("/state/hmr2");
+    expect(one.writer).not.toBe(two.writer);
     expect(text).toContain('[profiles.mine]\nextends = "strict"');
-    expect(text.match(/\[profiles\.hmr-writer\]/g)).toHaveLength(1);
+    expect(text.split(`[profiles.${one.writer}]`)).toHaveLength(2);
+    expect(text.split(`[profiles.${two.writer}]`)).toHaveLength(2);
+    expect(text).toContain('read_write = ["/state/hmr"]');
     expect(text).toContain('read_write = ["/state/hmr2"]');
-    expect(text).toContain('[profiles.hmr-read-only]\nextends = "read-only"');
-    const launch = launchFor("grok", "writer", home);
+    expect(text).toContain(`[profiles.${one.readOnly}]\nextends = "read-only"`);
+    const launch = launchFor("grok", "writer", "/state/hmr");
     expect(launch.argv).toEqual(
-      expect.arrayContaining(["--sandbox", "hmr-writer", "--always-approve"]),
+      expect.arrayContaining(["--sandbox", one.writer, "--always-approve"]),
     );
   });
 
@@ -120,7 +128,7 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     mkdirSync(path.join(home, ".grok"));
     writeFileSync(
       path.join(home, ".grok", "sandbox.toml"),
-      '[profiles.hmr-writer]\nextends = "workspace"\n',
+      `[profiles.${grokProfileNames(home).writer}]\nextends = "workspace"\n`,
     );
     const prep = prepareNativeLaunch(launchFor("grok", "writer", home), {
       cwd: home,

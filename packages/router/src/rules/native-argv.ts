@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveHome } from "../config/config-loader.js";
 import { tomlBasicString } from "./launch-script.js";
@@ -273,10 +274,20 @@ export function nativeLaunch(
             // no prompts, and the sandbox still blocks writes outside the workspace.
             "read-only": {
               // hmr's custom profiles (~/.grok/sandbox.toml): Grok refuses to start when one cannot apply.
-              args: ["--sandbox", "hmr-read-only", ...GROK_READ_RULES.flat(), "--always-approve"],
+              args: [
+                "--sandbox",
+                grokProfileNames(routerHome).readOnly,
+                ...GROK_READ_RULES.flat(),
+                "--always-approve",
+              ],
             },
             writer: {
-              args: ["--sandbox", "hmr-writer", ...GROK_WRITER_RULES.flat(), "--always-approve"],
+              args: [
+                "--sandbox",
+                grokProfileNames(routerHome).writer,
+                ...GROK_WRITER_RULES.flat(),
+                "--always-approve",
+              ],
             },
             control: NONE,
             bypass: { args: ["--always-approve"] },
@@ -313,6 +324,19 @@ export function nativeLaunch(
       }
       return built("opencode", [["--model", model]], NONE);
   }
+}
+
+/**
+ * hmr's Grok custom sandbox profile names for one router home. The suffix keeps launches from
+ * different `MODEL_ROUTER_HOME`s from sharing (and rewriting) one profile.
+ */
+export function grokProfileNames(routerHome: string): {
+  writer: string;
+  readOnly: string;
+  tag: string;
+} {
+  const tag = createHash("sha256").update(path.resolve(routerHome)).digest("hex").slice(0, 8);
+  return { writer: `hmr-writer-${tag}`, readOnly: `hmr-read-only-${tag}`, tag };
 }
 
 /** The Codex permission profile hmr defines for writer lanes. */
