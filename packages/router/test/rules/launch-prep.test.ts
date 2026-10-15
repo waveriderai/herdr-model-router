@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -226,6 +227,40 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       writeFileSync(sandbox, JSON.stringify({ additionalReadwritePaths: paths }));
       expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
     }
+  });
+
+  it("refuses a symlinked private folder, a tracked sandbox.json, and excludes subdir files (PR #23 review)", () => {
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const repo = path.join(tmp(), "repo");
+    const sub = path.join(repo, "pkg");
+    mkdirSync(sub, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
+    git("init", "-q");
+    // Symlinked private folder pointing into the worktree.
+    const router = path.join(home, "router");
+    mkdirSync(router);
+    mkdirSync(path.join(repo, "inside"));
+    symlinkSync(path.join(repo, "inside"), `${realpathSync(router)}.cursor-private`);
+    const ctx = { cwd: repo, laneId: "l", tempDir: "/nonexistent-tmp", routerHome: router, home };
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    rmSync(`${realpathSync(router)}.cursor-private`);
+    // Subdirectory launch: the exclude rule is anchored to pkg/.cursor/sandbox.json.
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), { ...ctx, cwd: sub }).ok).toBe(
+      true,
+    );
+    expect(git("status", "--porcelain", "--untracked-files=all")).not.toContain("sandbox.json");
+    // A tracked sandbox.json refuses and is left unchanged.
+    mkdirSync(path.join(repo, ".cursor"));
+    writeFileSync(path.join(repo, ".cursor", "sandbox.json"), "{}");
+    git("add", "-f", ".cursor/sandbox.json");
+    expect(prepareNativeLaunch(launchFor("cursor", "writer", home), ctx).ok).toBe(false);
+    expect(readFileSync(path.join(repo, ".cursor", "sandbox.json"), "utf8")).toBe("{}");
   });
 
   it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {

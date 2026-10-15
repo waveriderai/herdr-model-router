@@ -365,11 +365,28 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
   }
   // The private folder (config dirs, guard records) must stay out of every root the writer's
   // shell or Write tool may reach: never inside the temp dir or hmr's state folder.
-  const exposed = cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome]);
+  try {
+    if (lstatSync(privateHome).isSymbolicLink()) {
+      return {
+        ok: false,
+        error: `hmr's Cursor private folder ${privateHome} is a symlink; a Cursor writer was not launched`,
+      };
+    }
+  } catch {
+    /* absent: created below as a real 0700 dir */
+  }
+  const exposed = cursorWorktreeInsideAllowRoot(privateHome, [tempDir, stateHome, workspace]);
   if (exposed) {
     return {
       ok: false,
       error: `hmr's Cursor private folder ${privateHome} is inside ${exposed}, which a Cursor writer may write; a Cursor writer was not launched`,
+    };
+  }
+  // A tracked sandbox.json would be changed in the repo (git exclude cannot hide it): refuse.
+  if (cursorSandboxTracked(ctx.cwd)) {
+    return {
+      ok: false,
+      error: `${ownSandbox} is tracked by git; hmr will not edit it to add its state folder, so a Cursor writer was not launched`,
     };
   }
   const configDir = writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd, tempDir);
@@ -391,25 +408,48 @@ export function writeCursorStateSandbox(file: string, stateHome: string, cwd: st
   const content = { ...existing, additionalReadwritePaths: [stateHome] };
   mkdirSync(path.dirname(file), { recursive: true });
   atomicWrite(file, `${JSON.stringify(content)}\n`, 0o644);
+  let top: string;
+  let exclude: string;
   try {
-    const tracked = execFileSync("git", ["-C", cwd, "ls-files", "--", ".cursor/sandbox.json"], {
+    top = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
     }).trim();
-    if (tracked) return;
-    const exclude = execFileSync("git", ["-C", cwd, "rev-parse", "--git-path", "info/exclude"], {
+    exclude = execFileSync("git", ["-C", cwd, "rev-parse", "--git-path", "info/exclude"], {
       encoding: "utf8",
     }).trim();
-    const excludeFile = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude);
-    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
-    if (!current.split("\n").includes("/.cursor/sandbox.json")) {
-      mkdirSync(path.dirname(excludeFile), { recursive: true });
-      writeFileSync(
-        excludeFile,
-        `${current}${current && !current.endsWith("\n") ? "\n" : ""}/.cursor/sandbox.json\n`,
-      );
-    }
   } catch {
-    /* not a git checkout: nothing to exclude */
+    return; // not a git checkout: nothing to exclude
+  }
+  // Anchored to the file's own place in the repo, so a subdirectory launch is excluded too.
+  const rel = path
+    .relative(
+      real(top) ?? top,
+      real(path.dirname(path.dirname(file))) ?? path.dirname(path.dirname(file)),
+    )
+    .split(path.sep)
+    .filter(Boolean);
+  const pattern = `/${[...rel, ".cursor", "sandbox.json"].join("/")}`;
+  const excludeFile = path.isAbsolute(exclude) ? exclude : path.join(cwd, exclude);
+  const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
+  if (!current.split("\n").includes(pattern)) {
+    mkdirSync(path.dirname(excludeFile), { recursive: true });
+    writeFileSync(
+      excludeFile,
+      `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`,
+    );
+  }
+}
+
+/** Whether git tracks `.cursor/sandbox.json` in `cwd` (false outside a git checkout). */
+export function cursorSandboxTracked(cwd: string): boolean {
+  try {
+    return (
+      execFileSync("git", ["-C", cwd, "ls-files", "--", ".cursor/sandbox.json"], {
+        encoding: "utf8",
+      }).trim() !== ""
+    );
+  } catch {
+    return false;
   }
 }
 
