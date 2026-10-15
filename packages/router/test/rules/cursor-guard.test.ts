@@ -208,6 +208,31 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(keys.flat().every((k) => k === "esc")).toBe(true);
   });
 
+  it("ends stuck at once when the reason field opens late or esc lands despite ok:false (review round 15)", async () => {
+    const target = path.join(root, "parent", "late.txt");
+    // The field shows up only after the 10 confirmation reads.
+    const late = fakePane([prompt(target), ...Array(10).fill(prompt(target)), REASON]);
+    const r1 = await runCursorGuard(
+      { pane: late.pane, sleep: async () => {}, log: () => {} },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 100 },
+    );
+    expect(r1).toEqual({ declines: 0, outcome: "stuck" });
+    expect(late.keys.flat()).toEqual(["esc"]);
+    expect(late.texts).toEqual([]);
+    // esc reported failed but Cursor took it: the screen changed, so it cannot be retried.
+    const lost = fakePane([prompt(target), "idle"]);
+    lost.pane.sendKeys = async (_: string, k: readonly string[]) => {
+      lost.keys.push([...k]);
+      return { ok: false, stdout: "", stderr: "", code: 1 } as never;
+    };
+    const r2 = await runCursorGuard(
+      { pane: lost.pane, sleep: async () => {}, log: () => {} },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 100 },
+    );
+    expect(r2).toEqual({ declines: 0, outcome: "stuck" });
+    expect(lost.keys.flat()).toEqual(["esc"]);
+  });
+
   it("ends stuck at once when the reason cannot be typed or submitted (review round 14)", async () => {
     const target = path.join(root, "parent", "r.txt");
     for (const fail of ["text", "enter", "still-open"] as const) {

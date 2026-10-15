@@ -213,6 +213,19 @@ export async function runCursorGuard(
         submitted,
       });
       if (opened && !submitted) return { declines, outcome: "stuck" };
+      // The reason field was never confirmed. Only a key that verifiably did not reach Cursor,
+      // with the same prompt still on screen, may be retried; anything else (the field opening
+      // late, esc taking effect despite ok:false, an unreadable screen) cannot be tracked across
+      // polls, so the guard fails closed at once (review round 15).
+      if (!submitted) {
+        const recheck = await screenOf(deps, input.paneId);
+        const unchanged =
+          !sent.ok &&
+          recheck !== undefined &&
+          !detectCursorReasonField(recheck) &&
+          detectCursorOutOfWorkspacePrompt(recheck, input.worktree) !== undefined;
+        if (!unchanged) return { declines, outcome: "stuck" };
+      }
       if (failedDeclines >= maxFailed) return { declines, outcome: "stuck" };
     }
     await deps.sleep(pollMs);
