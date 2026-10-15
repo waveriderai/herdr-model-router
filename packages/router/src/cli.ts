@@ -592,6 +592,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           },
         );
         if (result.outcome === "blind") failClosed("lost sight of the pane");
+        if (result.outcome === "stuck") failClosed("could not deliver the decline key");
         finished = true;
       },
     );

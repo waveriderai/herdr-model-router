@@ -98,6 +98,8 @@ export interface CursorGuardInput {
   onReady?: () => void;
   /** Consecutive polls without sight of the pane before the guard gives up (default 8). */
   maxBlindPolls?: number;
+  /** Consecutive undelivered declines before the guard gives up (default 3). */
+  maxFailedDeclines?: number;
 }
 
 async function screenOf(deps: CursorGuardDeps, paneId: string): Promise<string | undefined> {
@@ -112,7 +114,9 @@ export type CursorGuardOutcome =
   /** The pane closed or stopped running Cursor: the guard's job is over. */
   | "ended"
   /** The guard could not see the pane (agent or screen) for `maxBlindPolls` polls in a row. */
-  | "blind";
+  | "blind"
+  /** Declining failed (key not delivered or not taken) `maxFailedDeclines` times in a row. */
+  | "stuck";
 
 /**
  * Watches one Cursor writer pane until it is gone or no longer runs Cursor, declining every
@@ -129,6 +133,8 @@ export async function runCursorGuard(
   const now = deps.now ?? (() => new Date());
   let declines = 0;
   let blind = 0;
+  let failedDeclines = 0;
+  const maxFailed = input.maxFailedDeclines ?? 3;
   let ready = false;
   const log = (entry: Record<string, unknown>) => {
     try {
@@ -174,7 +180,14 @@ export async function runCursorGuard(
           }
         }
       }
-      declines++;
+      // A decline counts only when Cursor took it: the key went out and the reason field
+      // opened. Anything else is a failed attempt (review round 13).
+      if (sent.ok && reason) {
+        declines++;
+        failedDeclines = 0;
+      } else {
+        failedDeclines++;
+      }
       log({
         at: now().toISOString(),
         event: "cursor-out-of-workspace-declined",
@@ -186,6 +199,7 @@ export async function runCursorGuard(
         keySent: sent.ok,
         reasonSent: reason,
       });
+      if (failedDeclines >= maxFailed) return { declines, outcome: "stuck" };
     }
     await deps.sleep(pollMs);
   }
