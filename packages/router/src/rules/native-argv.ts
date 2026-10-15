@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveHome } from "../config/config-loader.js";
+import { tomlBasicString } from "./launch-script.js";
 import type { ReasoningEffort } from "../domain/model-profile.js";
 import type { Provider } from "./descriptor.js";
 import type { Access } from "./plan.js";
@@ -173,7 +174,18 @@ export function nativeLaunch(
           bypass: { args: ["--dangerously-skip-permissions"] },
         }),
       );
-    case "codex":
+    case "codex": {
+      // Only a writer gets the extra root, so only a writer depends on the router home.
+      let roots = "";
+      if (profile === "writer") {
+        if (!path.isAbsolute(routerHome)) {
+          return {
+            ok: false,
+            error: `router home "${routerHome}" is not an absolute path; a Codex writer cannot be given it as a writable root`,
+          };
+        }
+        roots = codexWritableRoots(routerHome);
+      }
       // `-c` is always required: a launch also sets the pane's Herdr context with it.
       return built(
         "codex",
@@ -183,14 +195,7 @@ export function nativeLaunch(
           writer: {
             // The writer must reach hmr's own state (`hmr task status`, `hmr task complete`).
             // Only that exact directory is added; never a parent such as ~/Library or ~.
-            args: [
-              "--sandbox",
-              "workspace-write",
-              "--ask-for-approval",
-              "on-request",
-              "-c",
-              codexWritableRoots(routerHome),
-            ],
+            args: ["--sandbox", "workspace-write", "--ask-for-approval", "on-request", "-c", roots],
             values: ["workspace-write", "on-request"],
           },
           control: NONE,
@@ -198,6 +203,7 @@ export function nativeLaunch(
         }),
         ["-c"],
       );
+    }
     case "grok":
       return built(
         "grok",
@@ -241,13 +247,13 @@ export function nativeLaunch(
 /**
  * The Codex `-c` override that adds exactly hmr's state directory (resolveHome: MODEL_ROUTER_HOME,
  * else the per-OS default) as the writer's one extra writable root. The value is a TOML array of
- * one basic string; JSON string escaping is valid TOML for it.
+ * one TOML basic string.
  */
 export function codexWritableRoots(routerHome: string): string {
   if (!path.isAbsolute(routerHome)) {
     throw new Error(`router home "${routerHome}" is not an absolute path`);
   }
-  return `sandbox_workspace_write.writable_roots=[${JSON.stringify(path.normalize(routerHome))}]`;
+  return `sandbox_workspace_write.writable_roots=[${tomlBasicString(path.normalize(routerHome))}]`;
 }
 
 /** A profile's argv and the enum values in it that the CLI's --help must also list. */

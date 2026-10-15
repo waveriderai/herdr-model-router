@@ -195,6 +195,24 @@ describe("native argv", () => {
     expect(() => codexWritableRoots("rel/home")).toThrow(/not an absolute path/);
   });
 
+  it("escapes control characters in the root as TOML, not JSON", () => {
+    expect(codexWritableRoots("/a\u007fb")).toBe(
+      'sandbox_workspace_write.writable_roots=["/a\\u007Fb"]',
+    );
+  });
+
+  it("refuses a Codex writer with a relative home but leaves the other Codex profiles alone", () => {
+    const lane = { provider: "codex" as const, model: "m", effort: null };
+    const writer = nativeLaunch(lane, "writer", "../hmr-state");
+    expect(writer.ok).toBe(false);
+    if (!writer.ok) expect(writer.error).toMatch(/not an absolute path/);
+    for (const profile of ["read-only", "control", "bypass"] as const) {
+      const built = nativeLaunch(lane, profile, "../hmr-state");
+      expect(built.ok).toBe(true);
+      if (built.ok) expect(built.launch.argv.join(" ")).not.toContain("writable_roots");
+    }
+  });
+
   it("defaults the Codex writer root to resolveHome()", () => {
     const prev = process.env.MODEL_ROUTER_HOME;
     process.env.MODEL_ROUTER_HOME = "/tmp/hmr-test-home";
