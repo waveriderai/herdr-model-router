@@ -493,6 +493,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .requiredOption("--home <path>", "The router home the launcher resolved")
     .option("--wait-for-agent <ms>", "Wait this long for Cursor to start in the pane (lead panes)")
     .option("--no-close", "Do not close the pane on failure (the lead's launcher stops Cursor)")
+    .option("--config-dir <path>", "The lane's CURSOR_CONFIG_DIR, to stop its processes on failure")
     .action(
       async (flags: {
         pane: string;
@@ -501,8 +502,9 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         home: string;
         waitForAgent?: string;
         close?: boolean;
+        configDir?: string;
       }) => {
-        const { runCursorGuard, cursorGuardLogger, markCursorGuardReady } =
+        const { runCursorGuard, cursorGuardLogger, markCursorGuardReady, pidsWithCursorConfig } =
           await import("./rules/cursor-guard.js");
         const { createHerdrPaneClient, createProcessCommandAdapter } =
           await import("./launch/herdr-client.js");
@@ -534,7 +536,40 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
             /* best effort */
           }
           if (flags.close !== false) {
-            spawnSync("herdr", ["pane", "close", flags.pane], { stdio: "ignore", timeout: 10_000 });
+            // Keep supervising until the writer is verifiably gone: close its pane, and kill
+            // its cursor-agent processes by their own CURSOR_CONFIG_DIR (independent of
+            // Herdr), retrying until neither the pane nor a process remains (review round 12).
+            for (let attempt = 0; ; attempt++) {
+              const closed = spawnSync("herdr", ["pane", "close", flags.pane], {
+                stdio: "ignore",
+                timeout: 10_000,
+              });
+              let pids: number[] = [];
+              if (flags.configDir) {
+                const ps = spawnSync("ps", ["-E", "-ww", "-A", "-o", "pid=,command="], {
+                  encoding: "utf8",
+                  timeout: 10_000,
+                  maxBuffer: 64 * 1024 * 1024,
+                });
+                pids = ps.status === 0 ? pidsWithCursorConfig(ps.stdout, flags.configDir) : [-1];
+                for (const pid of pids) {
+                  if (pid > 0) {
+                    try {
+                      process.kill(pid, attempt > 2 ? "SIGKILL" : "SIGTERM");
+                    } catch {
+                      /* already gone */
+                    }
+                  }
+                }
+              }
+              const gone = spawnSync("herdr", ["pane", "get", flags.pane], {
+                encoding: "utf8",
+                timeout: 10_000,
+              });
+              const paneGone = closed.status === 0 || /pane_not_found/.test(gone.stdout ?? "");
+              if ((paneGone || flags.configDir) && pids.length === 0) break;
+              spawnSync("sleep", ["2"]);
+            }
           }
           process.exit(3);
         };

@@ -322,7 +322,12 @@ export function deps(
     launchFiles: launchFilesIn(home),
     launchEnvNames: ["HERDR_PANE_ID", "HOME", "PATH"],
     // Records each preparation and passes the argv through (the real one is in launch-prep.test).
-    prepareLaunch: (launch) => ({ ok: true, argv: launch.argv, env: {} }),
+    prepareLaunch: (launch) => ({
+      ok: true,
+      argv: launch.argv,
+      env:
+        launch.prepare === "cursor-config" ? { CURSOR_CONFIG_DIR: "/fake/cursor-config/lane" } : {},
+    }),
     // The real guard is a detached `hmr guard cursor` process (cursor-guard.test covers it).
     startCursorGuard: () => ({ ok: true }),
     sleep: async () => {},

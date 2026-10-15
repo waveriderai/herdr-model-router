@@ -211,3 +211,17 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 });
+
+describe("finding a lane's cursor-agent processes by CURSOR_CONFIG_DIR (review round 12)", () => {
+  it("matches only the exact lane directory, spaces in the path included", async () => {
+    const { pidsWithCursorConfig } = await import("../../src/rules/cursor-guard.js");
+    const dir = "/Users/u/Library/Application Support/model-router/cursor-config/lane_1";
+    const ps = [
+      ` 101 /bin/cursor-agent --sandbox enabled CURSOR_CONFIG_DIR=${dir} HOME=/Users/u`,
+      ` 102 /bin/cursor-agent CURSOR_CONFIG_DIR=${dir}0 HOME=/Users/u`,
+      ` 103 /bin/node worker CURSOR_CONFIG_DIR=${dir}`,
+      " 104 /bin/zsh",
+    ].join("\n");
+    expect(pidsWithCursorConfig(ps, dir)).toEqual([101, 103]);
+  });
+});

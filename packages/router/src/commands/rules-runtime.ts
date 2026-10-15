@@ -212,7 +212,7 @@ export function homeRefusal(env: NodeJS.Dict<string>, cwd: string): string | und
  * an early exit or no ready file in time is a failure, and the caller closes the writer.
  */
 export async function startCursorGuardProcess(
-  input: { paneId: string; worktree: string; laneId: string },
+  input: { paneId: string; worktree: string; laneId: string; configDir?: string },
   home: string,
   env: NodeJS.ProcessEnv,
   options: { cli?: string; timeoutMs?: number } = {},
@@ -236,6 +236,7 @@ export async function startCursorGuardProcess(
         input.laneId,
         "--home",
         home,
+        ...(input.configDir ? ["--config-dir", input.configDir] : []),
       ],
       { detached: true, stdio: "ignore", env },
     );

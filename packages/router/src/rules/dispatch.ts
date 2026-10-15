@@ -90,6 +90,8 @@ export interface DispatchDeps {
     paneId: string;
     worktree: string;
     laneId: string;
+    /** The lane's own CURSOR_CONFIG_DIR, which identifies its cursor-agent processes. */
+    configDir: string;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
@@ -592,7 +594,7 @@ export async function startNativeAgent(input: {
   }
   if (launch.kind === "cursor" && launch.prepare === "cursor-config") {
     // Kai 2026-10-14 10:39 PM PT: Cursor's out-of-workspace Write prompt is declined, never shown.
-    if (!deps.startCursorGuard) {
+    if (!deps.startCursorGuard || !prepEnv.CURSOR_CONFIG_DIR) {
       return closeWith(
         "a Cursor writer needs hmr's pane guard, which this caller does not provide; no prompt was sent",
       );
@@ -601,6 +603,7 @@ export async function startNativeAgent(input: {
       paneId,
       worktree: input.cwd,
       laneId: input.laneId,
+      configDir: prepEnv.CURSOR_CONFIG_DIR ?? "",
     });
     if (!guard.ok) return closeWith(`${guard.error}; no prompt was sent`);
   }

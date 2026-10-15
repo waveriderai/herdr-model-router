@@ -212,3 +212,28 @@ export function markCursorGuardReady(routerHome: string, laneId: string): void {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   writeFileSync(file, `${process.pid}\n`, { mode: 0o600 });
 }
+
+/**
+ * PIDs of processes whose environment sets exactly this CURSOR_CONFIG_DIR (one lane's own
+ * directory), from `ps -E` output lines of the form "<pid> <command and environment>".
+ */
+export function pidsWithCursorConfig(psOutput: string, configDir: string): number[] {
+  const needle = `CURSOR_CONFIG_DIR=${configDir}`;
+  const pids: number[] = [];
+  for (const line of psOutput.split("\n")) {
+    const match = /^\s*(\d+)\s(.*)$/.exec(line);
+    if (!match) continue;
+    let from = 0;
+    for (;;) {
+      const at = match[2]!.indexOf(needle, from);
+      if (at < 0) break;
+      const next = match[2]![at + needle.length];
+      if (next === undefined || next === " ") {
+        pids.push(Number(match[1]));
+        break;
+      }
+      from = at + 1;
+    }
+  }
+  return pids.filter((pid) => pid !== process.pid);
+}

@@ -751,7 +751,12 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
     });
     if (!ok.ok) throw new Error(ok.error);
     expect(started).toEqual([
-      { paneId: "w1:p1", worktree: "/work/project", laneId: expect.any(String) },
+      {
+        paneId: "w1:p1",
+        worktree: "/work/project",
+        laneId: expect.any(String),
+        configDir: "/fake/cursor-config/lane",
+      },
     ]);
 
     const failing: FakeHerdr = fakeHerdr();
