@@ -118,6 +118,23 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(texts).toEqual([]);
   });
 
+  it("reports ready once, only after it has seen the pane running Cursor", async () => {
+    const { pane } = fakePane(["idle"]);
+    let ready = 0;
+    await runCursorGuard(
+      { pane, sleep: async () => {}, log: () => {} },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 3, onReady: () => ready++ },
+    );
+    expect(ready).toBe(1);
+    pane.getAgent = async () => undefined as never;
+    let notReady = 0;
+    await runCursorGuard(
+      { pane, sleep: async () => {}, log: () => {} },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 3, onReady: () => notReady++ },
+    );
+    expect(notReady).toBe(0);
+  });
+
   it("stops when the pane no longer runs Cursor", async () => {
     const { pane, keys } = fakePane([prompt("/etc/x")]);
     pane.getAgent = async () => ({ paneId: "w1:p1", agent: "claude", status: "idle" }) as never;

@@ -490,12 +490,13 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .requiredOption("--pane <id>", "Herdr pane id")
     .requiredOption("--worktree <path>", "The writer's worktree")
     .requiredOption("--lane <id>", "Lane id, for the log")
-    .action(async (flags: { pane: string; worktree: string; lane: string }) => {
-      const { runCursorGuard, cursorGuardLogger } = await import("./rules/cursor-guard.js");
+    .requiredOption("--home <path>", "The router home the launcher resolved")
+    .action(async (flags: { pane: string; worktree: string; lane: string; home: string }) => {
+      const { runCursorGuard, cursorGuardLogger, markCursorGuardReady } =
+        await import("./rules/cursor-guard.js");
       const { createHerdrPaneClient, createProcessCommandAdapter } =
         await import("./launch/herdr-client.js");
-      const { loadConfig } = await import("./config/config-loader.js");
-      const home = loadConfig({ env }).home;
+      const home = flags.home;
       const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
       await runCursorGuard(
         {
@@ -503,7 +504,12 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           log: cursorGuardLogger(home),
         },
-        { paneId: flags.pane, worktree: flags.worktree, laneId: flags.lane },
+        {
+          paneId: flags.pane,
+          worktree: flags.worktree,
+          laneId: flags.lane,
+          onReady: () => markCursorGuardReady(home, flags.lane),
+        },
       );
     });
   const task = program

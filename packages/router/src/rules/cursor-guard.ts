@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
+import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { HerdrPaneClient } from "../launch/herdr-client.js";
 
@@ -89,6 +89,8 @@ export interface CursorGuardInput {
   pollMs?: number;
   /** Stop after this many polls (tests); unlimited by default. */
   maxPolls?: number;
+  /** Called once, after the first poll that found the pane running Cursor. */
+  onReady?: () => void;
 }
 
 async function screenOf(deps: CursorGuardDeps, paneId: string): Promise<string | undefined> {
@@ -113,7 +115,11 @@ export async function runCursorGuard(
   for (let polls = 0; input.maxPolls === undefined || polls < input.maxPolls; polls++) {
     if (deps.pane.paneState && (await deps.pane.paneState(input.paneId)) === "absent") break;
     const info = await deps.pane.getAgent(input.paneId).catch(() => undefined);
-    if (info && info.agent !== "cursor") break;
+    if (!info || info.agent !== "cursor") {
+      if (polls === 0 || info) break;
+    } else if (polls === 0) {
+      input.onReady?.();
+    }
     const screen = await screenOf(deps, input.paneId);
     const target = detectCursorOutOfWorkspacePrompt(screen, input.worktree);
     if (target) {
@@ -156,4 +162,15 @@ export function cursorGuardLogger(routerHome: string): (entry: Record<string, un
       mode: 0o600,
     });
   };
+}
+
+/** The file a guard writes once it watches its pane; the launcher waits for it. */
+export function cursorGuardReadyFile(routerHome: string, laneId: string): string {
+  return path.join(routerHome, "cursor-guard", `${laneId.replace(/[^A-Za-z0-9_-]/g, "_")}.ready`);
+}
+
+export function markCursorGuardReady(routerHome: string, laneId: string): void {
+  const file = cursorGuardReadyFile(routerHome, laneId);
+  mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, `${process.pid}\n`, { mode: 0o600 });
 }

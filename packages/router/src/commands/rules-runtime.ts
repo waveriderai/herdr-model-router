@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -16,6 +16,7 @@ import type { Provider } from "../rules/descriptor.js";
 import type { DispatchDeps, LaunchFiles } from "../rules/dispatch.js";
 import { launchEnvNames, resolveExecutable } from "../rules/launch-script.js";
 import { prepareNativeLaunch } from "../rules/launch-prep.js";
+import { cursorGuardReadyFile } from "../rules/cursor-guard.js";
 import { createLiveTypeSafeClient, type TypeSafePort } from "../semantic/typesafe-client.js";
 import { openDatabase } from "../store/database.js";
 import { DispatchRepository } from "../store/dispatch-repository.js";
@@ -111,7 +112,7 @@ export function openDispatchDeps(
         home: userHome(env),
         ...(env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
       }),
-    startCursorGuard: (input) => startCursorGuardProcess(input, childEnv),
+    startCursorGuard: (input) => startCursorGuardProcess(input, home, childEnv),
     ...(env.MODEL_ROUTER_HOME
       ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
       : {}),
@@ -203,13 +204,22 @@ export function homeRefusal(env: NodeJS.Dict<string>, cwd: string): string | und
   return privateHomeRefusal(loadConfig({ env }).home, cwd);
 }
 
-/** Runs `hmr guard cursor` detached for one pane; it exits when the pane closes. */
-export function startCursorGuardProcess(
+/**
+ * Runs `hmr guard cursor` detached for one pane, with the resolved router home passed
+ * explicitly. Succeeds only once the guard writes its ready file (it has seen the Cursor pane);
+ * an early exit or no ready file in time is a failure, and the caller closes the writer.
+ */
+export async function startCursorGuardProcess(
   input: { paneId: string; worktree: string; laneId: string },
+  home: string,
   env: NodeJS.ProcessEnv,
-): { ok: true } | { ok: false; error: string } {
+  options: { cli?: string; timeoutMs?: number } = {},
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ready = cursorGuardReadyFile(home, input.laneId);
+  rmSync(ready, { force: true });
+  let exited: number | null | undefined;
   try {
-    const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
+    const cli = options.cli ?? fileURLToPath(new URL("../cli.js", import.meta.url));
     const child = spawn(
       process.execPath,
       [
@@ -222,11 +232,34 @@ export function startCursorGuardProcess(
         input.worktree,
         "--lane",
         input.laneId,
+        "--home",
+        home,
       ],
       { detached: true, stdio: "ignore", env },
     );
-    child.unref();
-    return child.pid ? { ok: true } : { ok: false, error: "hmr's Cursor pane guard did not start" };
+    child.on("exit", (code) => {
+      exited = code;
+    });
+    child.on("error", () => {
+      exited = -1;
+    });
+    const deadline = Date.now() + (options.timeoutMs ?? 10_000);
+    while (Date.now() < deadline) {
+      if (existsSync(ready)) {
+        child.unref();
+        return { ok: true };
+      }
+      if (exited !== undefined) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (exited === undefined) child.kill();
+    return {
+      ok: false,
+      error:
+        exited !== undefined
+          ? `hmr's Cursor pane guard exited (${String(exited)}) before it was ready`
+          : "hmr's Cursor pane guard was not ready in time",
+    };
   } catch (error) {
     return { ok: false, error: `hmr's Cursor pane guard did not start: ${String(error)}` };
   }

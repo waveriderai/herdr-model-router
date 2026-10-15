@@ -90,7 +90,7 @@ export interface DispatchDeps {
     paneId: string;
     worktree: string;
     laneId: string;
-  }) => { ok: true } | { ok: false; error: string };
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -597,7 +597,11 @@ export async function startNativeAgent(input: {
         "a Cursor writer needs hmr's pane guard, which this caller does not provide; no prompt was sent",
       );
     }
-    const guard = deps.startCursorGuard({ paneId, worktree: input.cwd, laneId: input.laneId });
+    const guard = await deps.startCursorGuard({
+      paneId,
+      worktree: input.cwd,
+      laneId: input.laneId,
+    });
     if (!guard.ok) return closeWith(`${guard.error}; no prompt was sent`);
   }
   if (launch.kind === "codex") {
