@@ -171,7 +171,7 @@ export function cursorDenyRules(worktree: string, keep: readonly string[] = []):
   const deny: string[] = [];
   let ancestor = path.parse(target).root;
   for (const part of target.split(path.sep).filter(Boolean)) {
-    let children: string[] = [];
+    let children: string[];
     try {
       children = readdirSync(ancestor);
     } catch {
