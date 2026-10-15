@@ -398,7 +398,10 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
   {
     // `❯` input line between two horizontal rules, plus the mode or shortcuts footer.
     claude: (lines, compact) =>
-      (compact.includes("shift+tabtocycle") || compact.includes("?forshortcuts")) &&
+      // A narrow pane cuts the writer's footer to "⏵⏵ don't ask on · ←…" (AGENT-285).
+      (compact.includes("shift+tabtocycle") ||
+        compact.includes("?forshortcuts") ||
+        compact.includes("⏵⏵don'taskon")) &&
       (lines.some(
         (line, index) =>
           /^\s*[❯>](\s|$)/.test(line) &&
@@ -417,7 +420,10 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
       lines.some((line) => /^\s*→(\s|$)/.test(line)) &&
       (compact.includes("shift+tabtocycle") ||
         compact.includes("runeverything") ||
-        compact.includes("auto-run")),
+        compact.includes("auto-run") ||
+        // Allowlist mode (hmr's per-launch writer config, AGENT-285) shows no run-mode footer;
+        // the fresh composer's own placeholder is the evidence there.
+        /^\s*→\s+plan, search, build anything\s*$/im.test(lines.join("\n"))),
     // `›` input line (not a numbered menu), plus the composer footer.
     codex: (lines, compact) =>
       lines.some((line) => /^\s*›(\s|$)/.test(line) && !NUMBERED_MENU.test(line)) &&
@@ -428,6 +434,19 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
 
 export function hasReadinessEvidence(kind: string): kind is ReadinessKind {
   return kind in COMPOSER && COMPOSER[kind as ReadinessKind] !== undefined;
+}
+
+/**
+ * A CLI warning that its OS sandbox did not apply. Grok logs such a warning and keeps running
+ * without enforcement, so a lane that shows one must never be prompted (fail closed).
+ */
+export function detectSandboxFailure(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  const match =
+    /sandbox (?:is )?(?:not supported|could not be applied|unavailable|failed to apply)[^\n]*/i.exec(
+      sanitizeScreen(text),
+    );
+  return match?.[0].trim();
 }
 
 /** The verdict for one screen of the lane's pane. */

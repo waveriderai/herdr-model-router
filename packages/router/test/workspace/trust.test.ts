@@ -39,6 +39,20 @@ describe("workspace pre-trust", () => {
     expect(isHmrTrusted(other, env)).toBe(true);
   });
 
+  it("pre-trusts worktrees under the root Herdr's own config names (Kai 11:18 PM PT)", () => {
+    const { home, env } = sandbox();
+    mkdirSync(path.join(home, ".config", "herdr"), { recursive: true });
+    writeFileSync(
+      path.join(home, ".config", "herdr", "config.toml"),
+      '[worktrees]\ndirectory = "~/elsewhere-trees"\n',
+    );
+    const wt = path.join(home, "elsewhere-trees", "repo-agent-2");
+    mkdirSync(wt, { recursive: true });
+    expect(isHmrTrusted(wt, env)).toBe(true);
+    expect(isHmrTrusted(path.join(home, "elsewhere-trees"), env)).toBe(false);
+    expect(pretrust("cursor", wt, env).argv).toEqual(["--trust"]);
+  });
+
   it("uses each CLI's own trust record", () => {
     const { home, wt, env } = sandbox();
     expect(pretrust("cursor", wt, env).argv).toEqual(["--trust"]);

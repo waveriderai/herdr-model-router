@@ -166,7 +166,7 @@ describe("offline rules preview (AE1, AE2)", () => {
           "-c",
           'model_reasoning_effort="high"',
           "--ask-for-approval",
-          "on-request",
+          "never",
           "-c",
           'default_permissions="hmr-writer"',
           "-c",
@@ -209,7 +209,7 @@ describe("offline rules preview (AE1, AE2)", () => {
     ]);
     expect(result.out.match(/^ {2}argv: .*$/gm)).toEqual([
       "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
-      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --search',
+      '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --ask-for-approval never --search',
       "  argv: claude --model claude-opus-5-5 --effort high --permission-mode plan --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
     ]);
     expect(result.out).toContain(
@@ -270,8 +270,8 @@ describe("offline rules preview (AE1, AE2)", () => {
     expect(result.out).toContain(
       "note: skipped inherit-parent (claude:claude-opus-5-5@max): that model is already in this panel",
     );
-    expect(result.out).toContain(
-      "  argv: grok --model grok-4.7 --reasoning-effort xhigh --sandbox read-only --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write",
+    expect(result.out).toMatch(
+      / {2}argv: grok --model grok-4\.7 --reasoning-effort xhigh --sandbox hmr-read-only-[0-9a-f]{8} --allow Read --allow Grep --allow WebFetch --allow WebSearch --deny Edit --deny Write/,
     );
     expect(result.out).toContain(
       "  note: legacy Cursor selector grok-4.7-xhigh-fast mapped to native grok:grok-4.7@xhigh; Cursor's fast variant has no native grok equivalent",
@@ -360,10 +360,10 @@ describe("per-role permission defaults (AGENT-198)", () => {
     const result = await cli(box, ["run", "Fix it", "--role", "explorer", "--dry-run"]);
     expect(result.code).toBe(0);
     expect(result.out).toContain("access: writer; permissions: writer");
-    expect(result.out).toContain(
-      "  argv: grok --model grok-4.7 --reasoning-effort medium --sandbox workspace --allow Edit(./**)",
+    // --always-approve only ever appears together with hmr's OS sandbox profile.
+    expect(result.out).toMatch(
+      / {2}argv: grok --model grok-4\.7 --reasoning-effort medium --sandbox hmr-writer-[0-9a-f]{8} --allow Edit\(\.\/\*\*\) --always-approve/,
     );
-    expect(result.out).not.toContain("--always-approve");
     expectNoEffects(box, result);
   });
 

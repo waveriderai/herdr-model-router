@@ -44,13 +44,35 @@ export function trustListPath(env: Env = process.env): string {
   return env.HMR_TRUST_LIST ?? path.join(home(env), ".config", "hmr", "trusted-dirs");
 }
 
+/** Herdr's configured worktree root (`[worktrees] directory`), if its config sets one. */
+export function herdrWorktreeRoot(env: Env = process.env): string | undefined {
+  const configHome = env.XDG_CONFIG_HOME ?? path.join(home(env), ".config");
+  const file = env.HERDR_CONFIG ?? path.join(configHome, "herdr", "config.toml");
+  try {
+    const data = parseToml(readFileSync(file, "utf8")) as { worktrees?: { directory?: unknown } };
+    const dir = data.worktrees?.directory;
+    if (typeof dir !== "string" || dir.trim() === "") return undefined;
+    const expanded = dir.startsWith("~/") ? path.join(home(env), dir.slice(2)) : dir;
+    return path.isAbsolute(expanded) ? expanded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Roots whose worktrees HMR pre-trusts (Kai 2026-10-14 11:18 PM PT: every worktree hmr or
+ * Herdr creates is pre-trusted): HMR_TRUSTED_WORKTREE_ROOTS (default ~/herdr-worktrees) plus
+ * the worktree root Herdr's own config names.
+ */
 export function trustedRoots(env: Env = process.env): string[] {
   const raw = env.HMR_TRUSTED_WORKTREE_ROOTS ?? path.join(home(env), "herdr-worktrees");
-  return raw
+  const roots = raw
     .split(":")
     .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map(canonical);
+    .filter(Boolean);
+  const herdr = herdrWorktreeRoot(env);
+  if (herdr) roots.push(herdr);
+  return [...new Set(roots.map(canonical))];
 }
 
 function listed(env: Env): string[] {

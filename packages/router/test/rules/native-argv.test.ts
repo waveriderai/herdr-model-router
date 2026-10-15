@@ -39,11 +39,12 @@ const CLAUDE_READ = [
   "Read,Grep,Glob,WebFetch,WebSearch",
 ];
 /** Written out, not imported: a missing key in the source must fail this test. */
-const CLAUDE_WRITER_SETTINGS_JSON =
-  '{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}';
+const CLAUDE_WRITER_SETTINGS_JSON = expect.stringContaining(
+  '"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,',
+);
 const GROK_READ = [
   "--sandbox",
-  "read-only",
+  expect.stringMatching(/^hmr-read-only-[0-9a-f]{8}$/),
   "--allow",
   "Read",
   "--allow",
@@ -56,6 +57,7 @@ const GROK_READ = [
   "Edit",
   "--deny",
   "Write",
+  "--always-approve",
 ];
 
 describe("native argv", () => {
@@ -73,7 +75,9 @@ describe("native argv", () => {
         "--effort",
         "xhigh",
         "--permission-mode",
-        "acceptEdits",
+        "dontAsk",
+        "--setting-sources",
+        "",
         "--settings",
         CLAUDE_WRITER_SETTINGS_JSON,
       ],
@@ -99,7 +103,7 @@ describe("native argv", () => {
         "-c",
         'model_reasoning_effort="high"',
         "--ask-for-approval",
-        "on-request",
+        "never",
         ...WRITER_PROFILE_ARGS,
       ],
     ],
@@ -117,6 +121,8 @@ describe("native argv", () => {
         'model_reasoning_effort="xhigh"',
         "--sandbox",
         "read-only",
+        "--ask-for-approval",
+        "never",
         "--search",
       ],
     ],
@@ -133,9 +139,10 @@ describe("native argv", () => {
         "--reasoning-effort",
         "xhigh",
         "--sandbox",
-        "workspace",
+        expect.stringMatching(/^hmr-writer-[0-9a-f]{8}$/),
         "--allow",
         "Edit(./**)",
+        "--always-approve",
       ],
     ],
     [
@@ -174,7 +181,12 @@ describe("native argv", () => {
     const launch = argv(provider, model, effort, profile);
     expect(launch.kind).toBe(kind);
     expect(launch.argv).toEqual(expected);
-    expect(launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
+    // Grok's --always-approve is allowed only together with an OS sandbox profile.
+    const bypass = launch.argv.filter((arg) => BYPASS_FLAGS.includes(arg));
+    expect(
+      bypass.length === 0 ||
+        (bypass[0] === "--always-approve" && launch.argv.includes("--sandbox")),
+    ).toBe(true);
   });
 
   it("gives a writer Codex the hmr-writer profile: :workspace + hmr home + fonts + local binding", () => {
@@ -246,12 +258,18 @@ describe("native argv", () => {
   it("makes a writer Claude exit, not run unsandboxed, when its sandbox cannot start", () => {
     const launch = argv("claude", "m", "high", "writer");
     const settings = launch.argv[launch.argv.indexOf("--settings") + 1];
-    expect(JSON.parse(settings ?? "")).toEqual({
+    const parsed = JSON.parse(settings ?? "") as { permissions: { allow: string[] } };
+    // dontAsk: nothing prompts; only these tools run, Edit/Write only in the worktree and hmr home.
+    expect(parsed.permissions.allow).not.toContain("Bash");
+    expect(parsed.permissions.allow.slice(0, 4)).toEqual(["Read", "Glob", "Grep", "Edit(./**)"]);
+    expect(parsed.permissions.allow.some((rule) => rule.startsWith("Write("))).toBe(false);
+    expect(parsed.permissions.allow.some((rule) => rule === "Edit(//**)")).toBe(false);
+    expect({ sandbox: (parsed as unknown as { sandbox: unknown }).sandbox }).toEqual({
       sandbox: {
         enabled: true,
         failIfUnavailable: true,
         autoAllowBashIfSandboxed: true,
-        allowUnsandboxedCommands: true,
+        allowUnsandboxedCommands: false,
         network: {
           allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"],
           allowLocalBinding: true,
@@ -293,6 +311,7 @@ describe("native argv", () => {
       "--sandbox",
       "--allow",
       "--deny",
+      "--always-approve",
     ]);
   });
 
@@ -323,8 +342,15 @@ describe("native argv", () => {
     expect(bypass.argv).not.toContain("--permission-mode");
     for (const profile of ["read-only", "writer", "control"] as const) {
       const launch = nativeLaunch({ provider, model: "m", effort: null }, profile);
-      if (launch.ok)
-        expect(launch.launch.argv.some((arg) => BYPASS_FLAGS.includes(arg))).toBe(false);
+      if (!launch.ok) continue;
+      const flags = launch.launch.argv.filter((arg) => BYPASS_FLAGS.includes(arg));
+      if (provider === "grok" && profile !== "control") {
+        // Kai 2026-10-14 7:37 PM PT: Grok auto-approves only inside an OS sandbox profile.
+        expect(flags).toEqual(["--always-approve"]);
+        expect(launch.launch.argv).toContain("--sandbox");
+      } else {
+        expect(flags).toEqual([]);
+      }
     }
   });
 
@@ -365,21 +391,24 @@ describe("native argv", () => {
       "--model",
       "--effort",
       "--permission-mode",
+      "--setting-sources",
       "--settings",
-      "acceptEdits",
+      "dontAsk",
     ]);
     expect(argv("codex", "m", "high", "read-only").requiredHelp).toEqual([
       "--model",
       "-c",
       "--sandbox",
+      "--ask-for-approval",
       "--search",
       "read-only",
+      "never",
     ]);
     expect(argv("codex", "m", "high", "writer").requiredHelp).toEqual([
       "--model",
       "-c",
       "--ask-for-approval",
-      "on-request",
+      "never",
     ]);
   });
 

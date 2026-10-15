@@ -737,6 +737,46 @@ describe("dispatch follows the fallback order on a quota or usage limit", () => 
     expect(gate.calls.filter((call) => call[1] === "close")).toEqual([]);
   });
 
+  it("starts hmr's pane guard for a Cursor writer, and closes the pane unprompted if it cannot", async () => {
+    const started: unknown[] = [];
+    const herdr: FakeHerdr = fakeHerdr();
+    const { deps: d } = deps(herdr, {
+      startCursorGuard: (input: unknown) => (started.push(input), { ok: true }),
+    } as never);
+    const ok = await dispatchPlan({
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      prompt: "Fix the crash",
+      worktreeId: "/work/project",
+      deps: d,
+    });
+    if (!ok.ok) throw new Error(ok.error);
+    expect(started).toEqual([
+      {
+        paneId: "w1:p1",
+        worktree: "/work/project",
+        laneId: expect.any(String),
+        configDir: "/fake/cursor-config/lane",
+      },
+    ]);
+
+    const failing: FakeHerdr = fakeHerdr();
+    const { deps: f } = deps(failing, {
+      startCursorGuard: () => ({ ok: false, error: "guard did not start" }),
+    } as never);
+    const result = await dispatchPlan({
+      plan: plan("first version", { rules: rules(CURSOR_RULES) }),
+      prompt: "Fix the crash",
+      worktreeId: "/work/project",
+      deps: f,
+    });
+    expect(failing.calls.some((call) => call[1] === "close" && call[2] === "w1:p1")).toBe(true);
+    expect(JSON.stringify(result)).toMatch(/guard did not start; no prompt was sent/);
+    // The Cursor pane was never prompted; the target is a pane id or that lane's agent name.
+    expect(failing.prompts.some((p) => p.target === "w1:p1" || p.target.includes("cursor"))).toBe(
+      false,
+    );
+  });
+
   it("hands a Cursor first version that hit its limit after the prompt to the next model", async () => {
     const herdr: FakeHerdr = fakeHerdr({ prompt: quotaAfterPrompt(() => herdr, ["cursor"]) });
     const { deps: d } = deps(herdr);

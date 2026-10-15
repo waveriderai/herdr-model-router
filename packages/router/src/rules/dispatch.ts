@@ -26,6 +26,7 @@ import {
   screenVerdict,
   type ReadinessKind,
   type ScreenVerdict,
+  detectSandboxFailure,
 } from "./readiness.js";
 import {
   executableOf,
@@ -73,6 +74,25 @@ export interface DispatchDeps {
    * so a launched CLI's own `hmr` calls open the same router home.
    */
   launchFixedEnv?: Readonly<Record<string, string>>;
+  /**
+   * Per-launch preparation (launch-prep.ts): Claude writer hooks/settings, Grok sandbox
+   * profiles, a Cursor writer's own config dir. A launch that needs it fails closed without it.
+   */
+  prepareLaunch?: (
+    launch: ResolvedLaunch,
+    ctx: { cwd: string; laneId: string },
+  ) => { ok: true; argv: string[]; env: Record<string, string> } | { ok: false; error: string };
+  /**
+   * Starts the background pane guard for a Cursor writer (cursor-guard.ts), which declines
+   * Cursor's out-of-worktree Write prompt. A Cursor writer without it fails closed.
+   */
+  startCursorGuard?: (input: {
+    paneId: string;
+    worktree: string;
+    laneId: string;
+    /** The lane's own CURSOR_CONFIG_DIR, which identifies its cursor-agent processes. */
+    configDir: string;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
   pollMs?: number;
@@ -353,6 +373,14 @@ async function observeAgent(
         const reason = quotaReason(expected, quota);
         return { ok: false, error: `${reason}; no prompt was sent`, quota: reason };
       }
+      // Fail closed, with no fallback: a lane whose sandbox did not apply must never be prompted.
+      const sandboxFailure = detectSandboxFailure(text);
+      if (sandboxFailure) {
+        return {
+          ok: false,
+          error: `${expected} started without its sandbox (${sandboxFailure}); no prompt was sent and the pane was closed`,
+        };
+      }
       const verdict = screenVerdict(expected, text);
       if (verdict.state === "dialog") {
         return {
@@ -468,6 +496,8 @@ export async function startNativeAgent(input: {
     | "launchFiles"
     | "launchEnvNames"
     | "launchFixedEnv"
+    | "prepareLaunch"
+    | "startCursorGuard"
     | "sleep"
     | "timeoutMs"
     | "pollMs"
@@ -478,12 +508,28 @@ export async function startNativeAgent(input: {
   onPaneCreated?: (paneId: string) => void;
 }): Promise<NativeStart> {
   const { deps } = input;
+  // Per-launch preparation runs before any pane exists; it fails closed.
+  let prepared: ResolvedLaunch = input.launch;
+  let prepEnv: Record<string, string> = {};
+  if (input.launch.prepare) {
+    if (!deps.prepareLaunch) {
+      return {
+        ok: false,
+        error: `${input.launch.kind} needs launch preparation (${input.launch.prepare}) that this caller does not provide; it was not launched`,
+      };
+    }
+    const prep = deps.prepareLaunch(input.launch, { cwd: input.cwd, laneId: input.laneId });
+    if (!prep.ok) return { ok: false, error: `${prep.error}; no pane was created` };
+    prepared = { ...input.launch, argv: [input.launch.argv[0]!, ...prep.argv.slice(1)] };
+    prepEnv = prep.env;
+  }
   // A worktree HMR or Herdr created is pre-trusted through the CLI's own trust record.
-  const trust = pretrust(input.launch.kind, input.cwd);
+  const trust = pretrust(prepared.kind, input.cwd);
   const launch: ResolvedLaunch =
-    trust.argv.length > 0 && !input.launch.argv.includes("--trust")
-      ? { ...input.launch, argv: [...input.launch.argv, ...trust.argv] }
-      : input.launch;
+    trust.argv.length > 0 && !prepared.argv.includes("--trust")
+      ? { ...prepared, argv: [...prepared.argv, ...trust.argv] }
+      : prepared;
+  const fixedEnv = { ...(deps.launchFixedEnv ?? {}), ...prepEnv };
   const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
   const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
   if (!split.ok || !paneId) {
@@ -516,7 +562,7 @@ export async function startNativeAgent(input: {
         args: launch.argv.slice(1),
         cwd: input.cwd,
         envNames: deps.launchEnvNames,
-        ...(deps.launchFixedEnv ? { fixedEnv: deps.launchFixedEnv } : {}),
+        ...(Object.keys(fixedEnv).length > 0 ? { fixedEnv } : {}),
         // Codex gives its tool commands only what its shell environment policy sets, so the
         // new pane's Herdr context (and the router home) is set there for this launch alone.
         ...(launch.kind === "codex"
@@ -545,6 +591,21 @@ export async function startNativeAgent(input: {
   const renamed = await deps.herdr.renameAgent(paneId, agentName);
   if (!renamed.ok) {
     return closeWith(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
+  }
+  if (launch.kind === "cursor" && launch.prepare === "cursor-config") {
+    // Kai 2026-10-14 10:39 PM PT: Cursor's out-of-workspace Write prompt is declined, never shown.
+    if (!deps.startCursorGuard || !prepEnv.CURSOR_CONFIG_DIR) {
+      return closeWith(
+        "a Cursor writer needs hmr's pane guard, which this caller does not provide; no prompt was sent",
+      );
+    }
+    const guard = await deps.startCursorGuard({
+      paneId,
+      worktree: input.cwd,
+      laneId: input.laneId,
+      configDir: prepEnv.CURSOR_CONFIG_DIR ?? "",
+    });
+    if (!guard.ok) return closeWith(`${guard.error}; no prompt was sent`);
   }
   if (launch.kind === "codex") {
     // Codex's hook reports its session only with the first model turn; see codex-identity.

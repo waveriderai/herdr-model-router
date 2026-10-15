@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { extractPaneText, screenVerdict, type ReadinessKind } from "../../src/rules/readiness.js";
+import {
+  extractPaneText,
+  screenVerdict,
+  type ReadinessKind,
+  detectSandboxFailure,
+} from "../../src/rules/readiness.js";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/screens");
 const screen = (name: string) => readFileSync(path.join(dir, `${name}.txt`), "utf8");
@@ -97,5 +102,41 @@ describe("screen readiness", () => {
       state: "dialog",
       dialog: "permission or confirmation",
     });
+  });
+});
+
+describe("detectSandboxFailure (fail closed)", () => {
+  it("flags a CLI that started without its sandbox", () => {
+    expect(detectSandboxFailure("warning: Sandbox not supported on this platform\n> ")).toMatch(
+      /not supported/,
+    );
+    expect(detectSandboxFailure("Sandbox could not be applied: seatbelt error")).toMatch(
+      /could not be applied/,
+    );
+  });
+  it("ignores ordinary screens", () => {
+    expect(detectSandboxFailure("grok  workspace sandbox\n> ")).toBeUndefined();
+    expect(detectSandboxFailure(undefined)).toBeUndefined();
+  });
+});
+
+describe("cursor readiness in allowlist mode (AGENT-285)", () => {
+  it("accepts the fresh composer with no run-mode footer", () => {
+    const screen =
+      "  Cursor Agent\n  v2026.10.14-0f9edde\n  → Plan, search, build anything\n  Composer 2.5\n  ~/wt · main\n";
+    expect(screenVerdict("cursor", screen).state).toBe("ready");
+  });
+  it("does not accept the placeholder text inside other output", () => {
+    expect(screenVerdict("cursor", "  echo → Plan, search, build anything later\n").state).toBe(
+      "not-ready",
+    );
+  });
+});
+
+describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
+  it("accepts the composer when the footer is cut to the mode name", () => {
+    const rule = "─".repeat(29);
+    const screen = `           Claude Code\n${rule}\n❯ Try "fix lint errors"\n${rule}\n  ⏵⏵ don't ask on      · ←…\n`;
+    expect(screenVerdict("claude", screen).state).toBe("ready");
   });
 });

@@ -79,7 +79,7 @@ describe("panel dispatch (AE4)", () => {
     // Each pane runs exactly the resolved absolute binary with single-quoted native argv.
     expect(herdr.scripts.map((text) => text.trim().split("\n").at(-1)!.trim())).toEqual([
       "'/opt/fake bin/claude' '--model' 'claude-opus-5-5' '--effort' 'high' '--permission-mode' 'plan' '--allowedTools' 'Read,Grep,Glob,WebFetch,WebSearch'",
-      "'--model' 'gpt-6.1-sol' '-c' 'model_reasoning_effort=\"xhigh\"' '--sandbox' 'read-only' '--search'",
+      "'--model' 'gpt-6.1-sol' '-c' 'model_reasoning_effort=\"xhigh\"' '--sandbox' 'read-only' '--ask-for-approval' 'never' '--search'",
       "'/opt/fake bin/claude' '--model' 'claude-opus-5-5' '--effort' 'high' '--permission-mode' 'plan' '--allowedTools' 'Read,Grep,Glob,WebFetch,WebSearch'",
     ]);
     // Codex alone also gets the new pane's own Herdr context for its tool commands, set for

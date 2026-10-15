@@ -182,9 +182,13 @@ describe("native CLI launch environment (process level)", () => {
         "arg=--effort",
         "arg=xhigh",
         "arg=--permission-mode",
-        "arg=acceptEdits",
+        "arg=dontAsk",
+        "arg=--setting-sources",
+        "arg=",
         "arg=--settings",
-        'arg={"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":true,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}',
+        expect.stringMatching(
+          /^arg=\{"permissions":\{"allow":\["Read","Glob","Grep","Edit\(\.\/\*\*\)",.*\]\},"sandbox":\{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":\{"allowedDomains":\["fonts.googleapis.com","fonts.gstatic.com"\],"allowLocalBinding":true\}\}\}$/,
+        ),
       ]);
       expect(lines[0]).toBe(`cwd=${realpathSync(project)}`);
       const env = Object.fromEntries(

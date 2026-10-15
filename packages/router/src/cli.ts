@@ -482,6 +482,224 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         }
       },
     );
+  program
+    .command("guard")
+    .description("Internal: hmr's pane guard for a launched writer")
+    .command("cursor")
+    .description("Decline Cursor's out-of-worktree Write prompt in one pane until it closes")
+    .requiredOption("--pane <id>", "Herdr pane id")
+    .requiredOption("--worktree <path>", "The writer's worktree")
+    .requiredOption("--lane <id>", "Lane id, for the log")
+    .requiredOption("--home <path>", "The router home the launcher resolved")
+    .option("--wait-for-agent <ms>", "Wait this long for Cursor to start in the pane (lead panes)")
+    .option("--no-close", "Do not close the pane on failure (the lead's launcher stops Cursor)")
+    .option("--config-dir <path>", "The lane's CURSOR_CONFIG_DIR, to stop its processes on failure")
+    .action(
+      async (flags: {
+        pane: string;
+        worktree: string;
+        lane: string;
+        home: string;
+        waitForAgent?: string;
+        close?: boolean;
+        configDir?: string;
+      }) => {
+        const { runCursorGuard, cursorGuardLogger, markCursorGuardReady, pidsWithCursorConfig } =
+          await import("./rules/cursor-guard.js");
+        const { createHerdrPaneClient, createProcessCommandAdapter } =
+          await import("./launch/herdr-client.js");
+        const home = flags.home;
+        const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
+        const { spawnSync } = await import("node:child_process");
+        const waitMs = Number.parseInt(flags.waitForAgent ?? "0", 10) || 0;
+        for (let waited = 0; waited < waitMs; waited += 500) {
+          const info = await pane.getAgent(flags.pane).catch(() => undefined);
+          if (info?.agent === "cursor") break;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        // Any abnormal end (lost sight of the pane, an exception, a signal) closes the
+        // writer's pane, so a Cursor writer never outlives its guard (review round 11). Lead
+        // panes pass --no-close: their launcher stops cursor-agent when the guard exits.
+        let finished = false;
+        const failClosed = (why: string): void => {
+          if (finished) return;
+          finished = true;
+          try {
+            cursorGuardLogger(home)({
+              at: new Date().toISOString(),
+              event: "cursor-guard-failed-closed",
+              pane: flags.pane,
+              lane: flags.lane,
+              why,
+            });
+          } catch {
+            /* best effort */
+          }
+          if (flags.close !== false) {
+            // Keep supervising until the writer is verifiably gone: close its pane, and kill
+            // its cursor-agent processes by their own CURSOR_CONFIG_DIR (independent of
+            // Herdr), retrying until neither the pane nor a process remains (review round 12).
+            for (let attempt = 0; ; attempt++) {
+              const closed = spawnSync("herdr", ["pane", "close", flags.pane], {
+                stdio: "ignore",
+                timeout: 10_000,
+              });
+              let pids: number[] = [];
+              if (flags.configDir) {
+                const ps = spawnSync("ps", ["-E", "-ww", "-A", "-o", "pid=,command="], {
+                  encoding: "utf8",
+                  timeout: 10_000,
+                  maxBuffer: 64 * 1024 * 1024,
+                });
+                pids = ps.status === 0 ? pidsWithCursorConfig(ps.stdout, flags.configDir) : [-1];
+                for (const pid of pids) {
+                  if (pid > 0) {
+                    try {
+                      process.kill(pid, attempt > 2 ? "SIGKILL" : "SIGTERM");
+                    } catch {
+                      /* already gone */
+                    }
+                  }
+                }
+              }
+              const gone = spawnSync("herdr", ["pane", "get", flags.pane], {
+                encoding: "utf8",
+                timeout: 10_000,
+              });
+              const paneGone = closed.status === 0 || /pane_not_found/.test(gone.stdout ?? "");
+              if ((paneGone || flags.configDir) && pids.length === 0) break;
+              spawnSync("sleep", ["2"]);
+            }
+          }
+          process.exit(3);
+        };
+        process.on("uncaughtException", (error) => failClosed(`exception: ${String(error)}`));
+        process.on("unhandledRejection", (error) => failClosed(`rejection: ${String(error)}`));
+        for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+          process.on(signal, () => failClosed(`signal ${signal}`));
+        }
+        const result = await runCursorGuard(
+          {
+            pane,
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+            log: cursorGuardLogger(home),
+          },
+          {
+            paneId: flags.pane,
+            worktree: flags.worktree,
+            laneId: flags.lane,
+            onReady: () => markCursorGuardReady(home, flags.lane),
+          },
+        );
+        if (result.outcome === "blind") failClosed("lost sight of the pane");
+        if (result.outcome === "stuck") failClosed("could not deliver the decline key");
+        finished = true;
+      },
+    );
+  program
+    .command("cursor-lead")
+    .description("Internal: run cursor-agent in a Herdr pane with hmr's sandboxed lead config")
+    .option("--passthrough", "Run the real cursor-agent unchanged (outside Herdr)", false)
+    .argument("[args...]", "cursor-agent arguments")
+    .allowUnknownOption(true)
+    .action(async (args: string[], flags: { passthrough?: boolean }) => {
+      const lead = await import("./launch/cursor-lead.js");
+      const { loadConfig } = await import("./config/config-loader.js");
+      const routerHome = loadConfig({ env }).home;
+      const real = lead.realCursorAgent(env, routerHome);
+      if (!real) {
+        stderr.write("hmr cursor-lead: the real cursor-agent is not on PATH\n");
+        program.exitCode = 127;
+        return;
+      }
+      const childEnv = { ...process.env, PATH: lead.pathWithoutShim(env.PATH, routerHome) };
+      if (flags.passthrough) {
+        program.exitCode = await lead.runAttached(real, args, childEnv);
+        return;
+      }
+      const refused = lead.disallowedCursorLeadArgs(args);
+      if (refused.length > 0) {
+        stderr.write(
+          `hmr cursor-lead: ${refused.join(", ")} is not allowed in a Herdr lead pane (only --model, --resume, --continue and prompt text); cursor-agent was not started\n`,
+        );
+        program.exitCode = 2;
+        return;
+      }
+      const { nativeLaunch } = await import("./rules/native-argv.js");
+      const { prepareNativeLaunch } = await import("./rules/launch-prep.js");
+      const { userHome } = await import("./commands/rules-commands.js");
+      const { pretrust } = await import("./workspace/trust.js");
+      const built = nativeLaunch(
+        { provider: "cursor", model: "lead", effort: null },
+        "writer",
+        routerHome,
+      );
+      const laneId = `lead-${(env.HERDR_PANE_ID ?? "pane").replace(/[^A-Za-z0-9_-]/g, "_")}-${Date.now()}`;
+      const prep = built.ok
+        ? prepareNativeLaunch(built.launch, {
+            cwd,
+            laneId,
+            routerHome,
+            home: userHome(env),
+          })
+        : { ok: false as const, error: built.error };
+      if (!prep.ok) {
+        stderr.write(`hmr cursor-lead: ${prep.error}; cursor-agent was not started\n`);
+        program.exitCode = 2;
+        return;
+      }
+      const trust = pretrust("cursor", cwd, env).argv;
+      if (!env.HERDR_PANE_ID) {
+        stderr.write("hmr cursor-lead: HERDR_PANE_ID is not set; cursor-agent was not started\n");
+        program.exitCode = 2;
+        return;
+      }
+      const { fileURLToPath } = await import("node:url");
+      program.exitCode = await lead.runGuardedLead({
+        real,
+        args: ["--sandbox", "enabled", ...trust.filter((arg) => !args.includes(arg)), ...args],
+        env: { ...childEnv, ...prep.env },
+        guardArgs: [
+          fileURLToPath(import.meta.url),
+          "guard",
+          "cursor",
+          "--pane",
+          env.HERDR_PANE_ID,
+          "--worktree",
+          cwd,
+          "--lane",
+          laneId,
+          "--home",
+          routerHome,
+          "--wait-for-agent",
+          "60000",
+          "--no-close",
+        ],
+        guardEnv: childEnv,
+        readyFile: (await import("./rules/cursor-guard.js")).cursorGuardReadyFile(
+          routerHome,
+          laneId,
+        ),
+        stderr,
+      });
+    });
+  program
+    .command("cursor-shim")
+    .description("Install the Herdr-only cursor-agent shim (sandboxed lead config)")
+    .command("install")
+    .action(async () => {
+      const lead = await import("./launch/cursor-lead.js");
+      const { loadConfig } = await import("./config/config-loader.js");
+      const { userHome } = await import("./commands/rules-commands.js");
+      const { fileURLToPath } = await import("node:url");
+      const lines = lead.installCursorShim({
+        routerHome: loadConfig({ env }).home,
+        home: userHome(env),
+        nodePath: process.execPath,
+        cliPath: fileURLToPath(import.meta.url),
+      });
+      stdout.write(`${lines.join("\n")}\n`);
+    });
   const task = program
     .command("task")
     .description("Inspect and close rules-mode tasks; revise a writer in its own pane");
