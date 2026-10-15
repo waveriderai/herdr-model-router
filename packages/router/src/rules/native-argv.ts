@@ -134,6 +134,12 @@ export interface NativeLaunch {
   argv: string[];
   /** Flags and values the installed CLI's --help must list before this argv may run. */
   requiredHelp: string[];
+  /**
+   * Set for a Codex writer: the permission profile its `/status` card must show
+   * ("Permissions: Profile <name>") before it is prompted. Codex documents that a loaded
+   * `sandbox_mode` silently wins over `default_permissions`, so the launch checks the live card.
+   */
+  expectedPermissionProfile?: string;
 }
 
 /**
@@ -187,7 +193,7 @@ export function nativeLaunch(
         roots = codexWriterProfile(routerHome);
       }
       // `-c` is always required: a launch also sets the pane's Herdr context with it.
-      return built(
+      const launch = built(
         "codex",
         [["--model", model], effort ? ["-c", `model_reasoning_effort="${effort}"`] : []],
         pick({
@@ -205,6 +211,10 @@ export function nativeLaunch(
         }),
         ["-c"],
       );
+      if (roots.length > 0) {
+        launch.launch.expectedPermissionProfile = CODEX_WRITER_PROFILE;
+      }
+      return launch;
     }
     case "grok":
       return built(

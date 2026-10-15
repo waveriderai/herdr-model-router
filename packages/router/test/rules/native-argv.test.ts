@@ -190,6 +190,8 @@ describe("native argv", () => {
     const overrides = launch.argv.filter((_, i) => launch.argv[i - 1] === "-c").slice(1);
     expect(overrides).toEqual(WRITER_PROFILE);
     expect(CODEX_WRITER_PROFILE).toBe("hmr-writer");
+    expect(launch.expectedPermissionProfile).toBe("hmr-writer");
+    expect(argv("codex", "m", "high", "read-only").expectedPermissionProfile).toBeUndefined();
   });
 
   it("gives read-only and control Codex lanes no writer profile", () => {

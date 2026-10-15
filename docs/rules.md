@@ -97,6 +97,11 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
   (full outbound) is never set. Known limit: Codex's macOS seatbelt denies Chromium's Mach port
   registration (`bootstrap_check_in ... MachPortRendezvousServer: Permission denied (1100)`), so
   Playwright/Chromium cannot launch inside a Codex sandbox; no Codex setting changes that.
+- Codex documents that a loaded `sandbox_mode` (or `--sandbox`) silently wins over
+  `default_permissions`. So hmr types `/status` in every new Codex writer pane and prompts it only
+  if the card reads `Permissions: Profile hmr-writer`; otherwise the pane is closed and nothing is
+  sent (e.g. `Full access`, another profile, or no Permissions line). On DevPro, Codex 0.162.1 shows
+  `Profile hmr-writer` even though `~/.codex/config.toml` sets `sandbox_mode = "danger-full-access"`.
 - Writer lanes also get `network.allowedDomains: ["fonts.googleapis.com", "fonts.gstatic.com"]`
   (Next.js font downloads) and `network.allowLocalBinding: true` (Kai, 2026-10-14) so `next build`,
   `next start` and Playwright run inside the sandbox. `allowLocalBinding` is all-or-nothing in Claude

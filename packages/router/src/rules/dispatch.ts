@@ -556,7 +556,14 @@ export async function startNativeAgent(input: {
         timeoutMs: deps.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollMs: deps.pollMs ?? DEFAULT_POLL_MS,
       },
-      { paneId, agentName, cwd: input.cwd },
+      {
+        paneId,
+        agentName,
+        cwd: input.cwd,
+        ...(launch.expectedPermissionProfile
+          ? { expectedPermissionProfile: launch.expectedPermissionProfile }
+          : {}),
+      },
     );
     if (!session.ok) return closeWith(session.error);
   }
