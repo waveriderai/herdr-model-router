@@ -159,8 +159,11 @@ export function parseRules(text: string): ParseRulesResult {
             error: `line ${lineNumber}: fix-accounts-for needs "<role> = <account>[, account]" with known accounts (${providerIds().join(", ")})`,
           };
         }
-        const byRole = (accounts.fixAccountsByRole ??= {});
-        if (byRole[role]) {
+        const byRole = (accounts.fixAccountsByRole ??= Object.create(null) as Record<
+          string,
+          string[]
+        >);
+        if (Object.prototype.hasOwnProperty.call(byRole, role)) {
           return {
             ok: false,
             error: `line ${lineNumber}: fix-accounts-for "${role}" is set twice`,

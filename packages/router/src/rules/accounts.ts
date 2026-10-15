@@ -44,7 +44,11 @@ export function assignAccounts(plan: RoutePlan, input: AccountInput): RoutePlan 
   const base = input.accounts ?? { reviewOnly: [] };
   // A per-role fix list (`fix-accounts-for <role> = ...`) replaces the global one for that role.
   const roleFix = plan.roleNames
-    .map((name) => base.fixAccountsByRole?.[normalizeRoleName(name)])
+    .map((name) => {
+      const byRole = base.fixAccountsByRole;
+      const key = normalizeRoleName(name);
+      return byRole && Object.prototype.hasOwnProperty.call(byRole, key) ? byRole[key] : undefined;
+    })
     .find((ids) => ids !== undefined);
   const rules = roleFix ? { ...base, fixAccounts: roleFix } : base;
   const writer = plan.access === "write";

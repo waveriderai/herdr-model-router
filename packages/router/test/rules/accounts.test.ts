@@ -254,6 +254,17 @@ describe("account choice: the model first, then the account", () => {
     });
   });
 
+  it("never reads inherited properties as a role's fix accounts", () => {
+    const text =
+      "# hmr: fix-accounts claude, grok\n# hmr: fix-accounts-for design implementation = codex\n" +
+      "constructor: claude:claude-sonnet-5-5@high\n" +
+      ROLES;
+    expect(route(place("constructor", { text, phase: "fix" }))[0]).toEqual([
+      "claude:claude-sonnet-5-5@high",
+    ]);
+    expect(parseRules("# hmr: fix-accounts-for constructor = codex\n" + ROLES).ok).toBe(true);
+  });
+
   it("rejects malformed or duplicate fix-accounts-for lines", () => {
     for (const bad of [
       "# hmr: fix-accounts-for design implementation codex\n",
