@@ -398,7 +398,10 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
   {
     // `❯` input line between two horizontal rules, plus the mode or shortcuts footer.
     claude: (lines, compact) =>
-      (compact.includes("shift+tabtocycle") || compact.includes("?forshortcuts")) &&
+      // A narrow pane cuts the writer's footer to "⏵⏵ don't ask on · ←…" (AGENT-285).
+      (compact.includes("shift+tabtocycle") ||
+        compact.includes("?forshortcuts") ||
+        compact.includes("⏵⏵don'taskon")) &&
       (lines.some(
         (line, index) =>
           /^\s*[❯>](\s|$)/.test(line) &&

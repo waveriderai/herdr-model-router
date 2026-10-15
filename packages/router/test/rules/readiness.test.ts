@@ -132,3 +132,11 @@ describe("cursor readiness in allowlist mode (AGENT-285)", () => {
     );
   });
 });
+
+describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
+  it("accepts the composer when the footer is cut to the mode name", () => {
+    const rule = "─".repeat(29);
+    const screen = `           Claude Code\n${rule}\n❯ Try "fix lint errors"\n${rule}\n  ⏵⏵ don't ask on      · ←…\n`;
+    expect(screenVerdict("claude", screen).state).toBe("ready");
+  });
+});
