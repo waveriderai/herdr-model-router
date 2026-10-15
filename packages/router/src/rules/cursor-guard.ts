@@ -138,7 +138,7 @@ export async function runCursorGuard(
     }
   };
   for (let polls = 0; input.maxPolls === undefined || polls < input.maxPolls; polls++) {
-    let state: "present" | "absent" | "unknown" = "unknown";
+    let state: "present" | "absent" | "unknown";
     try {
       state = deps.pane.paneState ? await deps.pane.paneState(input.paneId) : "unknown";
     } catch {
