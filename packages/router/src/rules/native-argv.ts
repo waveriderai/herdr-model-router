@@ -133,6 +133,10 @@ export function claudeWriterSettings(routerHome: string): string {
         // Edit rules cover every file-editing tool; Claude warns on Write(path) rules.
         "Edit(./**)",
         `Edit(${home})`,
+        // The writer's own hand-off (`hmr task complete|status`). Still sandboxed: an allow
+        // rule approves, `allowUnsandboxedCommands: false` keeps it inside the sandbox.
+        "Bash(hmr task complete:*)",
+        "Bash(hmr task status:*)",
       ],
     },
     ...base,

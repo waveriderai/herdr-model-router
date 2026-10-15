@@ -87,7 +87,7 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. Writers never stop for an approval (Kai, 2026-10-14: "Skip prompts, keep the worktree
   sandbox"). Grok's `--always-approve` is only ever combined with a `--sandbox` profile. Launch preparation (Kai 2026-10-14 8:25 PM PT, `src/rules/launch-prep.ts`, fails closed):
-  - Claude writer: loads no settings file at all (user, project or local), so no allow rule,
+  - Claude writer: loads no settings file at all (user, project or local; allow list = Read/Glob/Grep, Edit in the worktree and hmr home, and `Bash(hmr task complete|status:*)`), so no allow rule,
     sandbox exclusion or hook on disk can widen it; Herdr's status hooks are copied from `settings.json` in
     `CLAUDE_CONFIG_DIR` (else `~/.claude`)
     into hmr's `--settings`.
