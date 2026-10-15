@@ -187,7 +187,7 @@ describe("native CLI launch environment (process level)", () => {
         "arg=",
         "arg=--settings",
         expect.stringMatching(
-          /^arg=\{"permissions":\{"allow":\["Read","Glob","Grep","Edit\(\.\/\*\*\)","Write\(\.\/\*\*\)",.*\]\},"sandbox":\{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":\{"allowedDomains":\["fonts.googleapis.com","fonts.gstatic.com"\],"allowLocalBinding":true\}\}\}$/,
+          /^arg=\{"permissions":\{"allow":\["Read","Glob","Grep","Edit\(\.\/\*\*\)",.*\]\},"sandbox":\{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":\{"allowedDomains":\["fonts.googleapis.com","fonts.gstatic.com"\],"allowLocalBinding":true\}\}\}$/,
         ),
       ]);
       expect(lines[0]).toBe(`cwd=${realpathSync(project)}`);

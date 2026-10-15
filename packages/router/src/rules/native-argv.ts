@@ -130,10 +130,9 @@ export function claudeWriterSettings(routerHome: string): string {
         "Read",
         "Glob",
         "Grep",
+        // Edit rules cover every file-editing tool; Claude warns on Write(path) rules.
         "Edit(./**)",
-        "Write(./**)",
         `Edit(${home})`,
-        `Write(${home})`,
       ],
     },
     ...base,
