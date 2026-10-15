@@ -119,3 +119,16 @@ describe("detectSandboxFailure (fail closed)", () => {
     expect(detectSandboxFailure(undefined)).toBeUndefined();
   });
 });
+
+describe("cursor readiness in allowlist mode (AGENT-285)", () => {
+  it("accepts the fresh composer with no run-mode footer", () => {
+    const screen =
+      "  Cursor Agent\n  v2026.10.14-0f9edde\n  → Plan, search, build anything\n  Composer 2.5\n  ~/wt · main\n";
+    expect(screenVerdict("cursor", screen).state).toBe("ready");
+  });
+  it("does not accept the placeholder text inside other output", () => {
+    expect(screenVerdict("cursor", "  echo → Plan, search, build anything later\n").state).toBe(
+      "not-ready",
+    );
+  });
+});

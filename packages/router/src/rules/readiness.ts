@@ -417,7 +417,10 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
       lines.some((line) => /^\s*→(\s|$)/.test(line)) &&
       (compact.includes("shift+tabtocycle") ||
         compact.includes("runeverything") ||
-        compact.includes("auto-run")),
+        compact.includes("auto-run") ||
+        // Allowlist mode (hmr's per-launch writer config, AGENT-285) shows no run-mode footer;
+        // the fresh composer's own placeholder is the evidence there.
+        /^\s*→\s+plan, search, build anything\s*$/im.test(lines.join("\n"))),
     // `›` input line (not a numbered menu), plus the composer footer.
     codex: (lines, compact) =>
       lines.some((line) => /^\s*›(\s|$)/.test(line) && !NUMBERED_MENU.test(line)) &&
