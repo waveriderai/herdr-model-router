@@ -11,6 +11,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   cursorDenyRules,
+  cursorSandboxRefusal,
   ensureGrokProfiles,
   herdrHooks,
   prepareNativeLaunch,
@@ -172,6 +173,46 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(
       JSON.parse(readFileSync(path.join(home, ".cursor", "cli-config.json"), "utf8")).approvalMode,
     ).toBe("unrestricted");
+  });
+
+  it("refuses a Cursor writer when any sandbox.json could widen its shell sandbox", () => {
+    for (const where of ["home", "parent", "cwd"] as const) {
+      const home = tmp();
+      const parent = tmp();
+      const cwd = path.join(parent, "wt");
+      mkdirSync(cwd);
+      mkdirSync(path.join(home, ".cursor"));
+      writeFileSync(
+        path.join(home, ".cursor", "cli-config.json"),
+        JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+      );
+      const dir = where === "home" ? home : where === "parent" ? parent : cwd;
+      mkdirSync(path.join(dir, ".cursor"), { recursive: true });
+      writeFileSync(
+        path.join(dir, ".cursor", "sandbox.json"),
+        JSON.stringify({ additionalReadwritePaths: ["/outside"] }),
+      );
+      const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+        cwd,
+        laneId: "l",
+        routerHome: path.join(home, "router"),
+        home,
+      });
+      expect(prep.ok).toBe(false);
+      if (!prep.ok) expect(prep.error).toMatch(/sandbox\.json sets additionalReadwritePaths/);
+    }
+  });
+
+  it("allows a Cursor sandbox.json that only narrows, and refuses unknown keys or bad JSON", () => {
+    const dir = tmp();
+    const file = path.join(dir, "sandbox.json");
+    expect(cursorSandboxRefusal(file)).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ additionalReadonlyPaths: ["/x"] }));
+    expect(cursorSandboxRefusal(file)).toBeUndefined();
+    writeFileSync(file, JSON.stringify({ type: "insecure_none" }));
+    expect(cursorSandboxRefusal(file)).toMatch(/sets type/);
+    writeFileSync(file, "{");
+    expect(cursorSandboxRefusal(file)).toMatch(/not valid JSON/);
   });
 
   it("never authorizes Cursor: no login record means no launch", () => {

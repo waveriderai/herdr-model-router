@@ -225,6 +225,31 @@ export function cursorDenyRules(worktree: string, keep: readonly string[] = []):
   return deny;
 }
 
+/** Keys a Cursor `sandbox.json` may set without widening a writer's shell sandbox. */
+const CURSOR_SANDBOX_SAFE_KEYS = new Set(["additionalReadonlyPaths", "networkPolicy"]);
+
+/**
+ * Why a Cursor `sandbox.json` must stop a writer launch, or undefined when it is absent or
+ * only narrows. Fails closed: unreadable JSON or any key not known to be safe refuses.
+ */
+export function cursorSandboxRefusal(file: string): string | undefined {
+  if (!existsSync(file)) return undefined;
+  let settings: Record<string, unknown> | undefined;
+  try {
+    settings = readJson(file);
+  } catch {
+    return `${file} is not valid JSON; a Cursor writer was not launched`;
+  }
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return `${file} is not a JSON object; a Cursor writer was not launched`;
+  }
+  const unsafe = Object.keys(settings).filter((key) => !CURSOR_SANDBOX_SAFE_KEYS.has(key));
+  if (unsafe.length > 0) {
+    return `${file} sets ${unsafe.join(", ")}, which could widen the writer's shell sandbox; a Cursor writer was not launched`;
+  }
+  return undefined;
+}
+
 const CURSOR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -248,6 +273,17 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
         error: `${project} sets permissions, which would merge into the writer's allowlist; a Cursor writer was not launched`,
       };
     }
+  }
+  // Cursor also loads `.cursor/sandbox.json` from the user's home and from the cwd and its
+  // parents; one that adds writable roots or changes the sandbox type would widen the shell
+  // sandbox, which CURSOR_CONFIG_DIR does not isolate. Any such file refuses the launch.
+  const sandboxFiles = [
+    path.join(home, ".cursor", "sandbox.json"),
+    ...settingsDirs(ctx.cwd, home).map((dir) => path.join(dir, ".cursor", "sandbox.json")),
+  ];
+  for (const file of sandboxFiles) {
+    const refusal = cursorSandboxRefusal(file);
+    if (refusal) return { ok: false, error: refusal };
   }
   return {
     ok: true,
