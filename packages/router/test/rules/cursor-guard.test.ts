@@ -99,7 +99,7 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
       "idle",
     ]);
     const logs: Record<string, unknown>[] = [];
-    const declines = await runCursorGuard(
+    const { declines } = await runCursorGuard(
       { pane, sleep: async () => {}, log: (e) => logs.push(e) },
       { paneId: "w1:p1", worktree: wt, laneId: "lane1", maxPolls: 4 },
     );
@@ -143,6 +143,47 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
       { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 3, onReady: () => notReady++ },
     );
     expect(notReady).toBe(0);
+  });
+
+  it("is never ready without a screen read, and gives up blind so the caller stops the writer", async () => {
+    const { pane, keys } = fakePane(["x"]);
+    pane.readPane = async () => undefined;
+    let ready = 0;
+    const result = await runCursorGuard(
+      { pane, sleep: async () => {}, log: () => {} },
+      {
+        paneId: "w1:p1",
+        worktree: wt,
+        laneId: "l",
+        maxPolls: 20,
+        maxBlindPolls: 4,
+        onReady: () => ready++,
+      },
+    );
+    expect(ready).toBe(0);
+    expect(result.outcome).toBe("blind");
+    expect(keys).toEqual([]);
+  });
+
+  it("goes blind after losing the agent for a while, and keeps declining when the log fails", async () => {
+    const target = path.join(root, "parent", "n.txt");
+    const { pane, keys } = fakePane([prompt(target), REASON, "idle"]);
+    let calls = 0;
+    const real = pane.getAgent;
+    pane.getAgent = async (...args: never[]) =>
+      ++calls > 3 ? (undefined as never) : real(...args);
+    const result = await runCursorGuard(
+      {
+        pane,
+        sleep: async () => {},
+        log: () => {
+          throw new Error("disk full");
+        },
+      },
+      { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 50, maxBlindPolls: 3 },
+    );
+    expect(keys.flat()[0]).toBe("esc");
+    expect(result).toEqual({ declines: 1, outcome: "blind" });
   });
 
   it("stops when the pane no longer runs Cursor", async () => {

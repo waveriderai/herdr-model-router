@@ -94,8 +94,10 @@ export interface CursorGuardInput {
   pollMs?: number;
   /** Stop after this many polls (tests); unlimited by default. */
   maxPolls?: number;
-  /** Called once, after the first poll that found the pane running Cursor. */
+  /** Called once, after the first poll that saw Cursor in the pane and read its screen. */
   onReady?: () => void;
+  /** Consecutive polls without sight of the pane before the guard gives up (default 8). */
+  maxBlindPolls?: number;
 }
 
 async function screenOf(deps: CursorGuardDeps, paneId: string): Promise<string | undefined> {
@@ -106,26 +108,57 @@ async function screenOf(deps: CursorGuardDeps, paneId: string): Promise<string |
   }
 }
 
+export type CursorGuardOutcome =
+  /** The pane closed or stopped running Cursor: the guard's job is over. */
+  | "ended"
+  /** The guard could not see the pane (agent or screen) for `maxBlindPolls` polls in a row. */
+  | "blind";
+
 /**
  * Watches one Cursor writer pane until it is gone or no longer runs Cursor, declining every
- * out-of-worktree Write prompt it sees. Returns the number of declines.
+ * out-of-worktree Write prompt it sees. Ready means it has seen Cursor in the pane AND read the
+ * pane's screen. Losing sight of the pane for `maxBlindPolls` polls returns "blind"; the caller
+ * then stops the writer (review round 11).
  */
 export async function runCursorGuard(
   deps: CursorGuardDeps,
   input: CursorGuardInput,
-): Promise<number> {
+): Promise<{ declines: number; outcome: CursorGuardOutcome }> {
   const pollMs = input.pollMs ?? 1500;
+  const maxBlind = input.maxBlindPolls ?? 8;
   const now = deps.now ?? (() => new Date());
   let declines = 0;
+  let blind = 0;
+  let ready = false;
+  const log = (entry: Record<string, unknown>) => {
+    try {
+      deps.log(entry);
+    } catch {
+      /* a lost log line never stops the guard */
+    }
+  };
   for (let polls = 0; input.maxPolls === undefined || polls < input.maxPolls; polls++) {
-    if (deps.pane.paneState && (await deps.pane.paneState(input.paneId)) === "absent") break;
+    let state: "present" | "absent" | "unknown" = "unknown";
+    try {
+      state = deps.pane.paneState ? await deps.pane.paneState(input.paneId) : "unknown";
+    } catch {
+      state = "unknown";
+    }
+    if (state === "absent") return { declines, outcome: "ended" };
     const info = await deps.pane.getAgent(input.paneId).catch(() => undefined);
-    if (!info || info.agent !== "cursor") {
-      if (polls === 0 || info) break;
-    } else if (polls === 0) {
+    if (info && info.agent !== "cursor") return { declines, outcome: "ended" };
+    const screen = info ? await screenOf(deps, input.paneId) : undefined;
+    if (!info || screen === undefined) {
+      blind++;
+      if (blind >= maxBlind) return { declines, outcome: "blind" };
+      await deps.sleep(pollMs);
+      continue;
+    }
+    blind = 0;
+    if (!ready) {
+      ready = true;
       input.onReady?.();
     }
-    const screen = await screenOf(deps, input.paneId);
     const target = detectCursorOutOfWorkspacePrompt(screen, input.worktree);
     if (target) {
       const sent = await deps.pane.sendKeys(input.paneId, [CURSOR_DECLINE_KEY]);
@@ -142,7 +175,7 @@ export async function runCursorGuard(
         }
       }
       declines++;
-      deps.log({
+      log({
         at: now().toISOString(),
         event: "cursor-out-of-workspace-declined",
         pane: input.paneId,
@@ -156,7 +189,7 @@ export async function runCursorGuard(
     }
     await deps.sleep(pollMs);
   }
-  return declines;
+  return { declines, outcome: "ended" };
 }
 
 /** Appends one JSON line per decline to `<router home>/cursor-guard.log` (0600). */

@@ -492,6 +492,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .requiredOption("--lane <id>", "Lane id, for the log")
     .requiredOption("--home <path>", "The router home the launcher resolved")
     .option("--wait-for-agent <ms>", "Wait this long for Cursor to start in the pane (lead panes)")
+    .option("--no-close", "Do not close the pane on failure (the lead's launcher stops Cursor)")
     .action(
       async (flags: {
         pane: string;
@@ -499,6 +500,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         lane: string;
         home: string;
         waitForAgent?: string;
+        close?: boolean;
       }) => {
         const { runCursorGuard, cursorGuardLogger, markCursorGuardReady } =
           await import("./rules/cursor-guard.js");
@@ -506,13 +508,42 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           await import("./launch/herdr-client.js");
         const home = flags.home;
         const pane = createHerdrPaneClient(createProcessCommandAdapter({ timeoutMs: 10_000 }));
+        const { spawnSync } = await import("node:child_process");
         const waitMs = Number.parseInt(flags.waitForAgent ?? "0", 10) || 0;
         for (let waited = 0; waited < waitMs; waited += 500) {
           const info = await pane.getAgent(flags.pane).catch(() => undefined);
           if (info?.agent === "cursor") break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
-        await runCursorGuard(
+        // Any abnormal end (lost sight of the pane, an exception, a signal) closes the
+        // writer's pane, so a Cursor writer never outlives its guard (review round 11). Lead
+        // panes pass --no-close: their launcher stops cursor-agent when the guard exits.
+        let finished = false;
+        const failClosed = (why: string): void => {
+          if (finished) return;
+          finished = true;
+          try {
+            cursorGuardLogger(home)({
+              at: new Date().toISOString(),
+              event: "cursor-guard-failed-closed",
+              pane: flags.pane,
+              lane: flags.lane,
+              why,
+            });
+          } catch {
+            /* best effort */
+          }
+          if (flags.close !== false) {
+            spawnSync("herdr", ["pane", "close", flags.pane], { stdio: "ignore", timeout: 10_000 });
+          }
+          process.exit(3);
+        };
+        process.on("uncaughtException", (error) => failClosed(`exception: ${String(error)}`));
+        process.on("unhandledRejection", (error) => failClosed(`rejection: ${String(error)}`));
+        for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+          process.on(signal, () => failClosed(`signal ${signal}`));
+        }
+        const result = await runCursorGuard(
           {
             pane,
             sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -525,6 +556,8 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
             onReady: () => markCursorGuardReady(home, flags.lane),
           },
         );
+        if (result.outcome === "blind") failClosed("lost sight of the pane");
+        finished = true;
       },
     );
   program
@@ -604,6 +637,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           routerHome,
           "--wait-for-agent",
           "60000",
+          "--no-close",
         ],
         guardEnv: childEnv,
         readyFile: (await import("./rules/cursor-guard.js")).cursorGuardReadyFile(
