@@ -403,6 +403,41 @@ export class DispatchRepository {
       : undefined;
   }
 
+  /**
+   * Host commit lock: re-takes the worktree for a completed writer task for the duration of
+   * a host-side commit. Atomic (primary key on worktree_id); false when anyone owns it.
+   */
+  acquireCommitLock(worktreeId: string, taskId: string): boolean {
+    const take = this.db.transaction(() => {
+      if (writerAuthorityRefusal(this.db, worktreeId)) return false;
+      if (this.ownerOf(worktreeId)) return false;
+      // Only the most recent writer task on this worktree may commit what is there.
+      const latest = this.db
+        .prepare(
+          "select id from dispatch_tasks where worktree_id = ? and access = 'write' order by created_at desc, rowid desc limit 1",
+        )
+        .get(worktreeId) as { id: string } | undefined;
+      if (latest?.id !== taskId) return false;
+      this.db
+        .prepare(
+          "insert into writer_ownership (worktree_id, task_id, acquired_at) values (?, ?, ?)",
+        )
+        .run(worktreeId, taskId, new Date().toISOString());
+      return true;
+    });
+    try {
+      return take.immediate();
+    } catch {
+      return false;
+    }
+  }
+
+  releaseCommitLock(worktreeId: string, taskId: string): void {
+    this.db
+      .prepare("delete from writer_ownership where worktree_id = ? and task_id = ?")
+      .run(worktreeId, taskId);
+  }
+
   ownershipOfTask(taskId: string): Ownership | undefined {
     const row = this.db
       .prepare("select worktree_id, task_id, acquired_at from writer_ownership where task_id = ?")
