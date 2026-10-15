@@ -21,6 +21,7 @@ describe("screen readiness", () => {
     ["cursor", "cursor-ready-2026-10-14"],
     ["cursor", "cursor-ready-auto-run"],
     ["codex", "codex-ready"],
+    ["codex", "codex-ready-narrow"],
   ] as const)("%s at its ordinary prompt (%s) is ready", (kind, name) => {
     expect(screenVerdict(kind, extractPaneText(screen(name)))).toEqual({ state: "ready" });
   });
@@ -138,5 +139,23 @@ describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
     const rule = "─".repeat(29);
     const screen = `           Claude Code\n${rule}\n❯ Try "fix lint errors"\n${rule}\n  ⏵⏵ don't ask on      · ←…\n`;
     expect(screenVerdict("claude", screen).state).toBe("ready");
+  });
+});
+
+describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
+  it("accepts the composer when the footer is cut", () => {
+    for (const footer of ["  ? for  ⚠ 2 · f2", "  ? fo…", "  ? for"]) {
+      const screen = `› Ask Codex to do\n\n  GPT-6.1-Sol xhi…\n${footer}\n`;
+      expect(screenVerdict("codex", screen).state).toBe("ready");
+    }
+  });
+
+  it("still needs the composer line and a footer", () => {
+    expect(screenVerdict("codex", "  GPT-6.1-Sol xhi…\n  ? for  ⚠ 2 · f2\n").state).not.toBe(
+      "ready",
+    );
+    expect(screenVerdict("codex", "› Ask Codex to do\n\n  GPT-6.1-Sol xhi…\n").state).not.toBe(
+      "ready",
+    );
   });
 });
