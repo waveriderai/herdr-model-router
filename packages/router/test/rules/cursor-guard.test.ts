@@ -58,6 +58,16 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(detectCursorOutOfWorkspacePrompt(prompt(sibling), wt)).toBe(sibling);
   });
 
+  it("declines Write prompts for the worktree's live .cursor settings in any letter case", () => {
+    for (const dir of [".cursor", ".CURSOR", ".Cursor"]) {
+      const target = path.join(wt, dir, "sandbox.json");
+      expect(detectCursorOutOfWorkspacePrompt(prompt(target), wt)).toBe(target);
+    }
+    expect(
+      detectCursorOutOfWorkspacePrompt(prompt(path.join(wt, "src", "cursor.ts")), wt),
+    ).toBeUndefined();
+  });
+
   function fakePane(screens: string[]) {
     const keys: string[][] = [];
     const texts: string[] = [];

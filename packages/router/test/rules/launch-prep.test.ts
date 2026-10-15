@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -12,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   cursorDenyRules,
   cursorSandboxRefusal,
+  cursorWorktreeInsideAllowRoot,
   ensureGrokProfiles,
   herdrHooks,
   prepareNativeLaunch,
@@ -153,6 +155,7 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     const prep = prepareNativeLaunch(launchFor("cursor", "writer", router), {
       cwd,
       laneId: "lane/1",
+      tempDir: "/nonexistent-tmp",
       routerHome: router,
       home,
     });
@@ -204,6 +207,7 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
         cwd,
         laneId: "l",
+        tempDir: "/nonexistent-tmp",
         routerHome: path.join(home, "router"),
         home,
       });
@@ -224,14 +228,45 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(cursorSandboxRefusal(file)).toMatch(/not valid JSON/);
   });
 
+  it("refuses a Cursor writer whose worktree is inside its temp or router-home allow roots", () => {
+    const router = tmp();
+    const outside = realpathSync(mkdtempSync(path.join(os.homedir(), ".hmr-prep-wt-")));
+    try {
+      const roots = ["/nonexistent-tmp", router];
+      expect(cursorWorktreeInsideAllowRoot(path.join(router, "wt"), roots)).toBe(router);
+      expect(cursorWorktreeInsideAllowRoot(router.toUpperCase(), roots)).toBe(router);
+      expect(cursorWorktreeInsideAllowRoot(tmp(), [os.tmpdir()])).toBeDefined();
+      expect(cursorWorktreeInsideAllowRoot(outside, roots)).toBeUndefined();
+      // The launch itself refuses such a worktree.
+      const home = tmp();
+      mkdirSync(path.join(home, ".cursor"));
+      writeFileSync(
+        path.join(home, ".cursor", "cli-config.json"),
+        JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+      );
+      const prep = prepareNativeLaunch(launchFor("cursor", "writer", router), {
+        cwd: path.join(router, "wt"),
+        laneId: "l",
+        routerHome: router,
+        home,
+        tempDir: "/nonexistent-tmp",
+      });
+      expect(prep.ok).toBe(false);
+      if (!prep.ok) expect(prep.error).toMatch(/a Cursor writer may write freely/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("never authorizes Cursor: no login record means no launch", () => {
     const home = tmp();
     mkdirSync(path.join(home, ".cursor"));
     writeFileSync(path.join(home, ".cursor", "cli-config.json"), "{}");
     const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
-      cwd: home,
+      cwd: tmp(),
       laneId: "l",
-      routerHome: home,
+      tempDir: "/nonexistent-tmp",
+      routerHome: path.join(home, "router"),
       home,
     });
     expect(prep.ok).toBe(false);

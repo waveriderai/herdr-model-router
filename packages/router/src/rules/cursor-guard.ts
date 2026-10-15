@@ -48,8 +48,8 @@ function inside(file: string, root: string): boolean {
 /**
  * The out-of-worktree path of a Cursor "Write to this file?" prompt on screen, or undefined.
  * Matches only the exact Write prompt shape: the question line, the `in <absolute path>` line
- * right after it, and both the Proceed and Reject options. A path inside the worktree is never
- * matched; that prompt is left for a human.
+ * right after it, and both the Proceed and Reject options. Inside the worktree only a path
+ * under its `.cursor` (any letter case) is matched; any other prompt is left for a human.
  */
 export function detectCursorOutOfWorkspacePrompt(
   screen: string | undefined,
@@ -65,8 +65,13 @@ export function detectCursorOutOfWorkspacePrompt(
     if (!after.some((line) => PROCEED_OPTION.test(line))) continue;
     if (!after.some((line) => REJECT_OPTION.test(line))) continue;
     const root = canonical(worktree);
-    if (inside(canonical(target), root)) return undefined;
-    return target;
+    const file = canonical(target);
+    if (!inside(file, root)) return target;
+    // Inside the worktree only Cursor's live settings (`.cursor`, any letter case) are
+    // declined; Cursor shows them as a "Protected config file" Write prompt (review round 8).
+    const segments = path.relative(root, file).split(path.sep);
+    if (segments.some((segment) => segment.toLowerCase() === ".cursor")) return target;
+    return undefined;
   }
   return undefined;
 }

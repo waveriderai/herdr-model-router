@@ -29,6 +29,8 @@ export interface PrepContext {
   home?: string;
   /** Claude's config dir the launch uses (`CLAUDE_CONFIG_DIR`, else ~/.claude). */
   claudeConfigDir?: string;
+  /** The temp dir a Cursor writer may write (default `os.tmpdir()`; tests override it). */
+  tempDir?: string;
 }
 
 export type PrepResult =
@@ -250,6 +252,25 @@ export function cursorSandboxRefusal(file: string): string | undefined {
   return undefined;
 }
 
+/** The writer allow root (temp dir or router home) that contains `cwd`, if any. */
+export function cursorWorktreeInsideAllowRoot(
+  cwd: string,
+  roots: readonly string[],
+): string | undefined {
+  const fold = (dir: string) => (real(dir) ?? path.resolve(dir)).toLowerCase();
+  const worktree = fold(cwd);
+  for (const root of roots) {
+    const folded = fold(root);
+    if (
+      worktree === folded ||
+      worktree.startsWith(folded.endsWith(path.sep) ? folded : folded + path.sep)
+    ) {
+      return real(root) ?? path.resolve(root);
+    }
+  }
+  return undefined;
+}
+
 const CURSOR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
@@ -285,10 +306,23 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
     const refusal = cursorSandboxRefusal(file);
     if (refusal) return { ok: false, error: refusal };
   }
+  // The writer's extra allow roots (temp dir, router home) would let its native Write reach the
+  // worktree's live `.cursor` settings under a case alias the deny rules miss, so a worktree
+  // inside either refuses the launch (review round 8). Compared case-insensitively.
+  const tempDir = ctx.tempDir ?? os.tmpdir();
+  const nested = cursorWorktreeInsideAllowRoot(ctx.cwd, [tempDir, ctx.routerHome]);
+  if (nested) {
+    return {
+      ok: false,
+      error: `the worktree is inside ${nested}, which a Cursor writer may write freely; a Cursor writer was not launched`,
+    };
+  }
   return {
     ok: true,
     argv,
-    env: { CURSOR_CONFIG_DIR: writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd) },
+    env: {
+      CURSOR_CONFIG_DIR: writeCursorConfig(home, ctx.routerHome, ctx.laneId, ctx.cwd, tempDir),
+    },
   };
 }
 
@@ -305,6 +339,7 @@ export function writeCursorConfig(
   routerHome: string,
   laneId: string,
   cwd: string,
+  tempDir: string = os.tmpdir(),
 ): string {
   const global = readJson(path.join(home, ".cursor", "cli-config.json"));
   if (!global?.authInfo) {
@@ -330,7 +365,7 @@ export function writeCursorConfig(
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const sandbox = (global.sandbox ?? {}) as Record<string, unknown>;
-  const tmp = real(os.tmpdir()) ?? os.tmpdir();
+  const tmp = real(tempDir) ?? tempDir;
   const stateHome = realpathSync(routerHome);
   const workspace = real(cwd) ?? path.resolve(cwd);
   const config = {
