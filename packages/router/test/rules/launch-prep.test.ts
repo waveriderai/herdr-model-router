@@ -5,6 +5,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -13,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   cursorDenyRules,
   cursorSandboxRefusal,
+  cursorSettingsSymlink,
   cursorWorktreeInsideAllowRoot,
   ensureGrokProfiles,
   herdrHooks,
@@ -256,6 +258,37 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  it("refuses a Cursor writer when .cursor or its settings files are symlinks", () => {
+    for (const kind of ["file", "dir"] as const) {
+      const home = tmp();
+      const cwd = tmp();
+      mkdirSync(path.join(home, ".cursor"));
+      writeFileSync(
+        path.join(home, ".cursor", "cli-config.json"),
+        JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+      );
+      writeFileSync(path.join(cwd, "sandbox-settings.json"), "{}");
+      if (kind === "file") {
+        mkdirSync(path.join(cwd, ".cursor"));
+        symlinkSync("../sandbox-settings.json", path.join(cwd, ".cursor", "sandbox.json"));
+      } else {
+        mkdirSync(path.join(cwd, "real-cursor"));
+        symlinkSync("real-cursor", path.join(cwd, ".cursor"));
+      }
+      expect(cursorSettingsSymlink(cwd)).toBeDefined();
+      const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+        cwd,
+        laneId: "l",
+        tempDir: "/nonexistent-tmp",
+        routerHome: path.join(home, "router"),
+        home,
+      });
+      expect(prep.ok).toBe(false);
+      if (!prep.ok) expect(prep.error).toMatch(/is a symlink/);
+    }
+    expect(cursorSettingsSymlink(tmp())).toBeUndefined();
   });
 
   it("never authorizes Cursor: no login record means no launch", () => {

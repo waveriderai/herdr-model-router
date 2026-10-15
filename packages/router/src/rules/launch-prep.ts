@@ -252,6 +252,23 @@ export function cursorSandboxRefusal(file: string): string | undefined {
   return undefined;
 }
 
+/** `<dir>/.cursor`, or a settings file in it, when that entry is a symlink. */
+export function cursorSettingsSymlink(dir: string): string | undefined {
+  const cursorDir = path.join(dir, ".cursor");
+  for (const entry of [
+    cursorDir,
+    path.join(cursorDir, "sandbox.json"),
+    path.join(cursorDir, "cli.json"),
+  ]) {
+    try {
+      if (lstatSync(entry).isSymbolicLink()) return entry;
+    } catch {
+      /* absent */
+    }
+  }
+  return undefined;
+}
+
 /** The writer allow root (temp dir or router home) that contains `cwd`, if any. */
 export function cursorWorktreeInsideAllowRoot(
   cwd: string,
@@ -302,6 +319,17 @@ function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): Pr
     path.join(home, ".cursor", "sandbox.json"),
     ...settingsDirs(ctx.cwd, home).map((dir) => path.join(dir, ".cursor", "sandbox.json")),
   ];
+  // A symlinked `.cursor` or settings file would let the writer edit the live settings through
+  // a target outside `.cursor`, past the deny rules and Cursor's protected-config check.
+  for (const dir of [home, ...settingsDirs(ctx.cwd, home)]) {
+    const linked = cursorSettingsSymlink(dir);
+    if (linked) {
+      return {
+        ok: false,
+        error: `${linked} is a symlink; Cursor's live settings must be real files, so a Cursor writer was not launched`,
+      };
+    }
+  }
   for (const file of sandboxFiles) {
     const refusal = cursorSandboxRefusal(file);
     if (refusal) return { ok: false, error: refusal };
