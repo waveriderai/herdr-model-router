@@ -152,6 +152,16 @@ describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
     }
   });
 
+  it("never takes a wrapped numbered menu with a cut footer for the composer (PR #25 review 2)", () => {
+    for (const menu of [
+      "› 1.\n   Choose\n   model\n  ? fo…\n",
+      "› 2)\n  ? for  ⚠ 2 · f2\n",
+      "›\n  ? for\n",
+    ]) {
+      expect(screenVerdict("codex", extractPaneText(menu)).state).not.toBe("ready");
+    }
+  });
+
   it("still needs the composer line and a footer", () => {
     expect(screenVerdict("codex", "  GPT-6.1-Sol xhi…\n  ? for  ⚠ 2 · f2\n").state).not.toBe(
       "ready",

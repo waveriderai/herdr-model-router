@@ -430,7 +430,10 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
       (/(contextleft|forshortcuts|⏎send)/.test(compact) ||
         // A narrow Herdr split cuts the footer to "? for  ⚠ 2 · f2" or "? fo…" (NFKC: "? fo...") (AGENT-285),
         // the same way Claude's narrow footer is accepted above.
-        lines.some((line) => /^\s*\?\s+f(?:or?)?(?:\s|…|\.\.\.|$)/.test(line))),
+        (lines.some((line) => /^\s*\?\s+f(?:or?)?(?:\s|…|\.\.\.|$)/.test(line)) &&
+          // With only a cut footer, the composer line must carry placeholder or typed text and
+          // never start like a menu option ("› 1." even when its text wrapped away; PR #25 review 2).
+          lines.some((line) => /^\s*›\s+(?!\d+\s*[.)])\S/.test(line)))),
     // No verified composer evidence for OpenCode: never ready.
     opencode: undefined,
   };
