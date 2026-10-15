@@ -207,12 +207,13 @@ export function nativeLaunch(
               values: ["plan"],
             },
             writer: {
-              // Only project and local settings: no user allow rule can approve an excluded command.
+              // No settings file at all (user, project or local): every allow rule, sandbox setting and
+              // hook comes from hmr's --settings, so nothing on disk can widen the writer.
               args: [
                 "--permission-mode",
                 "dontAsk",
                 "--setting-sources",
-                "project,local",
+                "",
                 "--settings",
                 claudeWriterSettings(routerHome),
               ],

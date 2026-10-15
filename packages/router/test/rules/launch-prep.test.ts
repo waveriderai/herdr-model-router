@@ -64,7 +64,7 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       }),
     );
     const launch = launchFor("claude", "writer", home);
-    expect(launch.argv).toEqual(expect.arrayContaining(["--setting-sources", "project,local"]));
+    expect(launch.argv).toEqual(expect.arrayContaining(["--setting-sources", ""]));
     const prep = prepareNativeLaunch(launch, { cwd, laneId: "l1", routerHome: home, home });
     expect(prep.ok).toBe(true);
     if (!prep.ok) return;
@@ -75,26 +75,19 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
     expect(settings.sandbox.allowUnsandboxedCommands).toBe(false);
   });
 
-  it.each([
-    [{ sandbox: { excludedCommands: ["python3 *"] } }, /excludedCommands/],
-    [{ sandbox: { enabled: false } }, /weakens the sandbox/],
-    [{ sandbox: { allowUnsandboxedCommands: true } }, /weakens the sandbox/],
-  ])("refuses a writer Claude when project/local settings %j", (projectSettings, error) => {
+  it("ignores project and local settings: a local allow rule cannot widen a writer Claude", () => {
     const home = tmp();
     const cwd = tmp();
     mkdirSync(path.join(cwd, ".claude"));
     writeFileSync(
       path.join(cwd, ".claude", "settings.local.json"),
-      JSON.stringify(projectSettings),
+      JSON.stringify({ permissions: { allow: ["Write(//**)"] } }),
     );
-    const prep = prepareNativeLaunch(launchFor("claude", "writer", home), {
-      cwd,
-      laneId: "l",
-      routerHome: home,
-      home,
-    });
-    expect(prep.ok).toBe(false);
-    if (!prep.ok) expect(prep.error).toMatch(error);
+    const launch = launchFor("claude", "writer", home);
+    expect(launch.argv[launch.argv.indexOf("--setting-sources") + 1]).toBe("");
+    const prep = prepareNativeLaunch(launch, { cwd, laneId: "l", routerHome: home, home });
+    expect(prep.ok).toBe(true);
+    if (prep.ok) expect(prep.argv.join(" ")).not.toContain("Write(//**)");
   });
 
   it("keeps one managed Grok block per router home and leaves the rest of sandbox.toml alone", () => {

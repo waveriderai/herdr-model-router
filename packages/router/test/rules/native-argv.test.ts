@@ -77,7 +77,7 @@ describe("native argv", () => {
         "--permission-mode",
         "dontAsk",
         "--setting-sources",
-        "project,local",
+        "",
         "--settings",
         CLAUDE_WRITER_SETTINGS_JSON,
       ],

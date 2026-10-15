@@ -44,11 +44,7 @@ export function prepareNativeLaunch(
       case undefined:
         return { ok: true, argv: launch.argv, env: {} };
       case "claude-writer":
-        return prepareClaudeWriter(
-          launch.argv,
-          ctx.cwd,
-          ctx.claudeConfigDir ?? path.join(home, ".claude"),
-        );
+        return prepareClaudeWriter(launch.argv, ctx.claudeConfigDir ?? path.join(home, ".claude"));
       case "grok-profiles":
         ensureGrokProfiles(home, ctx.routerHome);
         return { ok: true, argv: launch.argv, env: {} };
@@ -85,27 +81,27 @@ export function herdrHooks(
 }
 
 /**
- * A writer Claude loads only project and local settings (`--setting-sources project,local`),
- * so no user allow rule can approve a command the sandbox excludes. Herdr's status hooks are
- * carried over from the user settings in hmr's own `--settings`. A project or local setting
- * that lets a command run outside the sandbox refuses the launch.
+ * Directories whose project settings a CLI started in `cwd` may load: `cwd` and each parent up
+ * to the filesystem root, except the user's home itself (its config dirs are user settings).
  */
-function prepareClaudeWriter(argv: string[], cwd: string, claudeDir: string): PrepResult {
-  for (const name of ["settings.json", "settings.local.json"]) {
-    const file = path.join(cwd, ".claude", name);
-    const settings = readJson(file);
-    const sandbox = (settings?.sandbox ?? {}) as Record<string, unknown>;
-    const excluded = sandbox.excludedCommands;
-    if (Array.isArray(excluded) && excluded.length > 0) {
-      return {
-        ok: false,
-        error: `${file} sets sandbox.excludedCommands; a writer Claude could run those outside the sandbox, so it was not launched`,
-      };
-    }
-    if (sandbox.enabled === false || sandbox.allowUnsandboxedCommands === true) {
-      return { ok: false, error: `${file} weakens the sandbox; a writer Claude was not launched` };
-    }
+export function settingsDirs(cwd: string, home: string): string[] {
+  const dirs: string[] = [];
+  const homeReal = real(home) ?? path.resolve(home);
+  let dir = real(cwd) ?? path.resolve(cwd);
+  for (;;) {
+    if (dir !== homeReal) dirs.push(dir);
+    const parent = path.dirname(dir);
+    if (parent === dir) return dirs;
+    dir = parent;
   }
+}
+
+/**
+ * A writer Claude loads no settings file (`--setting-sources ""`): user, project and local
+ * allow rules, sandbox exclusions and hooks never apply, so nothing on disk can widen it.
+ * Herdr's status hooks are carried over from the user settings into hmr's own `--settings`.
+ */
+function prepareClaudeWriter(argv: string[], claudeDir: string): PrepResult {
   const index = argv.indexOf("--settings");
   if (index < 0 || index + 1 >= argv.length)
     return { ok: false, error: "writer Claude argv has no --settings" };
@@ -236,13 +232,22 @@ const CURSOR_PRUNE_MS = 7 * 24 * 60 * 60 * 1000;
  * with permissions could widen the writer, so one refuses the launch.
  */
 function prepareCursorWriter(argv: string[], home: string, ctx: PrepContext): PrepResult {
-  const project = path.join(ctx.cwd, ".cursor", "cli.json");
-  const settings = readJson(project);
-  if (settings && "permissions" in settings) {
-    return {
-      ok: false,
-      error: `${project} sets permissions, which would merge into the writer's allowlist; a Cursor writer was not launched`,
-    };
+  // Cursor loads `.cursor/cli.json` from the cwd and its parents; any that sets permissions
+  // could merge into (and widen) the writer's allowlist.
+  for (const dir of settingsDirs(ctx.cwd, home)) {
+    const project = path.join(dir, ".cursor", "cli.json");
+    let settings: Record<string, unknown> | undefined;
+    try {
+      settings = readJson(project);
+    } catch {
+      return { ok: false, error: `${project} is not valid JSON; a Cursor writer was not launched` };
+    }
+    if (settings && "permissions" in settings) {
+      return {
+        ok: false,
+        error: `${project} sets permissions, which would merge into the writer's allowlist; a Cursor writer was not launched`,
+      };
+    }
   }
   return {
     ok: true,

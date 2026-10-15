@@ -184,7 +184,7 @@ describe("native CLI launch environment (process level)", () => {
         "arg=--permission-mode",
         "arg=dontAsk",
         "arg=--setting-sources",
-        "arg=project,local",
+        "arg=",
         "arg=--settings",
         expect.stringMatching(
           /^arg=\{"permissions":\{"allow":\["Read","Glob","Grep","Edit\(\.\/\*\*\)","Write\(\.\/\*\*\)",.*\]\},"sandbox":\{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":\{"allowedDomains":\["fonts.googleapis.com","fonts.gstatic.com"\],"allowLocalBinding":true\}\}\}$/,
