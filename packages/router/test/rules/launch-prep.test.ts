@@ -20,6 +20,7 @@ import {
   ensureGrokProfiles,
   herdrHooks,
   prepareNativeLaunch,
+  resolveExisting,
 } from "../../src/rules/launch-prep.js";
 import { grokProfileNames, nativeLaunch } from "../../src/rules/native-argv.js";
 
@@ -308,6 +309,34 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       true,
     );
     expect(git("status", "--porcelain", "--untracked-files=all")).not.toContain("sandbox.json");
+  });
+
+  it("compares not-yet-created paths through symlinked parents (PR #23 review 4)", () => {
+    const base = tmp();
+    mkdirSync(path.join(base, "real"));
+    symlinkSync(path.join(base, "real"), path.join(base, "link"));
+    expect(resolveExisting(path.join(base, "link", "a", "b"))).toBe(
+      path.join(realpathSync(base), "real", "a", "b"),
+    );
+    const home = tmp();
+    mkdirSync(path.join(home, ".cursor"));
+    writeFileSync(
+      path.join(home, ".cursor", "cli-config.json"),
+      JSON.stringify({ version: 1, authInfo: { email: "e", userId: 1 } }),
+    );
+    const cwd = path.join(tmp(), "wt");
+    mkdirSync(cwd, { recursive: true });
+    const router = path.join(base, "real", "state");
+    mkdirSync(router);
+    // The temp dir names the private folder through the symlinked parent, before it exists.
+    const prep = prepareNativeLaunch(launchFor("cursor", "writer", home), {
+      cwd,
+      laneId: "l",
+      tempDir: path.join(base, "link", "state.cursor-private"),
+      routerHome: router,
+      home,
+    });
+    expect(prep.ok).toBe(false);
   });
 
   it("refuses a Cursor writer whose private folder would sit inside the temp dir", () => {

@@ -281,12 +281,30 @@ export function cursorSettingsSymlink(dir: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The real path of `dir`, resolving its nearest existing ancestor when `dir` does not exist yet
+ * and appending the rest, so a not-yet-created path under a symlinked parent (macOS /tmp ->
+ * /private/tmp) compares by where it will really be (PR #23 review 4).
+ */
+export function resolveExisting(dir: string): string {
+  let current = path.resolve(dir);
+  const rest: string[] = [];
+  for (;;) {
+    const resolved = real(current);
+    if (resolved !== undefined) return path.join(resolved, ...rest.reverse());
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(dir);
+    rest.push(path.basename(current));
+    current = parent;
+  }
+}
+
 /** The writer allow root (temp dir or router home) that contains `cwd`, if any. */
 export function cursorWorktreeInsideAllowRoot(
   cwd: string,
   roots: readonly string[],
 ): string | undefined {
-  const fold = (dir: string) => (real(dir) ?? path.resolve(dir)).toLowerCase();
+  const fold = (dir: string) => resolveExisting(dir).toLowerCase();
   const worktree = fold(cwd);
   for (const root of roots) {
     const folded = fold(root);
