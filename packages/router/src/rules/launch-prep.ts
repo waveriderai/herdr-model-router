@@ -292,6 +292,15 @@ export function resolveExisting(dir: string): string {
   for (;;) {
     const resolved = real(current);
     if (resolved !== undefined) return path.join(resolved, ...rest.reverse());
+    // A link whose target does not exist yet would later resolve somewhere else (for example
+    // into hmr's Cursor private folder): fail closed (PR #23 review 6).
+    let link = false;
+    try {
+      link = lstatSync(current).isSymbolicLink();
+    } catch {
+      /* absent */
+    }
+    if (link) throw new Error(`${current} is a dangling symlink; a Cursor writer was not launched`);
     const parent = path.dirname(current);
     if (parent === current) return path.resolve(dir);
     rest.push(path.basename(current));

@@ -351,6 +351,22 @@ describe("launch preparation (AGENT-285, Kai 8:25 PM PT)", () => {
       home,
     });
     expect(prep2.ok).toBe(false);
+    // ...and to any not-yet-created private subfolder (review 6).
+    for (const sub of ["cursor-config", path.join("cursor-config", "l"), "cursor-guard"]) {
+      const router3 = path.join(base, "real", `state-${sub.replace(/\W/g, "_")}`);
+      mkdirSync(router3);
+      const link = path.join(base, `tmp-${sub.replace(/\W/g, "_")}`);
+      symlinkSync(path.join(`${realpathSync(router3)}.cursor-private`, sub), link);
+      expect(
+        prepareNativeLaunch(launchFor("cursor", "writer", home), {
+          cwd,
+          laneId: "l",
+          tempDir: link,
+          routerHome: router3,
+          home,
+        }).ok,
+      ).toBe(false);
+    }
   });
 
   it("finds a tracked sandbox.json under any letter case (PR #23 review 5)", () => {
