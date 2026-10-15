@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { ensureMode } from "../config/ensure-mode.js";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -60,11 +61,11 @@ export function openDatabase(options: OpenDatabaseOptions): Database.Database {
   ensureHome(options.home);
   const file = databasePath(options.home);
   const db = new Database(file);
-  if (process.platform !== "win32") chmodSync(file, 0o600);
+  ensureMode(file, 0o600);
   db.pragma("journal_mode = WAL");
   if (process.platform !== "win32") {
     for (const candidate of [file, `${file}-wal`, `${file}-shm`])
-      if (existsSync(candidate)) chmodSync(candidate, 0o600);
+      if (existsSync(candidate)) ensureMode(candidate, 0o600);
   }
   migrate(db);
   return db;

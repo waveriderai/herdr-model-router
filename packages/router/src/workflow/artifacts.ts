@@ -1,5 +1,5 @@
+import { ensureMode } from "../config/ensure-mode.js";
 import {
-  chmodSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -61,7 +61,7 @@ function privateDir(dir: string): void {
   refuseSymlink(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   refuseSymlink(dir);
-  if (process.platform !== "win32") chmodSync(dir, 0o700);
+  ensureMode(dir, 0o700);
 }
 
 /** The real path of `value`, resolving its deepest existing ancestor when it does not exist. */

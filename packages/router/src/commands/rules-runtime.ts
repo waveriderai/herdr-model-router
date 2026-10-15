@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { ensureMode } from "../config/ensure-mode.js";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -62,7 +63,7 @@ export function launchFilesIn(home: string): LaunchFiles {
     write(laneId, content) {
       ensureHome(home);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
-      if (process.platform !== "win32") chmodSync(dir, 0o700);
+      ensureMode(dir, 0o700);
       const file = path.join(dir, `${laneId.replace(/[^A-Za-z0-9_-]/g, "_")}.sh`);
       writeFileSync(file, content, { mode: 0o600 });
       return file;
