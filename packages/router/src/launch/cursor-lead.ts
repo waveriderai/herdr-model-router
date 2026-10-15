@@ -7,7 +7,7 @@
  * binary unchanged. hmr's own executable lookup skips the shim directory.
  */
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { resolveExecutable } from "../rules/launch-script.js";
 
@@ -95,16 +95,83 @@ export function runAttached(
   });
 }
 
-/** Flags that would loosen a lead's approvals or sandbox; the lead refuses them. */
-export function loosenedCursorArgs(args: readonly string[]): string[] {
+/**
+ * Arguments a lead may pass, by allowlist (review round 10): `--model <id>` / `--model=<id>`,
+ * `--resume` / `--resume=<id>`, `--continue`, and positional prompt text. Anything else that
+ * starts with `-` (combined short flags such as `-pf`, `--workspace`, `--add-dir`, `--force`,
+ * `--sandbox`, ...) is refused, since it could loosen approvals or move the workspace past the
+ * checks hmr ran on the pane's cwd.
+ */
+export function disallowedCursorLeadArgs(args: readonly string[]): string[] {
   const bad: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === "-f" || arg === "--force" || arg === "--yolo" || arg.startsWith("--force="))
-      bad.push(arg);
-    if (arg === "--sandbox" && args[i + 1] !== "enabled")
-      bad.push(`${arg} ${args[i + 1] ?? ""}`.trim());
-    if (arg.startsWith("--sandbox=") && arg !== "--sandbox=enabled") bad.push(arg);
+    if (!arg.startsWith("-")) continue;
+    if (arg === "--model") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("-")) bad.push(arg);
+      else i++;
+      continue;
+    }
+    if (/^--model=[^\s]+$/.test(arg)) continue;
+    if (arg === "--resume" || /^--resume=[A-Za-z0-9_-]+$/.test(arg)) continue;
+    if (arg === "--continue") continue;
+    bad.push(arg);
   }
   return bad;
+}
+
+/**
+ * Runs the lead's cursor-agent only under a live guard (review round 10): the guard starts
+ * first; if it is not ready within `readyMs` after Cursor starts, or exits at any point while
+ * Cursor runs, Cursor is stopped and the lead fails.
+ */
+export async function runGuardedLead(input: {
+  real: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+  guardArgs: readonly string[];
+  guardEnv: NodeJS.ProcessEnv;
+  readyFile: string;
+  stderr: { write(text: string): unknown };
+  readyMs?: number;
+  nodePath?: string;
+}): Promise<number> {
+  rmSync(input.readyFile, { force: true });
+  const guard = spawn(input.nodePath ?? process.execPath, input.guardArgs, {
+    stdio: "ignore",
+    env: input.guardEnv,
+  });
+  let guardExited = false;
+  const agent = spawn(input.real, input.args, { stdio: "inherit", env: input.env });
+  const stop = (why: string) => {
+    if (agent.exitCode === null && agent.signalCode === null) {
+      input.stderr.write(`\nhmr cursor-lead: ${why}; cursor-agent was stopped\n`);
+      agent.kill("SIGTERM");
+    }
+  };
+  guard.on("exit", () => {
+    guardExited = true;
+    stop("hmr's out-of-worktree guard exited");
+  });
+  guard.on("error", () => {
+    guardExited = true;
+    stop("hmr's out-of-worktree guard did not start");
+  });
+  const readyMs = input.readyMs ?? 60_000;
+  const timer = setInterval(() => {
+    if (existsSync(input.readyFile)) clearInterval(timer);
+  }, 250);
+  const deadline = setTimeout(() => {
+    clearInterval(timer);
+    if (!existsSync(input.readyFile)) stop("hmr's out-of-worktree guard was not ready in time");
+  }, readyMs);
+  const code = await new Promise<number>((resolve) => {
+    agent.on("exit", (exit, signal) => resolve(exit ?? (signal ? 128 : 1)));
+    agent.on("error", () => resolve(127));
+  });
+  clearTimeout(deadline);
+  clearInterval(timer);
+  if (!guardExited) guard.kill("SIGTERM");
+  return existsSync(input.readyFile) && !guardExited ? code : code === 0 ? 2 : code;
 }

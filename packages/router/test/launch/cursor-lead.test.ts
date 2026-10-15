@@ -4,7 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   installCursorShim,
-  loosenedCursorArgs,
+  disallowedCursorLeadArgs,
+  runGuardedLead,
   pathWithoutShim,
   shimDir,
   shimScript,
@@ -26,13 +27,76 @@ describe("Herdr cursor-agent lead shim (Kai 11:18 PM PT)", () => {
     expect(pathWithoutShim(`${shimDir(home)}:/usr/bin:/bin`, home)).toBe("/usr/bin:/bin");
   });
 
-  it("refuses arguments that would loosen approvals or the sandbox", () => {
-    expect(loosenedCursorArgs(["--model", "x"])).toEqual([]);
-    expect(loosenedCursorArgs(["--sandbox", "enabled"])).toEqual([]);
-    expect(loosenedCursorArgs(["-f"])).toEqual(["-f"]);
-    expect(loosenedCursorArgs(["--yolo"])).toEqual(["--yolo"]);
-    expect(loosenedCursorArgs(["--sandbox", "disabled"])).toEqual(["--sandbox disabled"]);
-    expect(loosenedCursorArgs(["--sandbox=disabled"])).toEqual(["--sandbox=disabled"]);
+  it("allows only --model, --resume, --continue and prompt text (review round 10)", () => {
+    expect(disallowedCursorLeadArgs(["--model", "x", "fix the bug"])).toEqual([]);
+    expect(disallowedCursorLeadArgs(["--model=x", "--resume=abc-1", "--continue"])).toEqual([]);
+    for (const bad of [
+      "-f",
+      "-pf",
+      "--force",
+      "--yolo",
+      "-w",
+      "--workspace",
+      "--add-dir",
+      "--worktree",
+      "--sandbox",
+      "--sandbox=disabled",
+      "--",
+      "-m",
+    ]) {
+      expect(disallowedCursorLeadArgs([bad, "x"])).toEqual([bad]);
+    }
+    expect(disallowedCursorLeadArgs(["--model", "-f"])).toEqual(["--model", "-f"]);
+  });
+
+  function exe(body: string): string {
+    const file = path.join(tmp(), "bin.sh");
+    writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return file;
+  }
+  const quiet = { write: () => true };
+
+  it("stops cursor-agent when the guard exits or never becomes ready", async () => {
+    const ready = path.join(tmp(), "ready");
+    const exited = await runGuardedLead({
+      real: exe("sleep 5; exit 0"),
+      args: [],
+      env: process.env,
+      nodePath: "/bin/sh",
+      guardArgs: ["-c", "exit 3"],
+      guardEnv: process.env,
+      readyFile: ready,
+      stderr: quiet,
+    });
+    expect(exited).not.toBe(0);
+    const timedOut = await runGuardedLead({
+      real: exe("sleep 5; exit 0"),
+      args: [],
+      env: process.env,
+      nodePath: "/bin/sh",
+      guardArgs: ["-c", "sleep 5"],
+      guardEnv: process.env,
+      readyFile: ready,
+      stderr: quiet,
+      readyMs: 300,
+    });
+    expect(timedOut).not.toBe(0);
+  });
+
+  it("runs cursor-agent to completion under a ready guard", async () => {
+    const ready = path.join(tmp(), "ready");
+    const code = await runGuardedLead({
+      real: exe("sleep 1; exit 0"),
+      args: [],
+      env: process.env,
+      nodePath: "/bin/sh",
+      guardArgs: ["-c", `touch '${ready}'; sleep 5`],
+      guardEnv: process.env,
+      readyFile: ready,
+      stderr: quiet,
+      readyMs: 3000,
+    });
+    expect(code).toBe(0);
   });
 
   it("installs a 0700 shim and one Herdr-only PATH block in ~/.zshrc, idempotently", () => {

@@ -548,10 +548,10 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         program.exitCode = await lead.runAttached(real, args, childEnv);
         return;
       }
-      const loosened = lead.loosenedCursorArgs(args);
-      if (loosened.length > 0) {
+      const refused = lead.disallowedCursorLeadArgs(args);
+      if (refused.length > 0) {
         stderr.write(
-          `hmr cursor-lead: ${loosened.join(", ")} would loosen the sandbox or approvals; not started\n`,
+          `hmr cursor-lead: ${refused.join(", ")} is not allowed in a Herdr lead pane (only --model, --resume, --continue and prompt text); cursor-agent was not started\n`,
         );
         program.exitCode = 2;
         return;
@@ -580,34 +580,38 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         return;
       }
       const trust = pretrust("cursor", cwd, env).argv;
-      if (env.HERDR_PANE_ID) {
-        const { spawn } = await import("node:child_process");
-        const { fileURLToPath } = await import("node:url");
-        spawn(
-          process.execPath,
-          [
-            fileURLToPath(import.meta.url),
-            "guard",
-            "cursor",
-            "--pane",
-            env.HERDR_PANE_ID,
-            "--worktree",
-            cwd,
-            "--lane",
-            laneId,
-            "--home",
-            routerHome,
-            "--wait-for-agent",
-            "60000",
-          ],
-          { detached: true, stdio: "ignore", env: childEnv },
-        ).unref();
+      if (!env.HERDR_PANE_ID) {
+        stderr.write("hmr cursor-lead: HERDR_PANE_ID is not set; cursor-agent was not started\n");
+        program.exitCode = 2;
+        return;
       }
-      program.exitCode = await lead.runAttached(
+      const { fileURLToPath } = await import("node:url");
+      program.exitCode = await lead.runGuardedLead({
         real,
-        ["--sandbox", "enabled", ...trust.filter((arg) => !args.includes(arg)), ...args],
-        { ...childEnv, ...prep.env },
-      );
+        args: ["--sandbox", "enabled", ...trust.filter((arg) => !args.includes(arg)), ...args],
+        env: { ...childEnv, ...prep.env },
+        guardArgs: [
+          fileURLToPath(import.meta.url),
+          "guard",
+          "cursor",
+          "--pane",
+          env.HERDR_PANE_ID,
+          "--worktree",
+          cwd,
+          "--lane",
+          laneId,
+          "--home",
+          routerHome,
+          "--wait-for-agent",
+          "60000",
+        ],
+        guardEnv: childEnv,
+        readyFile: (await import("./rules/cursor-guard.js")).cursorGuardReadyFile(
+          routerHome,
+          laneId,
+        ),
+        stderr,
+      });
     });
   program
     .command("cursor-shim")
