@@ -168,21 +168,31 @@ export async function runCursorGuard(
     const target = detectCursorOutOfWorkspacePrompt(screen, input.worktree);
     if (target) {
       const sent = await deps.pane.sendKeys(input.paneId, [CURSOR_DECLINE_KEY]);
-      let reason = false;
+      let opened = false;
       if (sent.ok) {
-        for (let wait = 0; wait < 10; wait++) {
+        for (let wait = 0; wait < 10 && !opened; wait++) {
           await deps.sleep(300);
-          if (detectCursorReasonField(await screenOf(deps, input.paneId))) {
-            const typed = await deps.pane.sendText(input.paneId, CURSOR_DECLINE_REASON);
-            if (typed.ok) await deps.pane.sendKeys(input.paneId, [CURSOR_SUBMIT_KEY]);
-            reason = typed.ok;
-            break;
+          opened = detectCursorReasonField(await screenOf(deps, input.paneId));
+        }
+      }
+      // Once the reason field is open the prompt is gone from the screen, so the rest of the
+      // flow must finish here: type the reason, submit, and see the field close. Any failure
+      // after this point ends the guard 'stuck' at once (review round 14).
+      let submitted = false;
+      if (opened) {
+        const typed = await deps.pane.sendText(input.paneId, CURSOR_DECLINE_REASON);
+        const entered = typed.ok
+          ? await deps.pane.sendKeys(input.paneId, [CURSOR_SUBMIT_KEY])
+          : typed;
+        if (entered.ok) {
+          for (let wait = 0; wait < 10 && !submitted; wait++) {
+            await deps.sleep(300);
+            const after = await screenOf(deps, input.paneId);
+            submitted = after !== undefined && !detectCursorReasonField(after);
           }
         }
       }
-      // A decline counts only when Cursor took it: the key went out and the reason field
-      // opened. Anything else is a failed attempt (review round 13).
-      if (sent.ok && reason) {
+      if (submitted) {
         declines++;
         failedDeclines = 0;
       } else {
@@ -190,15 +200,19 @@ export async function runCursorGuard(
       }
       log({
         at: now().toISOString(),
-        event: "cursor-out-of-workspace-declined",
+        event: submitted
+          ? "cursor-out-of-workspace-declined"
+          : "cursor-out-of-workspace-decline-failed",
         pane: input.paneId,
         lane: input.laneId,
         worktree: input.worktree,
         target,
         key: CURSOR_DECLINE_KEY,
         keySent: sent.ok,
-        reasonSent: reason,
+        reasonOpened: opened,
+        submitted,
       });
+      if (opened && !submitted) return { declines, outcome: "stuck" };
       if (failedDeclines >= maxFailed) return { declines, outcome: "stuck" };
     }
     await deps.sleep(pollMs);

@@ -208,6 +208,42 @@ describe("Cursor out-of-workspace guard (AGENT-285, Kai 10:39 PM PT)", () => {
     expect(keys.flat().every((k) => k === "esc")).toBe(true);
   });
 
+  it("ends stuck at once when the reason cannot be typed or submitted (review round 14)", async () => {
+    const target = path.join(root, "parent", "r.txt");
+    for (const fail of ["text", "enter", "still-open"] as const) {
+      const { pane } = fakePane([
+        prompt(target),
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+        REASON,
+      ]);
+      if (fail === "text")
+        pane.sendText = async () => ({ ok: false, stdout: "", stderr: "", code: 1 }) as never;
+      if (fail === "enter") {
+        const send = pane.sendKeys;
+        pane.sendKeys = async (id: string, k: readonly string[]) =>
+          k.includes("enter")
+            ? ({ ok: false, stdout: "", stderr: "", code: 1 } as never)
+            : send(id, k);
+      }
+      const result = await runCursorGuard(
+        { pane, sleep: async () => {}, log: () => {} },
+        { paneId: "w1:p1", worktree: wt, laneId: "l", maxPolls: 50 },
+      );
+      expect(result).toEqual({ declines: 0, outcome: "stuck" });
+    }
+  });
+
   it("stops when the pane no longer runs Cursor", async () => {
     const { pane, keys } = fakePane([prompt("/etc/x")]);
     pane.getAgent = async () => ({ paneId: "w1:p1", agent: "claude", status: "idle" }) as never;
