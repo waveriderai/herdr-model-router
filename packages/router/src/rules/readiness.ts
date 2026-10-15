@@ -430,6 +430,19 @@ export function hasReadinessEvidence(kind: string): kind is ReadinessKind {
   return kind in COMPOSER && COMPOSER[kind as ReadinessKind] !== undefined;
 }
 
+/**
+ * A CLI warning that its OS sandbox did not apply. Grok logs such a warning and keeps running
+ * without enforcement, so a lane that shows one must never be prompted (fail closed).
+ */
+export function detectSandboxFailure(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  const match =
+    /sandbox (?:is )?(?:not supported|could not be applied|unavailable|failed to apply)[^\n]*/i.exec(
+      sanitizeScreen(text),
+    );
+  return match?.[0].trim();
+}
+
 /** The verdict for one screen of the lane's pane. */
 export function screenVerdict(kind: ReadinessKind, text: string | undefined): ScreenVerdict {
   if (text === undefined) {

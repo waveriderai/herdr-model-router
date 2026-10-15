@@ -83,7 +83,7 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 
 - Claude's writer settings are
   `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}`:
-  Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); no command may run outside it. The writer's `permissions.allow` covers Read/Glob/Grep/Bash and Edit/Write under the worktree and hmr's state directory; `dontAsk` denies everything else without prompting (no `bypassPermissions`). If the sandbox
+  Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); no command may run outside it. The writer's `permissions.allow` covers Read/Glob/Grep and Edit/Write under the worktree and hmr's state directory; `dontAsk` denies everything else without prompting (no `bypassPermissions`), including any `excludedCommands` entry that would run outside the sandbox. A lane whose screen shows a sandbox-not-applied warning (Grok continues without enforcement) fails closed: no prompt, no fallback. If the sandbox
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. Writers never stop for an approval (Kai, 2026-10-14: "Skip prompts, keep the worktree
   sandbox"). Grok's `--always-approve` is only ever combined with a `--sandbox` profile.

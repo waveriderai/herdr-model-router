@@ -114,9 +114,11 @@ export const CLAUDE_WRITER_SETTINGS = JSON.stringify({
 /**
  * Claude writer settings for one launch (Kai 2026-10-14 7:37 PM PT: skip prompts, keep the
  * worktree sandbox). `dontAsk` never prompts: a tool call not allowed below is denied. Edits
- * are allowed in the working directory and hmr's state directory only; Bash is allowed and
- * runs in the sandbox (`allowUnsandboxedCommands: false`), whose writable paths follow these
- * Edit rules, so a write outside them fails instead of asking.
+ * are allowed in the working directory and hmr's state directory only. Bash is deliberately
+ * not on the allow list: a sandboxed command is approved by `autoAllowBashIfSandboxed`, while a
+ * command that would run outside the sandbox (an `excludedCommands` entry from user settings)
+ * matches no allow rule and is denied. The sandbox's writable paths follow these Edit rules, so
+ * a write outside them fails instead of asking.
  */
 export function claudeWriterSettings(routerHome: string): string {
   const base = JSON.parse(CLAUDE_WRITER_SETTINGS) as Record<string, unknown>;
@@ -127,7 +129,6 @@ export function claudeWriterSettings(routerHome: string): string {
         "Read",
         "Glob",
         "Grep",
-        "Bash",
         "Edit(./**)",
         "Write(./**)",
         `Edit(${home})`,

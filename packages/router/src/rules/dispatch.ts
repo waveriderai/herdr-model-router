@@ -26,6 +26,7 @@ import {
   screenVerdict,
   type ReadinessKind,
   type ScreenVerdict,
+  detectSandboxFailure,
 } from "./readiness.js";
 import {
   executableOf,
@@ -352,6 +353,14 @@ async function observeAgent(
       if (quota) {
         const reason = quotaReason(expected, quota);
         return { ok: false, error: `${reason}; no prompt was sent`, quota: reason };
+      }
+      // Fail closed, with no fallback: a lane whose sandbox did not apply must never be prompted.
+      const sandboxFailure = detectSandboxFailure(text);
+      if (sandboxFailure) {
+        return {
+          ok: false,
+          error: `${expected} started without its sandbox (${sandboxFailure}); no prompt was sent and the pane was closed`,
+        };
       }
       const verdict = screenVerdict(expected, text);
       if (verdict.state === "dialog") {

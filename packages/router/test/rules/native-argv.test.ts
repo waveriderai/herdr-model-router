@@ -258,11 +258,11 @@ describe("native argv", () => {
     const settings = launch.argv[launch.argv.indexOf("--settings") + 1];
     const parsed = JSON.parse(settings ?? "") as { permissions: { allow: string[] } };
     // dontAsk: nothing prompts; only these tools run, Edit/Write only in the worktree and hmr home.
-    expect(parsed.permissions.allow.slice(0, 6)).toEqual([
+    expect(parsed.permissions.allow).not.toContain("Bash");
+    expect(parsed.permissions.allow.slice(0, 5)).toEqual([
       "Read",
       "Glob",
       "Grep",
-      "Bash",
       "Edit(./**)",
       "Write(./**)",
     ]);

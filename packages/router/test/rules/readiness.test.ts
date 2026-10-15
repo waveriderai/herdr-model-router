@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { extractPaneText, screenVerdict, type ReadinessKind } from "../../src/rules/readiness.js";
+import {
+  extractPaneText,
+  screenVerdict,
+  type ReadinessKind,
+  detectSandboxFailure,
+} from "../../src/rules/readiness.js";
 
 const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures/screens");
 const screen = (name: string) => readFileSync(path.join(dir, `${name}.txt`), "utf8");
@@ -97,5 +102,20 @@ describe("screen readiness", () => {
       state: "dialog",
       dialog: "permission or confirmation",
     });
+  });
+});
+
+describe("detectSandboxFailure (fail closed)", () => {
+  it("flags a CLI that started without its sandbox", () => {
+    expect(detectSandboxFailure("warning: Sandbox not supported on this platform\n> ")).toMatch(
+      /not supported/,
+    );
+    expect(detectSandboxFailure("Sandbox could not be applied: seatbelt error")).toMatch(
+      /could not be applied/,
+    );
+  });
+  it("ignores ordinary screens", () => {
+    expect(detectSandboxFailure("grok  workspace sandbox\n> ")).toBeUndefined();
+    expect(detectSandboxFailure(undefined)).toBeUndefined();
   });
 });
