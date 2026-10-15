@@ -69,6 +69,8 @@ export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 export const HARDEN = [
   `--attr-source=${EMPTY_TREE}`,
   "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
   "core.hooksPath=/dev/null",
   "-c",
   "core.fsmonitor=false",
@@ -88,7 +90,11 @@ export function createHostGit(env: NodeJS.Dict<string> = process.env): HostGit {
   const base = gitEnv(env);
   return (args, cwd, indexFile) =>
     new Promise((resolve) => {
-      const childEnv = { ...base, ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}) };
+      const childEnv = {
+        ...base,
+        GIT_ATTR_NOSYSTEM: "1",
+        ...(indexFile ? { GIT_INDEX_FILE: indexFile } : {}),
+      };
       const child = spawn("git", [...HARDEN, ...args], {
         cwd,
         env: childEnv,
@@ -291,14 +297,46 @@ export async function hostCommit(
   }
 }
 
+/**
+ * `.git/info/attributes` cannot be switched off, so every configured filter driver is
+ * overridden to a no-op for each call: clean/smudge `cat`, no process, not required.
+ */
+export async function neutralizeFilters(git: HostGit, cwd: string): Promise<HostGit | undefined> {
+  const list = await git(["config", "--null", "--name-only", "--get-regexp", "^filter\\."], cwd);
+  if (!list.ok && list.stdout.length > 0) return undefined;
+  const names = new Set<string>();
+  for (const key of list.stdout.split("\0").filter(Boolean)) {
+    const rest = key.slice("filter.".length);
+    const dot = rest.lastIndexOf(".");
+    if (dot > 0) names.add(rest.slice(0, dot));
+  }
+  const extra: string[] = [];
+  for (const name of names) {
+    if (/[\0\n=]/.test(name)) return undefined;
+    extra.push(
+      "-c",
+      `filter.${name}.clean=cat`,
+      "-c",
+      `filter.${name}.smudge=cat`,
+      "-c",
+      `filter.${name}.process=`,
+      "-c",
+      `filter.${name}.required=false`,
+    );
+  }
+  return (args, c, index) => git([...extra, ...args], c, index);
+}
+
 async function commitLocked(
-  git: HostGit,
+  rawGit: HostGit,
   cwd: string,
   req: HostCommitRequest,
   allow: string[],
   remote: string,
 ): Promise<HostCommitResult> {
   const ref = `refs/heads/${req.branch}`;
+  const git = await neutralizeFilters(rawGit, cwd);
+  if (!git) return refuse("bad-config", "Could not list or neutralize configured filter drivers.");
   const top = await git(["rev-parse", "--show-toplevel"], cwd);
   if (!top.ok || canonical(top.stdout.trim()) !== canonical(cwd)) {
     return refuse("wrong-worktree", `${cwd} is not the top of its own git worktree.`);

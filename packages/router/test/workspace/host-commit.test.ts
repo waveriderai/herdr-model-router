@@ -266,6 +266,20 @@ describe("hostCommit", () => {
     expect(await hostCommit(store({ cwd: dir }), run, req(base))).toMatchObject({ ok: true });
     expect(existsSync(marker)).toBe(false);
   });
+
+  it("never runs a filter selected by .git/info/attributes", async () => {
+    const { dir, head } = repo();
+    const marker = path.join(tempDir("router-mark3-"), "ran");
+    mkdirSync(path.join(dir, ".git", "info"), { recursive: true });
+    writeFileSync(path.join(dir, ".git", "info", "attributes"), "*.md filter=evil.x\n");
+    git(dir, "config", "filter.evil.x.clean", `sh -c 'touch ${marker}; cat'`);
+    git(dir, "config", "filter.evil.x.process", `sh -c 'touch ${marker}'`);
+    git(dir, "config", "filter.evil.x.required", "true");
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    expect(await hostCommit(store({ cwd: dir }), run, req(head))).toMatchObject({ ok: true });
+    expect(existsSync(marker)).toBe(false);
+  });
 });
 
 function rmMarker(p: string): void {
