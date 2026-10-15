@@ -1,16 +1,5 @@
 import { spawn } from "node:child_process";
-import {
-  constants,
-  mkdtempSync,
-  openSync,
-  closeSync,
-  fstatSync,
-  lstatSync,
-  readSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DispatchTask } from "../store/dispatch-repository.js";
@@ -73,7 +62,12 @@ const REMOTE_RE = /^[A-Za-z0-9._-]+$/;
 const MAX_FILE_BYTES = 64 * 1024 * 1024;
 
 /** Settings applied to every git call: nothing worktree-controlled may execute. */
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** Settings applied to every git call: nothing worktree-controlled may execute. Attributes
+ * come from the empty tree, so no filter driver, eol or ident conversion can ever apply. */
 export const HARDEN = [
+  `--attr-source=${EMPTY_TREE}`,
   "-c",
   "core.hooksPath=/dev/null",
   "-c",
@@ -172,53 +166,76 @@ function canonical(p: string): string {
 }
 
 type Snapshot =
-  | { kind: "file"; bytes: Buffer; exec: boolean }
+  | { kind: "file"; blob: string; exec: boolean }
   | { kind: "deleted" }
   | { kind: "bad"; why: string };
 
-/** Reads one file without following symlinks at the leaf or in any parent directory. */
-export function snapshot(root: string, rel: string): Snapshot {
-  let dir = root;
-  const parts = rel.split("/");
-  for (const part of parts.slice(0, -1)) {
-    dir = path.join(dir, part);
-    try {
-      const st = lstatSync(dir);
-      if (st.isSymbolicLink() || !st.isDirectory())
-        return { kind: "bad", why: `${rel}: parent is not a plain directory` };
-    } catch {
-      return { kind: "deleted" };
-    }
-  }
-  const full = path.join(root, rel);
-  let fd: number;
-  try {
-    fd = openSync(full, constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0));
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return { kind: "deleted" };
-    return {
-      kind: "bad",
-      why: `${rel}: ${code === "ELOOP" ? "symlink" : `cannot open (${code})`}`,
-    };
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) return { kind: "bad", why: `${rel}: not a regular file` };
-    if (st.size > MAX_FILE_BYTES)
-      return { kind: "bad", why: `${rel}: larger than ${MAX_FILE_BYTES} bytes` };
-    const bytes = Buffer.alloc(st.size);
-    let off = 0;
-    while (off < st.size) {
-      const n = readSync(fd, bytes, off, st.size - off, off);
-      if (n === 0) break;
-      off += n;
-    }
-    if (off !== st.size) return { kind: "bad", why: `${rel}: changed while reading` };
-    return { kind: "file", bytes, exec: (st.mode & 0o111) !== 0 };
-  } finally {
-    closeSync(fd);
-  }
+/**
+ * Reads files relative to `root` with every path component opened by `openat(O_NOFOLLOW)`
+ * (Python's dir_fd), so swapping any parent directory for a symlink cannot redirect the
+ * read outside the worktree. Each regular file's bytes are copied to `outDir/blob-<i>`.
+ */
+const READER = String.raw`
+import json, os, stat, sys
+root, out, files = sys.argv[1], sys.argv[2], json.loads(sys.stdin.read())
+F = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+D = F | getattr(os, "O_DIRECTORY", 0)
+res = []
+rfd = os.open(root, D)
+for i, rel in enumerate(files):
+    fds = []
+    try:
+        cur = rfd
+        parts = rel.split("/")
+        for part in parts[:-1]:
+            cur = os.open(part, D, dir_fd=cur); fds.append(cur)
+        fd = os.open(parts[-1], F | getattr(os, "O_NONBLOCK", 0), dir_fd=cur); fds.append(fd)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            res.append({"kind": "bad", "why": rel + ": not a regular file"}); continue
+        if st.st_size > ${MAX_FILE_BYTES}:
+            res.append({"kind": "bad", "why": rel + ": too large"}); continue
+        blob = os.path.join(out, "blob-%d" % i)
+        with os.fdopen(os.dup(fd), "rb") as src, open(blob, "wb") as dst:
+            data = src.read()
+            if len(data) != st.st_size:
+                res.append({"kind": "bad", "why": rel + ": changed while reading"}); continue
+            dst.write(data)
+        res.append({"kind": "file", "blob": blob, "exec": bool(st.st_mode & 0o111)})
+    except FileNotFoundError:
+        res.append({"kind": "deleted"})
+    except NotADirectoryError:
+        res.append({"kind": "bad", "why": rel + ": parent is not a directory"})
+    except OSError as e:
+        res.append({"kind": "bad", "why": rel + ": " + ("symlink" if e.errno == 62 or e.errno == 40 else e.strerror or "cannot open")})
+    finally:
+        for f in fds: os.close(f)
+print(json.dumps(res))
+`;
+
+export function readSnapshots(root: string, files: string[], outDir: string): Promise<Snapshot[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("python3", ["-I", "-c", READER, root, outDir], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`file reader failed: ${stderr.trim()}`));
+      try {
+        const parsed = JSON.parse(stdout) as Snapshot[];
+        if (parsed.length !== files.length) throw new Error("reader returned a short list");
+        resolve(parsed);
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+    child.stdin.end(JSON.stringify(files));
+  });
 }
 
 export async function hostCommit(
@@ -301,9 +318,8 @@ async function commitLocked(
       `${ref} is ${head.stdout.trim() || "unknown"}, expected ${req.expectHead}.`,
     );
   }
-  const attr = `--attr-source=${req.expectHead}`;
   const status = await git(
-    [attr, "status", "--porcelain=v1", "-z", "-uall", "--no-renames", "--ignore-submodules=none"],
+    ["status", "--porcelain=v1", "-z", "-uall", "--no-renames", "--ignore-submodules=none"],
     root,
   );
   if (!status.ok) return refuse("git-failed", `git status failed: ${status.stderr.trim()}`);
@@ -325,8 +341,14 @@ async function commitLocked(
     if (!seed.ok) return refuse("git-failed", `read-tree failed: ${seed.stderr.trim()}`);
     const expected = new Map<string, string>(); // path -> "mode sha" or "deleted"
     const bad: string[] = [];
+    let snaps: Snapshot[];
+    try {
+      snaps = await readSnapshots(root, files, tmp);
+    } catch (e) {
+      return refuse("read-failed", e instanceof Error ? e.message : String(e));
+    }
     for (const [i, rel] of files.entries()) {
-      const snap = snapshot(root, rel);
+      const snap = snaps[i] ?? { kind: "bad", why: `${rel}: not read` };
       if (snap.kind === "bad") {
         bad.push(snap.why);
         continue;
@@ -338,9 +360,7 @@ async function commitLocked(
         expected.set(rel, "deleted");
         continue;
       }
-      const blobFile = path.join(tmp, `blob-${i}`);
-      writeFileSync(blobFile, snap.bytes, { mode: 0o600 });
-      const hashed = await git(["hash-object", "-w", "--no-filters", "--", blobFile], root);
+      const hashed = await git(["hash-object", "-w", "--no-filters", "--", snap.blob], root);
       const sha = hashed.stdout.trim();
       if (!hashed.ok || !SHA_RE.test(sha)) {
         return refuse("git-failed", `hash-object failed for ${rel}: ${hashed.stderr.trim()}`);
@@ -411,7 +431,7 @@ async function commitLocked(
     const symAfter = await git(["symbolic-ref", "--quiet", "HEAD"], root);
     if (symAfter.ok && symAfter.stdout.trim() === ref) {
       await git(["read-tree", "--reset", sha], root);
-      await git([attr, "update-index", "-q", "--refresh"], root);
+      await git(["update-index", "-q", "--refresh"], root);
     }
 
     let pushed = false;
@@ -429,14 +449,35 @@ async function commitLocked(
         ],
         root,
       );
-      const check = await git(["ls-remote", "--", remote, ref], root);
-      const remoteSha = check.stdout.trim().split(/\s+/)[0];
-      if (!push.ok || !check.ok || remoteSha !== sha) {
+      if (!push.ok) {
         return refuse(
           "push-failed",
-          `Committed ${sha} on ${ref}, but the remote branch is ${remoteSha || "unknown"}: ${push.stderr.trim()}`,
+          `Committed ${sha} on ${ref}, but push failed: ${push.stderr.trim()}`,
           committed,
         );
+      }
+      const urls = await git(["remote", "get-url", "--push", "--all", "--", remote], root);
+      const targets = urls.stdout
+        .split("\n")
+        .map((u) => u.trim())
+        .filter(Boolean);
+      if (!urls.ok || targets.length === 0) {
+        return refuse(
+          "push-unverified",
+          `Pushed ${sha} but could not resolve push URLs for ${remote}.`,
+          committed,
+        );
+      }
+      for (const url of targets) {
+        const check = await git(["ls-remote", "--", url, ref], root);
+        const remoteSha = check.stdout.trim().split(/\s+/)[0];
+        if (!check.ok || remoteSha !== sha) {
+          return refuse(
+            "push-unverified",
+            `Committed ${sha} on ${ref}, but a push destination shows ${remoteSha || "nothing"}.`,
+            committed,
+          );
+        }
       }
       pushed = true;
     }

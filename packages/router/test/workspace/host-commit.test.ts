@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DispatchTask } from "../../src/store/dispatch-repository.js";
@@ -223,4 +223,55 @@ describe("hostCommit", () => {
     if (r.ok) expect(git(bare, "rev-parse", "refs/heads/feature/x").trim()).toBe(r.sha);
     expect(git(bare, "tag", "--list")).toBe("");
   });
+
+  it("refuses a symlinked parent directory", async () => {
+    const { dir, head } = repo();
+    const outside = tempDir("router-out-");
+    writeFileSync(path.join(outside, "secret.txt"), "secret\n");
+    mkdirSync(path.join(dir, "design"));
+    symlinkSync(outside, path.join(dir, "design", "sub"));
+    const r = await hostCommit(store({ cwd: dir }), run, req(head));
+    expect(r.ok).toBe(false);
+    expect(git(dir, "rev-parse", "HEAD").trim()).toBe(head);
+  });
+
+  it("verifies every push URL", async () => {
+    const { dir, head } = repo();
+    const fetchBare = tempDir("router-fetch-");
+    const pushBare = tempDir("router-push-");
+    git(fetchBare, "init", "-q", "--bare");
+    git(pushBare, "init", "-q", "--bare");
+    git(dir, "remote", "add", "origin", fetchBare);
+    git(dir, "config", "remote.origin.pushurl", pushBare);
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    const r = await hostCommit(store({ cwd: dir }), run, req(head, { push: true }));
+    expect(r).toMatchObject({ ok: true, pushed: true });
+    if (r.ok) expect(git(pushBare, "rev-parse", "refs/heads/feature/x").trim()).toBe(r.sha);
+  });
+
+  it("never runs a configured clean filter", async () => {
+    const { dir, head } = repo();
+    const marker = path.join(tempDir("router-mark2-"), "ran");
+    writeFileSync(path.join(dir, ".gitattributes"), "*.md filter=evil\n");
+    git(dir, "add", ".gitattributes");
+    git(dir, "commit", "-q", "-m", "attrs");
+    const base = git(dir, "rev-parse", "HEAD").trim();
+    git(dir, "config", "filter.evil.clean", `sh -c 'touch ${marker}; cat'`);
+    git(dir, "config", "filter.evil.process", `sh -c 'touch ${marker}'`);
+    rmMarker(marker);
+    mkdirSync(path.join(dir, "design"));
+    writeFileSync(path.join(dir, "design", "a.md"), "a\n");
+    void head;
+    expect(await hostCommit(store({ cwd: dir }), run, req(base))).toMatchObject({ ok: true });
+    expect(existsSync(marker)).toBe(false);
+  });
 });
+
+function rmMarker(p: string): void {
+  try {
+    rmSync(p);
+  } catch {
+    /* absent */
+  }
+}

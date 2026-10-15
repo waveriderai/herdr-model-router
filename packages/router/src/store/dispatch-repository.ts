@@ -408,13 +408,25 @@ export class DispatchRepository {
    * a host-side commit. Atomic (primary key on worktree_id); false when anyone owns it.
    */
   acquireCommitLock(worktreeId: string, taskId: string): boolean {
-    try {
+    const take = this.db.transaction(() => {
+      if (writerAuthorityRefusal(this.db, worktreeId)) return false;
+      if (this.ownerOf(worktreeId)) return false;
+      // Only the most recent writer task on this worktree may commit what is there.
+      const latest = this.db
+        .prepare(
+          "select id from dispatch_tasks where worktree_id = ? and access = 'write' order by created_at desc, rowid desc limit 1",
+        )
+        .get(worktreeId) as { id: string } | undefined;
+      if (latest?.id !== taskId) return false;
       this.db
         .prepare(
           "insert into writer_ownership (worktree_id, task_id, acquired_at) values (?, ?, ?)",
         )
         .run(worktreeId, taskId, new Date().toISOString());
       return true;
+    });
+    try {
+      return take.immediate();
     } catch {
       return false;
     }
