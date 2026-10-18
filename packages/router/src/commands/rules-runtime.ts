@@ -189,10 +189,15 @@ export function openWorkflowDeps(
         }
       : {}),
     callerEnv: env.HERDR_PANE_ID ? { HERDR_PANE_ID: env.HERDR_PANE_ID } : {},
-    planRole: ({ role, cwd: dir, readOnly, parent }) => {
+    planRole: ({ role, cwd: dir, readOnly, parent, bypassPermissions }) => {
       const preview = previewPlan(
         { ...location, cwd: dir },
-        { role, ...(readOnly ? { readOnly } : {}), ...(parent !== undefined ? { parent } : {}) },
+        {
+          role,
+          ...(readOnly ? { readOnly } : {}),
+          ...(parent !== undefined ? { parent } : {}),
+          ...(bypassPermissions ? { bypassPermissions } : {}),
+        },
       );
       return preview.ok
         ? { ok: true, plan: preview.plan }

@@ -13,7 +13,7 @@ import {
   type ResolvedLaunch,
 } from "../rules/dispatch.js";
 import { herdrKindOf } from "../rules/native-argv.js";
-import type { PlannedLane, RoutePlan } from "../rules/plan.js";
+import type { BypassSource, PlannedLane, RoutePlan } from "../rules/plan.js";
 import type { ReadinessKind } from "../rules/readiness.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
 import {
@@ -85,6 +85,8 @@ export interface WorkflowDeps {
     cwd: string;
     readOnly: boolean;
     parent?: string;
+    /** The per-run opt-in to a writer's full permission bypass; refused for read-only. */
+    bypassPermissions?: boolean;
   }) => { ok: true; plan: RoutePlan } | { ok: false; error: string };
   /** How long one collab dispatch may wait for the writer to start working. */
   collabDispatchTimeoutMs?: number;
@@ -536,6 +538,8 @@ export interface StartInput {
   workflowId?: string;
   /** The operator's trusted skill roots, in precedence order (`--skills-root`). */
   skillRoots?: readonly string[];
+  /** `--dangerously-bypass-permissions`: the writer only; recorded for every revision. */
+  bypassPermissions?: boolean;
 }
 
 /**
@@ -627,7 +631,10 @@ export function routeSources(plan: RoutePlan): Step<{ rules: string; policy: str
   return { ok: true, value: { rules: planned.rules, policy: planned.policy } };
 }
 
-/** The frozen route agent-collab receives. HMR planned it; agent-collab only validates it. */
+/**
+ * The frozen route agent-collab receives. HMR planned it; agent-collab only validates it. A
+ * bypassed writer's route says so (`permissions: "bypass"`); an ordinary route has no such key.
+ */
 export function rulesRoute(input: {
   lane: PlannedLane;
   role: string;
@@ -637,6 +644,7 @@ export function rulesRoute(input: {
   sources: { rules: string; policy: string | null };
   workflowId: string;
   briefSha256: string;
+  bypassFrom?: BypassSource;
 }): Record<string, string | null> {
   return {
     version: ROUTE_CONTRACT,
@@ -653,6 +661,7 @@ export function rulesRoute(input: {
     policy_sha256: input.sources.policy,
     workflow_id: input.workflowId,
     brief_sha256: input.briefSha256,
+    ...(input.bypassFrom ? { permissions: "bypass", bypass_from: input.bypassFrom } : {}),
   };
 }
 
@@ -680,6 +689,7 @@ export async function startWorkflow(
     cwd: input.cwd,
     readOnly: false,
     ...parent,
+    ...(input.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   if (!planned.ok) return fail("plan-refused", planned.error);
   const plan = planned.plan;
@@ -748,6 +758,7 @@ export async function startWorkflow(
       writerRole: plan.role,
       writerDescriptor: plan.lanes[0]!.descriptor,
       ...(input.parent ? { parentDescriptor: input.parent } : {}),
+      ...(plan.bypassFrom ? { writerBypass: plan.bypassFrom } : {}),
       cwd: canonicalCwd(input.cwd),
       baseline: baseline.value.revision,
       promptSha256: sha256(prompt),
@@ -784,6 +795,7 @@ export async function startWorkflow(
             sources,
             workflowId,
             briefSha256: opened.workflow.briefSha256,
+            ...(plan.bypassFrom ? { bypassFrom: plan.bypassFrom } : {}),
           }),
         )
       : await startStandalone(deps, lease, opened.workflow, opened.attempt, plan, prompt);
@@ -1473,12 +1485,20 @@ export async function reviseWorkflow(
     resume?: boolean;
     /** Modes requested for this revision only; none unless asked again. */
     modes?: readonly string[];
+    /** Restates the start's bypass; refused on a writer that started without one. */
+    bypassPermissions?: boolean;
   },
 ): Promise<Step<{ workflow: Workflow; attempt: WorkflowAttempt }>> {
   const loaded = loadWorkflow(deps, input.workflowId);
   if (!loaded.ok) return loaded;
   const caller = refuseWorkerCaller(deps, loaded.value);
   if (!caller.ok) return caller;
+  if (input.bypassPermissions && !loaded.value.writerBypass) {
+    return fail(
+      "bypass-not-started",
+      `The writer of ${loaded.value.id} was started without a permission bypass. A revision goes to the same running session and never relaunches it, so it cannot widen its permissions. Nothing was sent; start a new workflow with --dangerously-bypass-permissions for a bypassed writer.`,
+    );
+  }
   if (input.resume) return resumeRevision(deps, input.workflowId, input.expectedAttemptId);
   const delta = input.delta;
   if (!delta) return fail("delta-missing", "A revision needs the requested changes.");

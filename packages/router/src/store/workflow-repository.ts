@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type Database from "better-sqlite3";
+import type { BypassSource } from "../rules/plan.js";
 import type { BoundIdentity } from "../workflow/identity.js";
 import type { Revision } from "../workflow/contracts.js";
 
@@ -41,6 +42,11 @@ export interface Workflow {
   baseline: Revision;
   /** The parent descriptor that resolved parent aliases at start. */
   parentDescriptor?: string;
+  /**
+   * Set when the writer was launched with its CLI's full permission bypass, and from where.
+   * Fixed at start: every revision goes to that same session.
+   */
+  writerBypass?: BypassSource;
   taskId?: string;
   externalRunId?: string;
   /** agent-collab startup pane, and whether its close was confirmed (undefined: still open). */
@@ -130,6 +136,7 @@ interface WorkflowRow {
   writer_role: string;
   writer_descriptor: string;
   parent_descriptor: string | null;
+  writer_bypass: BypassSource | null;
   cwd: string;
   baseline_head: string;
   baseline_content: string;
@@ -198,6 +205,7 @@ function workflow(row: WorkflowRow): Workflow {
     cwd: row.cwd,
     baseline: { head: row.baseline_head, content: row.baseline_content },
     ...(row.parent_descriptor ? { parentDescriptor: row.parent_descriptor } : {}),
+    ...(row.writer_bypass ? { writerBypass: row.writer_bypass } : {}),
     ...(row.task_id ? { taskId: row.task_id } : {}),
     ...(row.external_run_id ? { externalRunId: row.external_run_id } : {}),
     ...(row.start_pane_id
@@ -460,6 +468,7 @@ export class WorkflowRepository {
     baseline: Revision;
     promptSha256: string;
     parentDescriptor?: string;
+    writerBypass?: BypassSource;
     id?: string;
     attemptId?: string;
   }): { workflow: Workflow; attempt: WorkflowAttempt; lease: OperationLease } {
@@ -494,9 +503,9 @@ export class WorkflowRepository {
       this.db
         .prepare(
           `insert into workflows (id, worktree_id, backend, state, brief_sha256, writer_role, writer_descriptor,
-             parent_descriptor, cwd, baseline_head, baseline_content,
+             parent_descriptor, writer_bypass, cwd, baseline_head, baseline_content,
              op_token, op_name, op_pid, op_host, op_started_at, created_at, updated_at)
-           values (?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 'start', ?, ?, ?, ?, ?)`,
+           values (?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'start', ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -506,6 +515,7 @@ export class WorkflowRepository {
           input.writerRole,
           input.writerDescriptor,
           input.parentDescriptor ?? null,
+          input.writerBypass ?? null,
           input.cwd,
           input.baseline.head,
           input.baseline.content,

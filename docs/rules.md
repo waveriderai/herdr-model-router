@@ -66,12 +66,12 @@ and `--parent`; write the full model id, such as `claude-opus-5-5`.
 Each lane launches with the permission profile of its access. Every flag is one the CLI itself
 enforces, and the router checks it in the installed CLI's `--help` before launching.
 
-| Profile   | Auto-approved                                                      | Who gets it                                                |
-| --------- | ------------------------------------------------------------------ | ---------------------------------------------------------- |
-| read-only | File reads and web fetches; never edits                            | Panels, `--read-only`, globally read-only roles, verifiers |
-| writer    | Also edits inside its working directory (the worktree); sandbox on | Single-lane writers                                        |
-| control   | Nothing beyond the CLI's ordinary prompts                          | The coordinator (`hmr start`)                              |
-| bypass    | Everything: the CLI's full approval and sandbox bypass             | Only a writer run with `--dangerously-bypass-permissions`  |
+| Profile   | Auto-approved                                                      | Who gets it                                                          |
+| --------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| read-only | File reads and web fetches; never edits                            | Panels, `--read-only`, globally read-only roles, verifiers           |
+| writer    | Also edits inside its working directory (the worktree); sandbox on | Single-lane writers                                                  |
+| control   | Nothing beyond the CLI's ordinary prompts                          | The coordinator (`hmr start`)                                        |
+| bypass    | Everything: the CLI's full approval and sandbox bypass             | Only an opted-in writer; see [Permission bypass](#permission-bypass) |
 
 | Provider   | read-only                                                                                                                                   | writer                                                                                                | bypass                                       |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------- |
@@ -138,22 +138,50 @@ complete` runs without a prompt): Cursor reads extra writable roots only from
   `Edit(./**)` is rooted at its working directory, and the `workspace` sandbox lets it write
   only there, `~/.grok`, and temp directories.
 - Anything not auto-approved still prompts in the pane. The router never answers a prompt.
-- `--dangerously-bypass-permissions` applies to one `hmr run` in rules or semantic mode. It is
-  refused for a read-only plan (`bypass-read-only`), and on `opencode`. The plan notes the
-  opt-in, and `--dry-run` shows the exact argv. Workflows and coordinators never take it. Claude
-  shows a one-time confirmation for its bypass mode; the router does not answer it, so accept it
-  yourself once in a separate session first.
+
+## Permission bypass
+
+A writer runs with the `bypass` profile only when you opt in. It is never a default.
+
+- **Per run.** `--dangerously-bypass-permissions` on `hmr run` (rules or semantic mode),
+  `workflow plan`, or `workflow start`. It is refused for a read-only plan
+  (`bypass-read-only`), under a project policy that forbids it (`bypass-forbidden`), and on
+  `opencode`.
+- **Per role, in the rules file.** A directive comment lists the roles whose writer launches
+  always bypass, without the flag:
+
+      # hmr: bypass-permissions bug-fix, ops maintenance
+
+  Names are normalized like role names, and any alias of a listed role counts. A role listed
+  both here and in `# hmr: readonly`, or a panel role, fails the whole file. Planning a listed
+  role read-only (a built-in or aliased read-only role, a role the project policy does not list
+  as a writer, `--read-only`, or a workflow verifier) refuses the plan with `bypass-read-only`,
+  the same as the flag, and the message names this line; remove the role from it. Under a
+  policy that forbids a bypass, a listed writer launches with its ordinary writer profile and
+  the plan notes why. An older router reports the directive as unknown, so update every router
+  that reads the file.
+
+Both say where the bypass came from: `plan` and `run --dry-run` print
+`permissions: bypass (from --dangerously-bypass-permissions)` or
+`(from the rules file's bypass-permissions)`, and the JSON plan has `bypassFrom: "flag"` or
+`"rules"`. `--dry-run` shows the exact argv. A bypassed writer gives up the one-worktree write
+fence: its CLI skips its approvals and sandbox, so nothing but HMR's single-writer lease keeps
+its writes inside the worktree. Verifier lanes and panels are never bypassed. `hmr start`
+refuses a coordinator role listed in the directive (`coordinator-bypass`): a coordinator runs
+with the CLI's ordinary permissions. Claude shows a one-time confirmation for its bypass mode;
+the router does not answer it, so accept it yourself once in a separate session first.
 
 ## Project policy
 
 `<project>/.model-router/policy.json`:
 
-| Key                | Effect                                                                                                                                                                        |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`          | Must be `1`                                                                                                                                                                   |
-| `allowedProviders` | Lanes on other providers refuse the plan                                                                                                                                      |
-| `pins`             | Role → exact descriptor (every lane) or list (lane by lane). Every key naming the role or one of its aliases must hold; any mismatch refuses the plan, whatever the key order |
-| `writerRoles`      | Single-lane roles allowed to write                                                                                                                                            |
+| Key                       | Effect                                                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                 | Must be `1`                                                                                                                                                                   |
+| `allowedProviders`        | Lanes on other providers refuse the plan                                                                                                                                      |
+| `pins`                    | Role → exact descriptor (every lane) or list (lane by lane). Every key naming the role or one of its aliases must hold; any mismatch refuses the plan, whatever the key order |
+| `writerRoles`             | Single-lane roles allowed to write                                                                                                                                            |
+| `forbidBypassPermissions` | `true`: no lane takes a permission bypass. The per-run flag refuses the plan (`bypass-forbidden`); a rules-file opt-in runs with the ordinary writer profile                  |
 
 Any other key is rejected. A policy cannot add models, credentials, commands, environment, or
 permissions.
@@ -306,6 +334,12 @@ start -> dispatched -> result (receipt) -> verify -> reviewed -> accept -> deliv
 - **Revise.** Same session, same pane, new attempt, after the same identity and readiness
   checks as `task revise`. Never after an unresolved send. A revision after acceptance reopens
   it.
+- **Writer permissions.** Fixed at start and recorded on the workflow (`writerBypass`:
+  `flag`, `rules`, or absent). A revision never relaunches the writer, so it keeps them:
+  `workflow revise --dangerously-bypass-permissions` restates a bypass the workflow started
+  with, and is refused (`bypass-not-started`) on a writer that started without one. Editing the
+  rules file or the policy later affects new workflows only. `workflow plan` and
+  `workflow status` print a `Permissions: bypass (from ...)` line for a bypassed writer.
 - **Accept.** The current attempt's result is `impl-complete`, every verifier lane passed on
   the same revision, and the worktree is still at that revision. Acceptance releases nothing.
 - **Delivery.** The coordinator records the authorized delivery or `--not-applicable`. A Git
@@ -356,7 +390,9 @@ bounded small fix. HMR does not rewrite the rules file or pick another model. Th
 checked by HMR's own project policy. Then HMR starts the native CLI itself (the same `env -i`
 launch, readiness, and dialog refusal), binds the session, and calls `agent-collab acquire`
 with the frozen route: provider, Herdr kind, model, effort, role, classification, worktree,
-exact directory, and the SHA-256 of the rules file, the project policy, and the brief.
+exact directory, and the SHA-256 of the rules file, the project policy, and the brief. A
+bypassed writer's route also has `permissions: "bypass"` and `bypass_from` (`flag` or
+`rules`); an ordinary route has neither key.
 agent-collab validates it, keeps it unchanged for the whole run, and refuses a writer in any
 other directory, even one inside the same worktree. Editing the rules file later affects new
 workflows only; a revision always goes to the same session. agent-collab is then the

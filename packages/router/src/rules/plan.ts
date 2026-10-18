@@ -6,6 +6,9 @@ import type { RulesSource } from "./rules-source.js";
 
 export type Access = "read" | "write";
 
+/** Where a writer's permission bypass came from. */
+export type BypassSource = "flag" | "rules";
+
 export interface PlannedLane {
   /** 1-based position in the role's lane list. */
   index: number;
@@ -31,9 +34,11 @@ export interface RoutePlan {
   access: Access;
   /**
    * Overrides the writer profile: `control` for a coordinator, `bypass` only from the explicit
-   * per-run opt-in. A read-only plan never carries one.
+   * per-run opt-in or the rules file's opt-in for this role. A read-only plan never carries one.
    */
   permissions?: "control" | "bypass";
+  /** Set with `permissions: "bypass"`: the per-run flag, or the rules file's per-role opt-in. */
+  bypassFrom?: BypassSource;
   /** Read-only globally (built-in or rules-file directive): no caller may launch it writable. */
   forcedReadOnly: boolean;
   /** The rules file lists more than one lane, even if parent-alias copies were skipped. */
@@ -68,6 +73,7 @@ export type PlanRefusalCode =
   | "panel-writer-conflict"
   | "readonly-writer-conflict"
   | "bypass-read-only"
+  | "bypass-forbidden"
   | "review-only-account"
   | "no-fix-account";
 
@@ -97,7 +103,9 @@ export interface PlanInput {
   readOnly?: boolean;
   /**
    * The per-run opt-in to the CLI's full permission bypass. Never a default, and refused for
-   * a read-only plan.
+   * a read-only plan or under a policy that forbids it. The rules file's `bypass-permissions`
+   * directive is the durable opt-in: it refuses a read-only plan the same way, and under a policy
+   * that forbids a bypass the writer keeps its ordinary profile.
    */
   bypassPermissions?: boolean;
 }
@@ -254,9 +262,41 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
       `role "${role}" runs read-only here, and a permission bypass applies only to a writer; nothing was planned`,
     );
   }
+  const optedIn = found.names.some((name) => input.rules.bypassRoles?.includes(name));
+  if (optedIn && access === "read") {
+    const because = definedAsPanel
+      ? "it is a panel"
+      : forcedReadOnly
+        ? "it is read-only globally"
+        : input.readOnly
+          ? "it was asked for read-only"
+          : "project policy does not list it as a writer";
+    return refuse(
+      "bypass-read-only",
+      `the rules file's "# hmr: bypass-permissions" line opts role "${role}" into a permission bypass, but ${because}, and a permission bypass applies only to a writer; remove the role from that line. Nothing was planned`,
+    );
+  }
+  const forbidden = input.policy?.forbidBypassPermissions === true;
+  if (input.bypassPermissions && forbidden) {
+    return refuse(
+      "bypass-forbidden",
+      `project policy forbids a permission bypass (forbidBypassPermissions); role "${role}" was not planned`,
+    );
+  }
   const notes = forcedReadOnly ? [`role "${role}" is read-only globally`] : [];
+  let bypassFrom: BypassSource | undefined;
   if (input.bypassPermissions) {
+    bypassFrom = "flag";
     notes.push("permission bypass opted in for this run: the CLI skips its approvals and sandbox");
+  } else if (optedIn && forbidden) {
+    notes.push(
+      `the rules file opts role "${role}" into a permission bypass, but project policy forbids one, so it runs with the writer profile`,
+    );
+  } else if (optedIn) {
+    bypassFrom = "rules";
+    notes.push(
+      "permission bypass opted in by the rules file (bypass-permissions): the CLI skips its approvals and sandbox",
+    );
   }
   const fallbacks = planFallbacks({
     found,
@@ -274,7 +314,7 @@ export function planRoute(input: PlanInput): RoutePlan | PlanRefusal {
     roleNames: found.names,
     kind,
     access,
-    ...(input.bypassPermissions ? { permissions: "bypass" as const } : {}),
+    ...(bypassFrom ? { permissions: "bypass" as const, bypassFrom } : {}),
     forcedReadOnly,
     definedAsPanel,
     rulesSource: input.rulesSource,

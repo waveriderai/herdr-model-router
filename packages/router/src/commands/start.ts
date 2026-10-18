@@ -256,6 +256,12 @@ export async function executeStart(
       { code: "coordinator-read-only" },
     );
   }
+  if (plan.bypassFrom) {
+    return refused(
+      `Role "${plan.role}" is listed in the rules file's bypass-permissions directive, but a coordinator runs with the CLI's ordinary permissions. Remove it from that directive. Nothing was started.`,
+      { code: "coordinator-bypass" },
+    );
+  }
   const lane = plan.lanes[0]!;
   const skillFile = deps.modelRouterSkill ?? bundledModelRouterSkill();
   if (!existsSync(skillFile)) {

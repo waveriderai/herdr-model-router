@@ -19,7 +19,13 @@ import {
   type WorkflowReport,
 } from "../workflow/service.js";
 import type { Backend, WorkflowRepository } from "../store/workflow-repository.js";
-import { previewPlan, type CommandResult, type RulesLocation } from "./rules-commands.js";
+import type { BypassSource } from "../rules/plan.js";
+import {
+  bypassOrigin,
+  previewPlan,
+  type CommandResult,
+  type RulesLocation,
+} from "./rules-commands.js";
 
 function refused(error: string, extra: Record<string, unknown> = {}, code = 2): CommandResult {
   return { output: error, json: { ok: false, error, ...extra }, code };
@@ -44,6 +50,10 @@ function requireEvidence(evidence: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function bypassLine(from: BypassSource): string {
+  return `Permissions: bypass${bypassOrigin(from)}. The writer's CLI skips its approvals and sandbox, so nothing keeps its writes inside this worktree; every revision keeps it.`;
+}
+
 function formatReport(report: WorkflowReport): string {
   const { workflow } = report;
   const lines = [
@@ -55,6 +65,7 @@ function formatReport(report: WorkflowReport): string {
         ]
       : ["Writer: not bound"]),
     ...(workflow.externalRunId ? [`agent-collab run: ${workflow.externalRunId}`] : []),
+    ...(workflow.writerBypass ? [bypassLine(workflow.writerBypass)] : []),
     ...report.attempts.map(
       (attempt) =>
         `  attempt ${attempt.seq} [${attempt.id}] ${attempt.purpose}: send ${attempt.sendState}` +
@@ -133,6 +144,7 @@ export function executeWorkflowPlan(
   briefFile: string,
   parent?: string,
   skillRoots: readonly string[] = [],
+  bypassPermissions = false,
 ): CommandResult {
   const read = readText(briefFile, "brief");
   if (!read.ok) return read.result;
@@ -141,7 +153,11 @@ export function executeWorkflowPlan(
   const brief = parsed.value;
   // The same parent resolves every parent alias in the writer and verifier roles.
   const withParent = parent !== undefined ? { parent } : {};
-  const writer = previewPlan(location, { role: brief.writerRole, ...withParent });
+  const writer = previewPlan(location, {
+    role: brief.writerRole,
+    ...withParent,
+    ...(bypassPermissions ? { bypassPermissions: true } : {}),
+  });
   if (!writer.ok) return writer.result;
   if (writer.plan.access !== "write" || writer.plan.lanes.length !== 1) {
     return refused(`Role "${writer.plan.role}" is not a single-lane writer role.`, {
@@ -162,6 +178,7 @@ export function executeWorkflowPlan(
   const lines = [
     `Workflow brief "${brief.title}"`,
     `Writer: role ${writer.plan.role} -> ${writer.plan.lanes[0]!.descriptor} (write)`,
+    ...(writer.plan.bypassFrom ? [`  ${bypassLine(writer.plan.bypassFrom)}`] : []),
     ...verifiers.map(
       (plan) =>
         `Verifier: role ${plan.role} -> ${plan.lanes.map((lane) => lane.descriptor).join(", ")} (read-only, ${plan.lanes.length} lane(s), every lane must pass)`,
@@ -234,6 +251,7 @@ export async function executeWorkflowStart(
     env: NodeJS.Dict<string>;
     parent?: string;
     skillRoots?: readonly string[];
+    bypassPermissions?: boolean;
   },
 ): Promise<CommandResult> {
   if (!isHerdrEnv(input.env)) {
@@ -250,6 +268,7 @@ export async function executeWorkflowStart(
     cwd: input.cwd,
     ...(input.parent !== undefined ? { parent: input.parent } : {}),
     ...(input.skillRoots ? { skillRoots: input.skillRoots } : {}),
+    ...(input.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   const id = started.ok ? started.value.workflow.id : undefined;
   return fromStep(started, deps, id, ({ workflow, attempt }) =>
@@ -331,6 +350,7 @@ export async function executeWorkflowRevise(
     file?: string;
     resume?: boolean;
     modes?: readonly string[];
+    bypassPermissions?: boolean;
   },
 ): Promise<CommandResult> {
   let delta: string | undefined;
@@ -353,13 +373,17 @@ export async function executeWorkflowRevise(
     ...(delta ? { delta } : {}),
     ...(input.resume ? { resume: true } : {}),
     ...(input.modes?.length ? { modes: input.modes } : {}),
+    ...(input.bypassPermissions ? { bypassPermissions: true } : {}),
   });
   return fromStep(
     revised,
     deps,
     input.workflowId,
-    ({ attempt }) =>
-      `Revision attempt ${attempt.id} went to the same writer session: ${attempt.sendState}.`,
+    ({ workflow, attempt }) =>
+      `Revision attempt ${attempt.id} went to the same writer session: ${attempt.sendState}.` +
+      (workflow.writerBypass
+        ? ` It keeps the permission bypass it started with${bypassOrigin(workflow.writerBypass)}.`
+        : ""),
   );
 }
 

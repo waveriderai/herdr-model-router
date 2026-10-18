@@ -135,6 +135,16 @@ router workflow plan --brief brief.json [--parent provider:model@effort] [--skil
 router workflow start --brief brief.json [--parent provider:model@effort] [--skills-root <dir>] --json
 ```
 
+Add `--dangerously-bypass-permissions` to `plan` and `start` only when the user asked for a
+bypassed writer for this workflow. The writer then runs with its CLI's full approval and
+sandbox bypass and gives up the one-worktree write fence: its CLI can write outside the
+worktree. Verifiers are never bypassed, and a read-only writer role refuses the flag. A role
+the rules file lists in `# hmr: bypass-permissions` is bypassed without the flag, and refuses
+the same way (`bypass-read-only`) wherever it runs read-only, including as a verifier; a project
+policy with `forbidBypassPermissions: true` refuses the flag and keeps an opted-in role
+fenced. `workflow plan` and `workflow status` print `Permissions: bypass (from ...)` for a
+bypassed writer, and `report.workflow.writerBypass` is `flag` or `rules`.
+
 The writer receives the brief and the exact result format once. The rules file alone picks
 its CLI and model: Claude, Codex, or Grok. On agent-collab the start first checks, before any
 pane exists, that agent-collab offers the `hmr.rules-route/v1` contract for that writer kind
@@ -191,7 +201,10 @@ router workflow accept <id> --attempt <attempt> --evidence "all checkers pass on
 ```
 
 A revision goes to the same writer session as a new attempt; then repeat steps 3 and 4 with
-the new attempt id. If the revision was refused before it was sent (for example the writer
+the new attempt id. It keeps the permissions the writer started with: the session is never
+relaunched, so `--dangerously-bypass-permissions` on `revise` only restates a bypass the
+workflow started with, and is refused (`bypass-not-started`) on a writer that started fenced.
+To change a writer's permissions, start a new workflow. If the revision was refused before it was sent (for example the writer
 was not idle), `report.next` offers `router workflow revise <id> --attempt <pending> --resume`
 to send that same prompt once. Acceptance needs every verifier lane to pass on the same
 revision, records your evidence, and releases nothing.

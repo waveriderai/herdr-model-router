@@ -33,6 +33,11 @@ export const ProjectPolicySchema = z.strictObject({
     .optional(),
   /** Single-lane roles that may write. Omitted: every single-lane role may write. */
   writerRoles: z.array(RoleNameSchema).optional(),
+  /**
+   * `true`: no lane in this project takes a permission bypass. The per-run flag is refused; a
+   * rules-file opt-in launches with the ordinary writer profile. `false` or omitted adds nothing.
+   */
+  forbidBypassPermissions: z.boolean().optional(),
 });
 
 export type ProjectPolicy = z.input<typeof ProjectPolicySchema>;

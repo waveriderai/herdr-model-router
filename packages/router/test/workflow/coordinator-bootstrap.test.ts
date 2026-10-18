@@ -148,6 +148,12 @@ describe("hmr start: task-only entry through the MDC coordinator (R3, R4, AE6)",
       "coordinator-role-missing",
     ],
     ["a panel coordinator", RULES, { role: "panel lead" }, "coordinator-panel"],
+    [
+      "a coordinator the rules file opts into a permission bypass",
+      `${RULES}# hmr: bypass-permissions coordinator\n`,
+      {},
+      "coordinator-bypass",
+    ],
     ["inherit-parent without a parent", RULES, { role: "delegate" }, "parent-unresolved"],
     [
       "a mode with no trusted skills root",
