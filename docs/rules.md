@@ -83,7 +83,7 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
 
 - Claude's writer settings are
   `{"sandbox":{"enabled":true,"failIfUnavailable":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false,"network":{"allowedDomains":["fonts.googleapis.com","fonts.gstatic.com"],"allowLocalBinding":true}}}`:
-  Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt); no command may run outside it. The writer's `permissions.allow` covers Read/Glob/Grep and Edit/Write under the worktree and hmr's state directory; `dontAsk` denies everything else without prompting (no `bypassPermissions`), including any `excludedCommands` entry that would run outside the sandbox. A lane whose screen shows a sandbox-not-applied warning (Grok continues without enforcement) fails closed: no prompt, no fallback. If the sandbox
+  Bash runs in Claude's sandbox and is auto-approved while sandboxed (no per-command prompt), but not reliably under `dontAsk` (see the writer-brief note below); no command may run outside it. The writer's `permissions.allow` covers Read/Glob/Grep and Edit/Write under the worktree and hmr's state directory; `dontAsk` denies everything else without prompting (no `bypassPermissions`), including any `excludedCommands` entry that would run outside the sandbox. A lane whose screen shows a sandbox-not-applied warning (Grok continues without enforcement) fails closed: no prompt, no fallback. If the sandbox
   cannot start (a missing dependency, an unsupported platform), Claude exits at startup instead
   of running commands unsandboxed, and the lane fails its readiness check. Writers never stop for an approval (Kai, 2026-10-14: "Skip prompts, keep the worktree
   sandbox"). Grok's `--always-approve` is only ever combined with a `--sandbox` profile. Launch preparation (Kai 2026-10-14 8:25 PM PT, `src/rules/launch-prep.ts`, fails closed):
@@ -91,6 +91,15 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
     sandbox exclusion or hook on disk can widen it; Herdr's status hooks are copied from `settings.json` in
     `CLAUDE_CONFIG_DIR` (else `~/.claude`)
     into hmr's `--settings`.
+  - Writer briefs for a Claude writer: do not count on `autoAllowBashIfSandboxed` under `--permission-mode dontAsk`.
+    `dontAsk` denies any Bash call it does not approve, without a prompt, and auto-approval of sandboxed Bash does not
+    cover every command shape. Seen on 2026-10-18 (AGENT-373 kick, writer w67:p2): a plain sandboxed
+    `cat …; git status …; hmr task complete …` ran, but the retry loop `until hmr task complete …; do sleep …; done` was
+    denied ("Claude Code is running in don't ask mode"), and Claude's own guard blocked `sleep 30; hmr task complete …`.
+    The task stayed `dispatching`-blocked until the coordinator prompted a single plain retry. So a brief must:
+    verify its work with the Read tool (not `cat`/shell), use no sleep, loop, or command chaining around hmr, and end with
+    one bare `hmr task complete <task-id> --evidence "…"` (it matches the `Bash(hmr task complete:*)` allow rule). If
+    that answers "still dispatching", the writer stops and reports it; the coordinator retries, not the writer.
   - Grok: hmr keeps the `hmr-writer-<tag>` (extends `workspace`, plus hmr's state dir) and
     `hmr-read-only-<tag>` (extends `read-only`) custom profiles in one managed block per router
     home (`<tag>` = first 8 hex of sha256 of the home) of `~/.grok/sandbox.toml`, written atomically. Grok refuses to start when a custom profile cannot apply; the
