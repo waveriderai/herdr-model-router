@@ -96,7 +96,7 @@ enforces, and the router checks it in the installed CLI's `--help` before launch
     cover every command shape. Seen on 2026-10-18 (AGENT-373 kick, writer w67:p2): a plain sandboxed
     `cat …; git status …; hmr task complete …` ran, but the retry loop `until hmr task complete …; do sleep …; done` was
     denied ("Claude Code is running in don't ask mode"), and Claude's own guard blocked `sleep 30; hmr task complete …`.
-    The task stayed `dispatching`-blocked until the coordinator prompted a single plain retry. So a brief must:
+    The task stayed open until the coordinator prompted one plain retry. So a brief must:
     verify its work with the Read tool (not `cat`/shell), use no sleep, loop, or command chaining around hmr, and end with
     one bare `hmr task complete <task-id> --evidence "…"` (it matches the `Bash(hmr task complete:*)` allow rule). If
     that answers "still dispatching", the writer stops and reports it; the coordinator retries, not the writer.
