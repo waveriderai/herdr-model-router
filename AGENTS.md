@@ -31,9 +31,12 @@ npx vitest --run <path> # one test file
 - Do not read, print, or store credentials. Do not add personal rules files, account names,
   absolute home paths, runtime databases, or generated logs.
 - Keep rules-mode previews free of processes, network, credential reads, and database writes.
-- Never add a permission-bypass flag to a launch by default. The only path to one is the
-  explicit per-run `hmr run --dangerously-bypass-permissions` opt-in for a writer. Never fall
-  back to another model or an API key when a route is unavailable. The one exception is a
+- Never add a permission-bypass flag to a launch by default. It applies only to a writer, and
+  the only paths to one are the explicit opt-ins: `hmr run --dangerously-bypass-permissions`,
+  `hmr workflow plan|start|revise --dangerously-bypass-permissions`, and a
+  `# hmr: bypass-permissions <role>` rules-file line. A project policy's
+  `forbidBypassPermissions` forbids all of them. Never fall back to another model or an API
+  key when a route is unavailable. The one exception is a
   role's own `# fallback:` order, followed only after the launched model reports a quota or
   usage-limit error, or fails to start (a startup dialog, or no ready prompt before the
   readiness timeout) with no prompt sent and its pane confirmed closed (Kai, AGENT-285).

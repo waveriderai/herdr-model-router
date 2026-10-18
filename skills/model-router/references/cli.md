@@ -4,20 +4,20 @@ Commands (rules mode, the default; reads only the rules file and `.model-router/
 
 - `router roles [--rules <path>] [--json]` (also `list`)
 - `router plan --role <role> [--parent provider:model@effort] [--rules <path>] [--read-only] [--json]` (also `preview`)
-- `router run "<task>" --role <role> [--parent ...] [--rules <path>] [--read-only] [--dry-run] [--json]`
+- `router run "<task>" --role <role> [--parent ...] [--rules <path>] [--read-only] [--dangerously-bypass-permissions] [--dry-run] [--json]` (the bypass flag only when the user asked for one)
 - `router run "<task>" --routing-mode semantic [--dry-run]` (TypeSafe picks a role from the rules file; API-billed; an explicit `--role` skips it)
 - `router task status [id]`, `router task revise <id> "<text>"`, `router task complete <id> --evidence "..."`, `router task release <id> --stopped --evidence "..."`, `router task recover <attempt> --delivered|--not-delivered --evidence "..."`
 
 Coordinator workflow (see [workflow.md](workflow.md)):
 
-- `router workflow plan --brief <file> [--rules <path>] [--parent <descriptor>] [--json]` (preview; reads files only)
+- `router workflow plan --brief <file> [--rules <path>] [--parent <descriptor>] [--dangerously-bypass-permissions] [--json]` (preview; reads files only)
 - `router workflow fingerprint [--json]` (this worktree's HEAD and content fingerprint; reads only)
 - `router workflow bind --backend standalone|agent-collab`
-- `router workflow start --brief <file> [--rules <path>] [--parent <descriptor>] [--json]`
+- `router workflow start --brief <file> [--rules <path>] [--parent <descriptor>] [--dangerously-bypass-permissions] [--json]` (the bypass applies to the writer only, for the whole workflow)
 - `router workflow status [id] [--json]`
 - `router workflow result <id> --attempt <attempt> --file <json> [--lane <lane>]`
 - `router workflow verify <id> --attempt <attempt>`
-- `router workflow revise <id> --attempt <attempt> --file <text>` (or `--resume` for a pending revision)
+- `router workflow revise <id> --attempt <attempt> --file <text> [--dangerously-bypass-permissions]` (or `--resume` for a pending revision; the bypass flag only restates the start's bypass)
 - `router workflow accept <id> --attempt <attempt> --evidence "..."`
 - `router workflow delivery <id> --evidence "..." [--commit <rev> | --not-applicable]`
 - `router workflow release <id> --evidence "..." [--abort]`

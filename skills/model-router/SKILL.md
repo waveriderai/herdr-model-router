@@ -38,7 +38,7 @@ router usage refresh --source browser --dry-run
 
 A rules-mode panel role launches every lane, read-only. A writer task owns its worktree until `router task complete <id> --evidence "..."`; send changes with `router task revise`, never a new `run`. An idle pane is not completion. If a prompt attempt is `unknown`, do not resend: show the user `router task status <id>`.
 
-Never add `--dangerously-bypass-permissions` on your own. It passes the CLI's full approval and sandbox bypass for that one writer run; use it only when the user asked for a bypass for this run.
+Never add `--dangerously-bypass-permissions` on your own. It passes the CLI's full approval and sandbox bypass to one writer (`router run`, or `router workflow plan|start` for that workflow's writer, never its verifiers); use it only when the user asked for a bypass for this run. A bypassed writer gives up the one-worktree write fence: its CLI can write outside the worktree. The user can also opt a role in for good with `# hmr: bypass-permissions <role>[, <role>]` in the rules file; `router plan` then shows `permissions: bypass (from the rules file's bypass-permissions)`. Never edit that line yourself. A project policy with `forbidBypassPermissions: true` overrides both.
 
 `router run` without `--dry-run` still requires `HERDR_ENV=1` and should wait for user confirmation before any launch that would consume subscription quota.
 

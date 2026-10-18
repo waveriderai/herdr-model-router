@@ -5,6 +5,8 @@ alwaysApply: true
 # One line per role: `name[, alias...]: lane[, lane...]`.
 # A lane is provider:model@effort with the exact native model id, or parent/auto/inherit-parent.
 # More than one lane makes a read-only panel: every lane runs, in order, duplicates included.
+# A writer role skips its CLI's approvals and sandbox only if you list it (off by default) in a
+# directive line of its own, such as `# hmr: bypass-permissions bug-fix`.
 
 coordinator: codex:gpt-6.1-sol@high
 feature, refactoring: codex:gpt-6.1-sol@high

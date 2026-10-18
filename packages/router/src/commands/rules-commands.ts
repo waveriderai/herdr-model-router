@@ -7,6 +7,7 @@ import { loadPolicy, type ProjectPolicy } from "../rules/policy.js";
 import {
   planRoute,
   roleNames,
+  type BypassSource,
   type PlannedLane,
   type PlanRefusal,
   type RoutePlan,
@@ -142,7 +143,7 @@ export interface PlanRequest {
   role?: string;
   parent?: string;
   readOnly?: boolean;
-  /** The per-run opt-in to the CLI's full permission bypass (`run` only). */
+  /** The per-run opt-in to a writer's full permission bypass (`run`, `workflow plan|start`). */
   bypassPermissions?: boolean;
   /** A writer's first version (default) or its fix after review; picks the account. */
   phase?: Phase;
@@ -213,11 +214,18 @@ export function laneLaunches(plan: RoutePlan, lanes: PlannedLane[] = plan.lanes)
   });
 }
 
+/** Where a bypass came from, for output: `` or ` (from ...)`. */
+export function bypassOrigin(bypassFrom: BypassSource | undefined): string {
+  if (bypassFrom === "flag") return " (from --dangerously-bypass-permissions)";
+  if (bypassFrom === "rules") return " (from the rules file's bypass-permissions)";
+  return "";
+}
+
 export function formatPlan(plan: RoutePlan, footer: string): string {
   const launches = laneLaunches(plan);
   return [
     `Role: ${plan.role}${plan.roleNames.length > 1 ? ` (names: ${plan.roleNames.join(", ")})` : ""}`,
-    `Kind: ${plan.kind === "panel" ? `panel, ${plan.lanes.length} lanes, every lane runs` : "single lane"}; access: ${plan.access === "read" ? "read-only" : "writer"}; permissions: ${permissionProfile(plan)}`,
+    `Kind: ${plan.kind === "panel" ? `panel, ${plan.lanes.length} lanes, every lane runs` : "single lane"}; access: ${plan.access === "read" ? "read-only" : "writer"}; permissions: ${permissionProfile(plan)}${bypassOrigin(plan.bypassFrom)}`,
     `Rules: ${plan.rulesSource.path} (${plan.rulesSource.origin})`,
     `Policy: ${plan.policySource ?? "none"}`,
     `Working directory: ${plan.cwd}`,

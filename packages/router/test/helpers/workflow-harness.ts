@@ -80,10 +80,15 @@ export function harness(
     git,
     ...(options.collab ? { collab: options.collab } : {}),
     callerEnv: options.callerPane ? { HERDR_PANE_ID: options.callerPane } : {},
-    planRole: ({ role, cwd, readOnly, parent }) => {
+    planRole: ({ role, cwd, readOnly, parent, bypassPermissions }) => {
       const preview = previewPlan(
         { cwd, home: rulesDir, rulesFlag: rulesFile },
-        { role, ...(readOnly ? { readOnly } : {}), ...(parent !== undefined ? { parent } : {}) },
+        {
+          role,
+          ...(readOnly ? { readOnly } : {}),
+          ...(parent !== undefined ? { parent } : {}),
+          ...(bypassPermissions ? { bypassPermissions } : {}),
+        },
       );
       return preview.ok
         ? { ok: true, plan: preview.plan }

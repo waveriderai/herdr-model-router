@@ -670,6 +670,42 @@ describe("workflow preview (R10)", () => {
     expectNoEffects(box, invalid);
   });
 
+  it("previews a bypassed writer with --dangerously-bypass-permissions; verifiers stay read-only", async () => {
+    const box = sandbox();
+    const file = brief(box);
+    const result = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      file,
+      "--dangerously-bypass-permissions",
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out);
+    expect(json.writer).toMatchObject({
+      access: "write",
+      permissions: "bypass",
+      bypassFrom: "flag",
+    });
+    expect(json.verifiers[0]).toMatchObject({ access: "read" });
+    expect(json.verifiers[0]).not.toHaveProperty("permissions");
+    expectNoEffects(box, result);
+    const text = await cli(box, [
+      "workflow",
+      "plan",
+      "--brief",
+      file,
+      "--dangerously-bypass-permissions",
+    ]);
+    expect(text.out).toContain(
+      "  Permissions: bypass (from --dangerously-bypass-permissions). The writer's CLI skips its approvals and sandbox",
+    );
+    const fenced = await cli(box, ["workflow", "plan", "--brief", file]);
+    expect(fenced.out).not.toContain("Permissions:");
+    expectNoEffects(box, fenced);
+  });
+
   it("refuses to start outside Herdr before opening any state", async () => {
     const box = sandbox();
     const result = await cli(box, ["workflow", "start", "--brief", brief(box)]);

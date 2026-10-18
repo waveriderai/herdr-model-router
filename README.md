@@ -192,8 +192,14 @@ Each lane gets the permission defaults of its role
   `codex --ask-for-approval never` under the `hmr-writer` profile,
   `grok --sandbox hmr-writer-<tag> --allow 'Edit(./**)' --always-approve` (custom profile, fails closed), Cursor `--sandbox enabled` with its own allowlist config dir (see docs/rules.md).
 - **Full bypass** (`--dangerously-skip-permissions`, `--dangerously-bypass-approvals-and-sandbox`,
-  unsandboxed grok `--always-approve`, Cursor `--force`) is never a default. Only
-  `hmr run ... --dangerously-bypass-permissions` passes it, for that one writer run.
+  unsandboxed grok `--always-approve`, Cursor `--force`) is never a default and only ever applies
+  to a writer. Three opt-ins pass it: `hmr run ... --dangerously-bypass-permissions` for that one
+  run, `hmr workflow plan|start|revise --dangerously-bypass-permissions` for one workflow's writer
+  (fixed at start; a revise keeps it and cannot add it), and a `# hmr: bypass-permissions <role>`
+  line in the rules file for a role's writers. Verifiers and read-only roles are never bypassed,
+  and a project policy with `forbidBypassPermissions` forbids all three (the flag is refused; a
+  rules opt-in launches with the ordinary writer profile). A bypassed writer gives up the
+  one-worktree write fence: nothing keeps its writes inside its worktree.
 
 Each lane starts in a new pane: the router types one fixed command into the pane's shell, which
 `exec`s the absolute CLI through `/usr/bin/env -i` with a short variable allowlist. Whatever your

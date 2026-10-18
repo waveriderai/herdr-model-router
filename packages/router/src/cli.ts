@@ -910,6 +910,8 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     "provider:model@effort the parent runs; resolves parent aliases in every role";
   const SKILLS_ROOT_HELP =
     "A trusted directory of shared skills (repeatable; the first root wins a name)";
+  const BYPASS_HELP =
+    "For this workflow only, launch its writer with its CLI's full approval and sandbox bypass (never its verifiers)";
   const collect = (value: string, previous: string[] = []) => [...previous, value];
   workflow
     .command("plan")
@@ -918,6 +920,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--parent <descriptor>", PARENT_HELP)
     .option("--skills-root <dir>", SKILLS_ROOT_HELP, collect, [])
+    .option("--dangerously-bypass-permissions", BYPASS_HELP, false)
     .option("--json", "Emit JSON", false)
     .action(
       (flags: {
@@ -925,6 +928,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         rules?: string;
         parent?: string;
         skillsRoot: string[];
+        dangerouslyBypassPermissions?: boolean;
         json?: boolean;
       }) =>
         guarded(
@@ -939,6 +943,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
               flags.brief,
               flags.parent,
               flags.skillsRoot,
+              Boolean(flags.dangerouslyBypassPermissions),
             ),
           flags.json,
         ),
@@ -968,6 +973,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     .option("--rules <path>", "Rules file to read instead of the project or user default")
     .option("--parent <descriptor>", `${PARENT_HELP}; kept for this workflow's verify`)
     .option("--skills-root <dir>", SKILLS_ROOT_HELP, collect, [])
+    .option("--dangerously-bypass-permissions", BYPASS_HELP, false)
     .option("--json", "Emit JSON", false)
     .action(
       (flags: {
@@ -975,6 +981,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
         rules?: string;
         parent?: string;
         skillsRoot: string[];
+        dangerouslyBypassPermissions?: boolean;
         json?: boolean;
       }) =>
         guarded(
@@ -987,6 +994,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
                   env,
                   skillRoots: flags.skillsRoot,
                   ...(flags.parent !== undefined ? { parent: flags.parent } : {}),
+                  ...(flags.dangerouslyBypassPermissions ? { bypassPermissions: true } : {}),
                 }),
               )
             : () => ({
@@ -1057,11 +1065,23 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
       collect,
       [],
     )
+    .option(
+      "--dangerously-bypass-permissions",
+      "Restate the bypass this workflow's writer started with; refused if it started without one (a revision never relaunches the writer)",
+      false,
+    )
     .option("--json", "Emit JSON", false)
     .action(
       (
         id: string,
-        flags: { attempt: string; file?: string; resume?: boolean; mode: string[]; json?: boolean },
+        flags: {
+          attempt: string;
+          file?: string;
+          resume?: boolean;
+          mode: string[];
+          dangerouslyBypassPermissions?: boolean;
+          json?: boolean;
+        },
       ) =>
         guarded(
           withWorkflow(undefined, (deps) =>
@@ -1071,6 +1091,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
               modes: flags.mode,
               ...(flags.file ? { file: flags.file } : {}),
               ...(flags.resume ? { resume: true } : {}),
+              ...(flags.dangerouslyBypassPermissions ? { bypassPermissions: true } : {}),
             }),
           ),
           flags.json,

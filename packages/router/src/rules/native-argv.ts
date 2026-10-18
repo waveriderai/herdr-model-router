@@ -51,9 +51,9 @@ export function executableOf(provider: Provider): string {
 }
 
 /**
- * Flags that skip approvals or sandboxes. The router passes one of them only for a lane with
- * the `bypass` profile, which nothing but the explicit per-run opt-in
- * (`hmr run --dangerously-bypass-permissions`) sets.
+ * Flags that skip approvals or sandboxes. The router passes one of them only for a writer lane
+ * with the `bypass` profile, which only an explicit opt-in sets: the per-run
+ * `--dangerously-bypass-permissions`, or the rules file's `# hmr: bypass-permissions <role>`.
  */
 export const BYPASS_FLAGS = [
   "--dangerously-skip-permissions",
@@ -73,7 +73,7 @@ export const BYPASS_FLAGS = [
  * - `writer`: also edits inside its own working directory (its worktree), with the CLI's
  *   sandbox on.
  * - `control`: the CLI's ordinary interactive permissions, for a coordinator.
- * - `bypass`: the CLI's own full bypass. Only the explicit per-run opt-in sets it.
+ * - `bypass`: the CLI's own full bypass. Only an explicit opt-in (flag or rules file) sets it.
  */
 export type PermissionProfile = "read-only" | "writer" | "control" | "bypass";
 

@@ -52,6 +52,11 @@ export interface RuleSet {
    * Plain comments to older parsers, so the annotation is backward compatible.
    */
   readOnlyRoles: string[];
+  /**
+   * Role names whose writer launches take the CLI's full permission bypass without the per-run
+   * flag, from `# hmr: bypass-permissions role[, role...]` (normalized). Off unless listed.
+   */
+  bypassRoles?: string[];
   accounts?: AccountRules;
   /** Entries whose lanes could not be parsed. Planning such a role fails with this error. */
   invalid: InvalidRole[];
@@ -62,6 +67,7 @@ export type ParseRulesResult = { ok: true; rules: RuleSet } | { ok: false; error
 /** `# hmr: readonly design consultant, review gate` (case-insensitive keyword). */
 const HMR_DIRECTIVE = /^\s*#\s*hmr:/i;
 const READONLY_BODY = /^readonly\s+(.+)$/i;
+const BYPASS_BODY = /^bypass-permissions\s+(.+)$/i;
 const ACCOUNT_BODY = /^(first-version|fix-accounts|review-only)\s+(.+)$/i;
 const FIX_FOR_BODY = /^fix-accounts-for\s+(.+?)\s*=\s*(.+)$/i;
 /**
@@ -117,6 +123,7 @@ export function parseRules(text: string): ParseRulesResult {
   const invalid: InvalidRole[] = [];
   const definedAt = new Map<string, number>();
   const readOnlyRoles = new Set<string>();
+  const bypassRoles = new Set<string>();
   const accounts: AccountRules = { reviewOnly: [] };
   /** The entry the next `# fallback:` comment belongs to, until another entry starts. */
   let current: { role?: RoleRule; fallbackLine?: number } = {};
@@ -201,18 +208,22 @@ export function parseRules(text: string): ParseRulesResult {
         }
         continue;
       }
-      const directive = READONLY_BODY.exec(body);
+      const bypass = BYPASS_BODY.exec(body);
+      const directive = bypass ?? READONLY_BODY.exec(body);
       if (!directive) {
         return {
           ok: false,
-          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]", "# hmr: first-version <account>", "# hmr: fix-accounts <account>[, account]" or "# hmr: review-only <account>[, account]"`,
+          error: `line ${lineNumber}: unknown hmr directive; write "# hmr: readonly role[, role]", "# hmr: bypass-permissions role[, role]", "# hmr: first-version <account>", "# hmr: fix-accounts <account>[, account]" or "# hmr: review-only <account>[, account]"`,
         };
       }
       const names = directive[1]!.split(",").map(normalizeRoleName);
       if (names.some((name) => name === "")) {
-        return { ok: false, error: `line ${lineNumber}: empty role name in readonly directive` };
+        return {
+          ok: false,
+          error: `line ${lineNumber}: empty role name in ${bypass ? "bypass-permissions" : "readonly"} directive`,
+        };
       }
-      names.forEach((name) => readOnlyRoles.add(name));
+      names.forEach((name) => (bypass ? bypassRoles : readOnlyRoles).add(name));
       continue;
     }
     const raw = lines[index]!;
@@ -263,5 +274,30 @@ export function parseRules(text: string): ParseRulesResult {
     const selectors = trailing === undefined ? undefined : fallbackSelectors(trailing);
     if (selectors) attachFallback(selectors, lineNumber);
   }
-  return { ok: true, rules: { roles, invalid, readOnlyRoles: [...readOnlyRoles], accounts } };
+  const both = [...bypassRoles].find((name) => readOnlyRoles.has(name));
+  if (both !== undefined) {
+    return {
+      ok: false,
+      error: `role "${both}" is both readonly and bypass-permissions; a permission bypass applies only to a writer`,
+    };
+  }
+  const panel = roles.find(
+    (role) => role.lanes.length > 1 && role.names.some((name) => bypassRoles.has(name)),
+  );
+  if (panel !== undefined) {
+    return {
+      ok: false,
+      error: `line ${panel.line}: panel role "${panel.names[0]}" is listed in bypass-permissions; a panel is read-only, and a permission bypass applies only to a writer`,
+    };
+  }
+  return {
+    ok: true,
+    rules: {
+      roles,
+      invalid,
+      readOnlyRoles: [...readOnlyRoles],
+      ...(bypassRoles.size > 0 ? { bypassRoles: [...bypassRoles] } : {}),
+      accounts,
+    },
+  };
 }

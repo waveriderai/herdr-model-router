@@ -1,0 +1,4 @@
+-- A workflow writer's permission bypass, recorded at start: NULL for the ordinary writer
+-- profile, 'flag' for `--dangerously-bypass-permissions`, 'rules' for the rules file's
+-- `# hmr: bypass-permissions` opt-in. A revision goes to the same session, so it never changes.
+-- The column itself is added by database.ts, only when missing.
