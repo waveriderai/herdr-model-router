@@ -151,6 +151,13 @@ describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
     expect(screenVerdict("claude", extractPaneText(screen)).state).toBe("ready");
   });
 
+  it("accepts the composer when a five-pane split cuts the footer to the mode's first word", () => {
+    const rule = "─".repeat(13);
+    const screen = `${rule}\n❯ Try "how d…\n${rule}\n   [Opus …\n  ⏸ plan\n`;
+    expect(screenVerdict("claude", screen).state).toBe("ready");
+    expect(screenVerdict("claude", extractPaneText(screen)).state).toBe("ready");
+  });
+
   it("does not take the cut plan-mode footer alone for a composer", () => {
     expect(screenVerdict("claude", "  ⏸ plan mode on\n").state).toBe("not-ready");
   });
