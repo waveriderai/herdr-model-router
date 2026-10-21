@@ -87,7 +87,7 @@ describe("workflow writer permission bypass", () => {
     expect(verifiers).toHaveLength(2);
     for (const script of verifiers) expect(bypassFlags(script)).toEqual([]);
     expect(verifiers[0]).toContain("'--sandbox' 'read-only'");
-    expect(verifiers[1]).toContain("'--permission-mode' 'plan'");
+    expect(verifiers[1]).toContain("'--permission-mode' 'dontAsk'");
   });
 
   it("bypasses a writer the rules file opts in, without the flag; verifiers stay read-only", async () => {

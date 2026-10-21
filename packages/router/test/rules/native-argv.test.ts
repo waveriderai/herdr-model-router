@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BYPASS_FLAGS,
+  CLAUDE_CONTROL_TOOLS,
   missingCapabilities,
   CODEX_WRITER_PROFILE,
   codexWriterProfile,
@@ -34,7 +35,7 @@ function argv(
 
 const CLAUDE_READ = [
   "--permission-mode",
-  "plan",
+  "dontAsk",
   "--allowedTools",
   "Read,Grep,Glob,WebFetch,WebSearch",
 ];
@@ -315,14 +316,23 @@ describe("native argv", () => {
     ]);
   });
 
-  it("launches a coordinator with the CLI's ordinary permissions only", () => {
+  it("launches a coordinator with ordinary permissions, except Claude: dontAsk + allow list (AGENT-519)", () => {
     expect(argv("claude", "m", "high", "control").argv).toEqual([
       "claude",
       "--model",
       "m",
       "--effort",
       "high",
+      "--permission-mode",
+      "dontAsk",
+      "--allowedTools",
+      CLAUDE_CONTROL_TOOLS,
     ]);
+    expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(hmr workflow:*)");
+    expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(herdr agent wait:*)");
+    expect(argv("claude", "m", "high", "control").argv).not.toContain(
+      "--dangerously-skip-permissions",
+    );
     expect(argv("codex", "m", null, "control").argv).toEqual(["codex", "--model", "m"]);
     expect(argv("grok", "m", null, "control").argv).toEqual(["grok", "--model", "m"]);
     expect(argv("cursor", "m", null, "control").argv).toEqual(["cursor-agent", "--model", "m"]);
@@ -385,7 +395,7 @@ describe("native argv", () => {
       "--effort",
       "--permission-mode",
       "--allowedTools",
-      "plan",
+      "dontAsk",
     ]);
     expect(argv("claude", "m", "high", "writer").requiredHelp).toEqual([
       "--model",

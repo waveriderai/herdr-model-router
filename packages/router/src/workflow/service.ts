@@ -13,6 +13,7 @@ import {
   type ResolvedLaunch,
 } from "../rules/dispatch.js";
 import { herdrKindOf } from "../rules/native-argv.js";
+import { closeFinished } from "../launch/pane-layout.js";
 import type { BypassSource, PlannedLane, RoutePlan } from "../rules/plan.js";
 import type { ReadinessKind } from "../rules/readiness.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
@@ -178,6 +179,18 @@ function revisionNow(deps: WorkflowDeps, cwd: string): Step<{ root: string; revi
   return read.ok
     ? { ok: true, value: { root: read.root, revision: read.revision } }
     : fail("revision-unreadable", read.error);
+}
+
+/** Panes of every verifier lane this workflow started (any round). */
+function verifierPanes(deps: WorkflowDeps, workflow: Workflow): string[] {
+  const panes: string[] = [];
+  for (const verification of deps.workflows.verifications(workflow.id)) {
+    if (!verification.taskId) continue;
+    for (const lane of deps.dispatch.store.lanes(verification.taskId)) {
+      if (lane.paneId) panes.push(lane.paneId);
+    }
+  }
+  return panes;
 }
 
 /**
@@ -931,6 +944,7 @@ async function startCollab(
     laneId: workflow.id,
     cwd: plan.cwd,
     launch,
+    placement: { role: plan.role, access: "write" },
     onPaneCreated: (paneId) =>
       deps.workflows.commit(lease, () =>
         deps.workflows.setFields(workflow.id, { start_pane_id: paneId }),
@@ -1370,6 +1384,11 @@ export async function verifyWorkflow(
       if (!writer.ok) return fail("result-untrusted", `Writer result: ${writer.problem}.`);
       const writerChecks =
         (writer.result as { checks?: { command: string; result: string }[] }).checks ?? [];
+      // AGENT-519 (§13 close on finish): verifier panes of earlier rounds already recorded their
+      // results; close the idle/done ones so this round fits under the MAIN + 3 cap.
+      if (deps.dispatch.layout) {
+        await closeFinished(deps.dispatch.layout, verifierPanes(deps, workflow));
+      }
       // Set first: a role whose lanes fail to start still leaves the workflow verifying.
       deps.workflows.commit(lease, () => deps.workflows.setState(workflow.id, "verifying"));
       for (const role of brief.value.verifierRoles) {
@@ -2012,6 +2031,14 @@ export async function releaseWorkflow(
         applyRelease(deps, workflow, input.abort, input.evidence);
         if (releaseIntent) applied(deps, releaseIntent);
       });
+      // AGENT-519 (§13 close on finish): after release, close this workflow's worker panes
+      // (writer and verifiers) whose agents are idle or done. MAIN is never closed here.
+      if (deps.dispatch.layout) {
+        await closeFinished(deps.dispatch.layout, [
+          ...(workflow.identity ? [workflow.identity.paneId] : []),
+          ...verifierPanes(deps, workflow),
+        ]);
+      }
       return { ok: true, value: { workflow: deps.workflows.get(workflow.id)! } };
     },
   );
