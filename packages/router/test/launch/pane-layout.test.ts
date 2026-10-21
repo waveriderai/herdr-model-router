@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   placeMain,
   placeWorker,
   planWorker,
+  withLayoutLock,
   ticketOf,
   workerAgentName,
   workerLabel,
@@ -480,5 +482,52 @@ describe("review guard", () => {
     );
     const res = await createReviewGuard(f.run, { HOME: "/h" })({ role: "review gate", cwd: "/w" });
     expect(res.ok ? "" : res.error).toMatch(/HMR_PR/);
+  });
+});
+
+describe("layout lock", () => {
+  const tick = () => new Promise<void>((r) => setImmediate(r));
+  it("lets a slow holder finish: a waiter never enters while the holder runs, however long it takes", async () => {
+    const dir = SD();
+    const order: string[] = [];
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const first = withLayoutLock(
+      { run: async () => okText(""), env: {}, stateDir: dir },
+      async () => {
+        order.push("first in");
+        await held;
+        order.push("first out");
+        return 1;
+      },
+    );
+    await tick();
+    const second = withLayoutLock(
+      { run: async () => okText(""), env: {}, stateDir: dir, sleep: tick },
+      async () => {
+        order.push("second in");
+        return 2;
+      },
+    );
+    for (let i = 0; i < 50; i += 1) await tick();
+    expect(order).toEqual(["first in"]);
+    release();
+    expect(await first).toBe(1);
+    expect(await second).toBe(2);
+    expect(order).toEqual(["first in", "first out", "second in"]);
+  });
+  it("is free again when a holder process dies without releasing it", async () => {
+    const dir = SD();
+    // A child takes the exclusive lock and exits without COMMIT, as a crashed hmr would.
+    execFileSync(process.execPath, [
+      "-e",
+      `const D=require("better-sqlite3");const d=new D(${JSON.stringify(join(dir, "layout-lock.sqlite"))});d.exec("BEGIN EXCLUSIVE");process.exit(0);`,
+    ]);
+    expect(
+      await withLayoutLock(
+        { run: async () => okText(""), env: {}, stateDir: dir },
+        async () => "in",
+      ),
+    ).toBe("in");
   });
 });

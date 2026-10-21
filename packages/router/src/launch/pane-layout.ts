@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import Database from "better-sqlite3";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult, RunCommand } from "./herdr-client.js";
@@ -42,7 +43,6 @@ export interface PaneLayoutPort {
   now?: () => number;
 }
 
-const LOCK_STALE_MS = 2 * 60_000;
 const LOCK_WAIT_MS = 60_000;
 /** A MAIN placed by hmr start is reserved until its agent shows up in Herdr (or this long). */
 export const MAIN_RESERVATION_MS = 10 * 60_000;
@@ -54,52 +54,56 @@ function stateDirOf(port: PaneLayoutPort): string {
 }
 
 /**
- * One layout change at a time across every hmr process on the host (AGENT-519 r2): the
+ * One layout change at a time across every hmr process on the host (AGENT-519): the
  * list -> plan -> split -> label sequence for workers and the find-or-create -> reserve sequence for
- * MAIN run under an exclusive mkdir lock, so two lanes can never both take the last worker slot
- * or the same empty MAIN. A lock older than LOCK_STALE_MS (crashed holder) is broken.
+ * MAIN run inside an exclusive SQLite transaction on a small lock database. SQLite's file lock is
+ * held by this connection only, for as long as the section runs (no age-based breaking), and the
+ * OS drops it when the holder exits or crashes, so a dead holder never blocks and a slow live one is
+ * never broken into. Only the holder's own connection ends the transaction. Waiters poll without
+ * blocking the event loop and give up (nothing started) after LOCK_WAIT_MS.
  */
 export async function withLayoutLock<T>(
   port: PaneLayoutPort,
   fn: () => Promise<T>,
 ): Promise<T | { ok: false; error: string }> {
   const dir = stateDirOf(port);
-  const lock = join(dir, "layout.lock");
+  const file = join(dir, "layout-lock.sqlite");
   const sleep = port.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-  const now = port.now ?? Date.now;
-  const deadline = now() + LOCK_WAIT_MS;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (;;) {
-    try {
-      mkdirSync(lock, { mode: 0o700 });
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-        return { ok: false, error: `layout lock ${lock}: ${(err as Error).message}` };
-      }
-      let age: number;
-      try {
-        age = now() - statSync(lock).mtimeMs;
-      } catch {
-        continue; // released between mkdir and stat: retry at once
-      }
-      if (age > LOCK_STALE_MS) {
-        rmSync(lock, { recursive: true, force: true });
-        continue;
-      }
-      if (now() >= deadline) {
-        return {
-          ok: false,
-          error: `layout lock ${lock} is held by another hmr launch; nothing was started`,
-        };
-      }
-      await sleep(250);
-    }
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let db: Database.Database;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    db = new Database(file);
+    db.pragma("busy_timeout = 0");
+  } catch (err) {
+    return { ok: false, error: `layout lock ${file}: ${(err as Error).message}` };
   }
   try {
-    return await fn();
+    for (;;) {
+      try {
+        db.exec("BEGIN EXCLUSIVE");
+        break;
+      } catch (err) {
+        const code = (err as { code?: unknown }).code;
+        if (code !== "SQLITE_BUSY" && code !== "SQLITE_LOCKED") {
+          return { ok: false, error: `layout lock ${file}: ${(err as Error).message}` };
+        }
+        if (Date.now() >= deadline) {
+          return {
+            ok: false,
+            error: `layout lock ${file} is held by another hmr launch; nothing was started`,
+          };
+        }
+        await sleep(250);
+      }
+    }
+    try {
+      return await fn();
+    } finally {
+      db.exec("COMMIT");
+    }
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    db.close();
   }
 }
 
