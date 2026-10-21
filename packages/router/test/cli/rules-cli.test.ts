@@ -208,9 +208,9 @@ describe("offline rules preview (AE1, AE2)", () => {
       "Lane 3: claude:claude-opus-5-5@high [rule]",
     ]);
     expect(result.out.match(/^ {2}argv: .*$/gm)).toEqual([
-      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode dontAsk --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
+      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode dontAsk --setting-sources  --strict-mcp-config --tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
       '  argv: codex --model gpt-6.1-sol -c model_reasoning_effort="xhigh" --sandbox read-only --ask-for-approval never --search',
-      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode dontAsk --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
+      "  argv: claude --model claude-opus-5-5 --effort high --permission-mode dontAsk --setting-sources  --strict-mcp-config --tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools Read,Grep,Glob,WebFetch,WebSearch",
     ]);
     expect(result.out).toContain(
       "Preview only: no model, pane, network, credential, or router state was touched.",

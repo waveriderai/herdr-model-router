@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CommandResult } from "../../src/launch/herdr-client.js";
 import {
@@ -31,6 +34,14 @@ function fakeRun(handler: (argv: readonly string[]) => CommandResult) {
     },
   };
 }
+
+/** A fresh layout-lock/reservation dir per port (never the real ~/.local/state). */
+const SD = () => mkdtempSync(join(tmpdir(), "hmr-layout-test-"));
+/** Answers `herdr tab get` with a ticket tab label, everything else via the handler. */
+const withTab =
+  (label: string, handler: (argv: readonly string[]) => CommandResult) =>
+  (argv: readonly string[]): CommandResult =>
+    argv[1] === "tab" && argv[2] === "get" ? ok({ tab: { label } }) : handler(argv);
 
 const env = {
   HERDR_PANE_ID: "w1:p1",
@@ -98,14 +109,16 @@ describe("planWorker", () => {
 
 describe("placeWorker", () => {
   it("labels MAIN, splits it right, and labels the worker", async () => {
-    const f = fakeRun((argv) => {
-      if (argv[2] === "list")
-        return ok({ panes: [pane("w1:p1"), pane("w1:p9", undefined, "w1:t1")] });
-      if (argv[2] === "split") return ok({ pane: { pane_id: "w1:p5" } });
-      return ok({});
-    });
+    const f = fakeRun(
+      withTab("AGENT-519 · pane-automation", (argv) => {
+        if (argv[2] === "list")
+          return ok({ panes: [pane("w1:p1"), pane("w1:p9", undefined, "w1:t1")] });
+        if (argv[2] === "split") return ok({ pane: { pane_id: "w1:p5" } });
+        return ok({});
+      }),
+    );
     const placed = await placeWorker(
-      { run: f.run, env },
+      { run: f.run, env, stateDir: SD() },
       { cwd: "/w/AGENT-519", role: "feature", access: "write" },
     );
     expect(placed).toEqual({
@@ -132,23 +145,26 @@ describe("placeWorker", () => {
     expect(f.calls).toContainEqual(["herdr", "pane", "rename", "w1:p5", "W1 writer · AGENT-519"]);
   });
   it("queues past the cap and refuses when no slot frees, starting nothing", async () => {
-    const f = fakeRun((argv) =>
-      argv[2] === "list"
-        ? ok({
-            panes: [
-              pane("w1:p1", "MAIN · AGENT-1"),
-              pane("w1:p2", "W1 writer · AGENT-1"),
-              pane("w1:p3", "W2 review · AGENT-1"),
-              pane("w1:p4", "W3 review · AGENT-1"),
-            ],
-          })
-        : ok({}),
+    const f = fakeRun(
+      withTab("AGENT-1 · x", (argv) =>
+        argv[2] === "list"
+          ? ok({
+              panes: [
+                pane("w1:p1", "MAIN · AGENT-1"),
+                pane("w1:p2", "W1 writer · AGENT-1"),
+                pane("w1:p3", "W2 review · AGENT-1"),
+                pane("w1:p4", "W3 review · AGENT-1"),
+              ],
+            })
+          : ok({}),
+      ),
     );
     let slept = 0;
     const placed = await placeWorker(
       {
         run: f.run,
         env,
+        stateDir: SD(),
         queueTimeoutMs: 0,
         sleep: async () => {
           slept += 1;
@@ -163,24 +179,26 @@ describe("placeWorker", () => {
   });
   it("takes the slot once a worker closes while queued", async () => {
     let lists = 0;
-    const f = fakeRun((argv) => {
-      if (argv[2] === "list") {
-        lists += 1;
-        const workers =
-          lists === 1
-            ? [
-                pane("w1:p2", "W1 writer · AGENT-1"),
-                pane("w1:p3", "W2 review · AGENT-1"),
-                pane("w1:p4", "W3 review · AGENT-1"),
-              ]
-            : [pane("w1:p2", "W1 writer · AGENT-1"), pane("w1:p4", "W3 review · AGENT-1")];
-        return ok({ panes: [pane("w1:p1", "MAIN · AGENT-1"), ...workers] });
-      }
-      if (argv[2] === "split") return ok({ pane: { pane_id: "w1:p7" } });
-      return ok({});
-    });
+    const f = fakeRun(
+      withTab("AGENT-1 · x", (argv) => {
+        if (argv[2] === "list") {
+          lists += 1;
+          const workers =
+            lists === 1
+              ? [
+                  pane("w1:p2", "W1 writer · AGENT-1"),
+                  pane("w1:p3", "W2 review · AGENT-1"),
+                  pane("w1:p4", "W3 review · AGENT-1"),
+                ]
+              : [pane("w1:p2", "W1 writer · AGENT-1"), pane("w1:p4", "W3 review · AGENT-1")];
+          return ok({ panes: [pane("w1:p1", "MAIN · AGENT-1"), ...workers] });
+        }
+        if (argv[2] === "split") return ok({ pane: { pane_id: "w1:p7" } });
+        return ok({});
+      }),
+    );
     const placed = await placeWorker(
-      { run: f.run, env, queueTimeoutMs: 60_000, sleep: async () => {} },
+      { run: f.run, env, stateDir: SD(), queueTimeoutMs: 60_000, sleep: async () => {} },
       { cwd: "/w/AGENT-1", role: "review gate", access: "read" },
     );
     expect(placed).toMatchObject({ ok: true, label: "W2 review · AGENT-1" });
@@ -195,6 +213,74 @@ describe("placeWorker", () => {
       "/w/AGENT-1",
       "--no-focus",
     ]);
+  });
+  it("serialises concurrent lanes: two lanes never both take the last slot (MAIN + 3 holds)", async () => {
+    const panes = [
+      pane("w1:p1", "MAIN · AGENT-1"),
+      pane("w1:p2", "W1 writer · AGENT-1"),
+      pane("w1:p3", "W2 review · AGENT-1"),
+    ];
+    let next = 10;
+    const f = fakeRun(
+      withTab("AGENT-1 · x", (argv) => {
+        if (argv[2] === "list") return ok({ panes: [...panes] });
+        if (argv[2] === "split") {
+          const id = `w1:p${next++}`;
+          panes.push(pane(id));
+          return ok({ pane: { pane_id: id } });
+        }
+        if (argv[2] === "rename") {
+          const p = panes.find((x) => x.pane_id === argv[3]);
+          if (p) (p as { label?: string }).label = argv[4];
+        }
+        return ok({});
+      }),
+    );
+    const port = { run: f.run, env, stateDir: SD(), queueTimeoutMs: 0, sleep: async () => {} };
+    const lane = { cwd: "/w/AGENT-1", role: "review gate", access: "read" as const };
+    const [a, b] = await Promise.all([placeWorker(port, lane), placeWorker(port, lane)]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect(f.calls.filter((c) => c[2] === "split")).toHaveLength(1);
+    expect(panes).toHaveLength(4);
+    expect((a.ok ? b : a).ok ? "" : ((a.ok ? b : a) as { error: string }).error).toMatch(
+      /cap reached/,
+    );
+  });
+  it("refuses a lane whose ticket is not the caller tab's ticket, starting nothing", async () => {
+    const f = fakeRun(
+      withTab("AGENT-100 · other", (argv) =>
+        argv[2] === "list" ? ok({ panes: [pane("w1:p1", "MAIN · AGENT-100")] }) : ok({}),
+      ),
+    );
+    const placed = await placeWorker(
+      { run: f.run, env, stateDir: SD() },
+      { cwd: "/w/AGENT-519", role: "feature", access: "write" },
+    );
+    expect(placed).toMatchObject({ ok: false });
+    expect(placed.ok ? "" : placed.error).toMatch(/belongs to AGENT-100/);
+    expect(f.calls.some((c) => c[2] === "split")).toBe(false);
+  });
+  it("refuses when the caller pane is another ticket's MAIN, even in a matching tab", async () => {
+    const f = fakeRun(
+      withTab("AGENT-519 · x", (argv) =>
+        argv[2] === "list" ? ok({ panes: [pane("w1:p1", "MAIN · AGENT-100")] }) : ok({}),
+      ),
+    );
+    const placed = await placeWorker(
+      { run: f.run, env, stateDir: SD() },
+      { cwd: "/w/AGENT-519", role: "feature", access: "write" },
+    );
+    expect(placed.ok ? "" : placed.error).toMatch(/MAIN of AGENT-100/);
+    expect(f.calls.some((c) => c[2] === "split")).toBe(false);
+  });
+  it("keeps the legacy split in a tab that is not a ticket tab", async () => {
+    const f = fakeRun(withTab("3", () => ok({})));
+    expect(
+      await placeWorker(
+        { run: f.run, env, stateDir: SD() },
+        { cwd: "/w/AGENT-1", role: "x", access: "read" },
+      ),
+    ).toMatchObject({ ok: false, legacy: true });
   });
   it("falls back (legacy) without Herdr context or ticket", async () => {
     const f = fakeRun(() => ok({}));
@@ -222,7 +308,7 @@ describe("placeMain", () => {
       return ok({});
     });
     const placed = await placeMain(
-      { run: f.run, env: { HMR_TICKET: "AGENT-88", HMR_TICKET_SLUG: "Login fix" } },
+      { run: f.run, env: { HMR_TICKET: "AGENT-88", HMR_TICKET_SLUG: "Login fix" }, stateDir: SD() },
       {
         cwd: "/Users/x/herdr-worktrees/waverider-app/AGENT-88",
         projectExists: (n) => n === "waverider-app",
@@ -258,7 +344,7 @@ describe("placeMain", () => {
       return ok({});
     });
     const placed = await placeMain(
-      { run: f.run, env: { HMR_TICKET: "AGENT-5" } },
+      { run: f.run, env: { HMR_TICKET: "AGENT-5" }, stateDir: SD() },
       { cwd: "/tmp/scratch", projectExists: () => false },
     );
     expect(placed).toMatchObject({ ok: true, paneId: "w3:p8" });
@@ -278,10 +364,39 @@ describe("placeMain", () => {
       return ok({});
     });
     const placed = await placeMain(
-      { run: f.run, env: { HMR_TICKET: "AGENT-9" } },
+      { run: f.run, env: { HMR_TICKET: "AGENT-9" }, stateDir: SD() },
       { cwd: "/Users/x/projects/r", projectExists: () => true },
     );
     expect(placed.ok ? "" : placed.error).toMatch(/already has a MAIN agent/);
+  });
+  it("reserves an empty MAIN: two concurrent hmr starts for one ticket never share it", async () => {
+    const f = fakeRun((argv) => {
+      if (argv[0] === "git") return okText("/Users/x/projects/r/.git\n");
+      if (argv[1] === "workspace") return ok({ workspaces: [{ workspace_id: "w4", label: "r" }] });
+      if (argv[1] === "tab") return ok({ tabs: [{ tab_id: "w4:t3", label: "AGENT-9 · x" }] });
+      if (argv[1] === "pane" && argv[2] === "list")
+        return ok({ panes: [pane("w4:p1", "MAIN · AGENT-9", "w4:t3")] });
+      return ok({});
+    });
+    const port = {
+      run: f.run,
+      env: { HMR_TICKET: "AGENT-9" },
+      stateDir: SD(),
+      sleep: async () => {},
+    };
+    const where = { projectExists: () => true };
+    const [a, b] = await Promise.all([
+      placeMain(port, { cwd: "/Users/x/herdr-worktrees/r/AGENT-9", ...where }),
+      placeMain(port, { cwd: "/Users/x/herdr-worktrees/r/AGENT-9-b", ...where }),
+    ]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    // Once the reservation has expired (agent never appeared), the pane can be placed again.
+    let t = Date.now() + 11 * 60_000;
+    const later = await placeMain(
+      { ...port, now: () => t++ },
+      { cwd: "/Users/x/projects/r", ...where },
+    );
+    expect(later.ok).toBe(true);
   });
 });
 
@@ -295,6 +410,31 @@ describe("closeFinished", () => {
     const f = fakeRun((argv) => (argv[2] === "get" ? ok({ pane: status[argv[3]!] }) : ok({})));
     const closed = await closeFinished({ run: f.run, env }, ["w1:p1", "w1:p2", "w1:p3", "w1:p4"]);
     expect(closed).toEqual(["w1:p2", "w1:p4"]);
+  });
+  it("skips a pane that picks up work between the check and the close", async () => {
+    let reads = 0;
+    const f = fakeRun((argv) => {
+      if (argv[2] !== "get") return ok({});
+      reads += 1;
+      return ok({
+        pane:
+          reads === 1
+            ? { agent: "codex", agent_status: "done", revision: 3 }
+            : { agent: "codex", agent_status: "working", revision: 4 },
+      });
+    });
+    expect(await closeFinished({ run: f.run, env }, ["w1:p2"])).toEqual([]);
+    expect(f.calls.some((c) => c[2] === "close")).toBe(false);
+  });
+  it("never closes a MAIN-labelled pane, even when the caller is not MAIN", async () => {
+    const f = fakeRun((argv) =>
+      argv[2] === "get"
+        ? ok({ pane: { label: "MAIN · AGENT-1", agent: "codex", agent_status: "done" } })
+        : ok({}),
+    );
+    expect(await closeFinished({ run: f.run, env: { HERDR_PANE_ID: "w1:p9" } }, ["w1:p1"])).toEqual(
+      [],
+    );
   });
 });
 

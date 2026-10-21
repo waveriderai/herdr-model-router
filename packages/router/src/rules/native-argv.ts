@@ -231,8 +231,21 @@ export function nativeLaunch(
           "claude",
           [["--model", model], effort ? ["--effort", effort] : []],
           pick({
+            // AGENT-519 r2: --allowedTools only adds allow rules, so the lane also loads no settings file
+            // (user/project/local allow rules cannot widen it), no MCP server, and gets only these
+            // built-in tools via --tools (a hard cap). dontAsk then denies anything not allowed.
             "read-only": {
-              args: ["--permission-mode", "dontAsk", "--allowedTools", CLAUDE_READ_TOOLS],
+              args: [
+                "--permission-mode",
+                "dontAsk",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--tools",
+                CLAUDE_READ_TOOLS,
+                "--allowedTools",
+                CLAUDE_READ_TOOLS,
+              ],
               values: ["dontAsk"],
             },
             writer: {
@@ -249,7 +262,18 @@ export function nativeLaunch(
               values: ["dontAsk"],
             },
             control: {
-              args: ["--permission-mode", "dontAsk", "--allowedTools", CLAUDE_CONTROL_TOOLS],
+              // Same caps as read-only; Bash is available but only the listed command prefixes are allowed.
+              args: [
+                "--permission-mode",
+                "dontAsk",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--tools",
+                `${CLAUDE_READ_TOOLS},Bash`,
+                "--allowedTools",
+                CLAUDE_CONTROL_TOOLS,
+              ],
               values: ["dontAsk"],
             },
             bypass: { args: ["--dangerously-skip-permissions"] },

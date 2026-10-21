@@ -36,6 +36,11 @@ function argv(
 const CLAUDE_READ = [
   "--permission-mode",
   "dontAsk",
+  "--setting-sources",
+  "",
+  "--strict-mcp-config",
+  "--tools",
+  "Read,Grep,Glob,WebFetch,WebSearch",
   "--allowedTools",
   "Read,Grep,Glob,WebFetch,WebSearch",
 ];
@@ -325,9 +330,16 @@ describe("native argv", () => {
       "high",
       "--permission-mode",
       "dontAsk",
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--tools",
+      "Read,Grep,Glob,WebFetch,WebSearch,Bash",
       "--allowedTools",
       CLAUDE_CONTROL_TOOLS,
     ]);
+    // No Edit/Write tool exists in the lane at all, and no settings file can add allow rules.
+    expect(argv("claude", "m", "high", "control").argv.join(" ")).not.toMatch(/\bEdit\b|\bWrite\b/);
     expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(hmr workflow:*)");
     expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(herdr agent wait:*)");
     expect(argv("claude", "m", "high", "control").argv).not.toContain(
@@ -394,6 +406,9 @@ describe("native argv", () => {
       "--model",
       "--effort",
       "--permission-mode",
+      "--setting-sources",
+      "--strict-mcp-config",
+      "--tools",
       "--allowedTools",
       "dontAsk",
     ]);

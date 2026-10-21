@@ -18,7 +18,7 @@ export const failed = (stdout: string, stderr = ""): CommandResult => ({
 
 export const HELP: Record<string, string> = {
   claude:
-    '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n--allowedTools, --allowed-tools <tools...>\n--settings <file-or-json>\n--setting-sources <sources>\n--dangerously-skip-permissions',
+    '--model <m>\n--effort <level>\n--permission-mode <mode> (choices: "acceptEdits", "dontAsk", "plan")\n--allowedTools, --allowed-tools <tools...>\n--settings <file-or-json>\n--setting-sources <sources>\n--strict-mcp-config\n--tools <tools...>\n--dangerously-skip-permissions',
   codex:
     "-m, --model <MODEL>\n-c, --config <k=v>\n-s, --sandbox <MODE> [possible values: read-only, workspace-write]\n-a, --ask-for-approval <POLICY>\n  - on-request: The model decides\n  - never: Never ask\n--search\n--dangerously-bypass-approvals-and-sandbox",
   grok: "-m, --model <MODEL>\n--reasoning-effort <E>\n--allow <RULE>\n--deny <RULE>\n--sandbox <PROFILE>\n--always-approve",

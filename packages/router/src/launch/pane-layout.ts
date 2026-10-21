@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult, RunCommand } from "./herdr-client.js";
 
@@ -35,6 +36,102 @@ export interface PaneLayoutPort {
   sleep?: (ms: number) => Promise<void>;
   queueTimeoutMs?: number;
   pollMs?: number;
+  /** Directory for the cross-process layout lock and MAIN reservations (default ~/.local/state/hmr-layout). */
+  stateDir?: string;
+  /** Clock for reservations (tests). */
+  now?: () => number;
+}
+
+const LOCK_STALE_MS = 2 * 60_000;
+const LOCK_WAIT_MS = 60_000;
+/** A MAIN placed by hmr start is reserved until its agent shows up in Herdr (or this long). */
+export const MAIN_RESERVATION_MS = 10 * 60_000;
+
+function stateDirOf(port: PaneLayoutPort): string {
+  if (port.stateDir) return port.stateDir;
+  const home = port.env.HOME;
+  return home ? join(home, ".local", "state", "hmr-layout") : join(tmpdir(), "hmr-layout");
+}
+
+/**
+ * One layout change at a time across every hmr process on the host (AGENT-519 r2): the
+ * list -> plan -> split -> label sequence for workers and the find-or-create -> reserve sequence for
+ * MAIN run under an exclusive mkdir lock, so two lanes can never both take the last worker slot
+ * or the same empty MAIN. A lock older than LOCK_STALE_MS (crashed holder) is broken.
+ */
+export async function withLayoutLock<T>(
+  port: PaneLayoutPort,
+  fn: () => Promise<T>,
+): Promise<T | { ok: false; error: string }> {
+  const dir = stateDirOf(port);
+  const lock = join(dir, "layout.lock");
+  const sleep = port.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const now = port.now ?? Date.now;
+  const deadline = now() + LOCK_WAIT_MS;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (;;) {
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        return { ok: false, error: `layout lock ${lock}: ${(err as Error).message}` };
+      }
+      let age: number;
+      try {
+        age = now() - statSync(lock).mtimeMs;
+      } catch {
+        continue; // released between mkdir and stat: retry at once
+      }
+      if (age > LOCK_STALE_MS) {
+        rmSync(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (now() >= deadline) {
+        return {
+          ok: false,
+          error: `layout lock ${lock} is held by another hmr launch; nothing was started`,
+        };
+      }
+      await sleep(250);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function reservationPath(port: PaneLayoutPort, paneId: string): string {
+  return join(stateDirOf(port), `main-${paneId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+}
+
+/** True while another hmr start holds an unexpired reservation on this MAIN pane. */
+function reserved(port: PaneLayoutPort, paneId: string): boolean {
+  const now = port.now ?? Date.now;
+  try {
+    const r = JSON.parse(readFileSync(reservationPath(port, paneId), "utf8")) as { at?: unknown };
+    return typeof r.at === "number" && now() - r.at < MAIN_RESERVATION_MS;
+  } catch {
+    return false;
+  }
+}
+
+function reserve(port: PaneLayoutPort, paneId: string, ticket: string): void {
+  const now = port.now ?? Date.now;
+  writeFileSync(
+    reservationPath(port, paneId),
+    JSON.stringify({ at: now(), ticket, pid: process.pid }),
+    {
+      mode: 0o600,
+    },
+  );
+}
+
+function ticketInLabel(label: string | undefined): string | undefined {
+  const m = label?.match(TICKET);
+  return m ? `AGENT-${m[1]}` : undefined;
 }
 
 export type Placed =
@@ -166,16 +263,28 @@ export async function placeWorker(
   if (!main || !tab || !workspace || !ticket) {
     return { ok: false, legacy: true, error: "no Herdr caller context or ticket" };
   }
+  // The caller's tab and MAIN must belong to this ticket: a lane for AGENT-519 started from AGENT-100's
+  // MAIN must not land in AGENT-100's tab. A tab with no ticket in its label keeps the legacy split.
+  const tabInfo = await json(port, ["herdr", "tab", "get", tab], "herdr tab get");
+  if (!tabInfo.ok) return tabInfo;
+  const tabTicket = ticketInLabel(
+    (tabInfo.result.tab as { label?: unknown } | undefined)?.label as string | undefined,
+  );
+  if (!tabTicket)
+    return { ok: false, legacy: true, error: `caller tab ${tab} is not a ticket tab` };
+  if (tabTicket !== ticket) {
+    return {
+      ok: false,
+      error: `caller tab ${tab} belongs to ${tabTicket}, not ${ticket}; start this lane from ${ticket}'s MAIN (Shared rules §13). Nothing was started.`,
+    };
+  }
   const sleep = port.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const deadline = Date.now() + (port.queueTimeoutMs ?? DEFAULT_QUEUE_MS);
-  let plan;
-  let panes: LayoutPane[];
   for (;;) {
-    const listed = await tabPanes(port, workspace, tab);
-    if (!listed.ok) return listed;
-    panes = listed.panes;
-    plan = planWorker(main, panes);
-    if (!("full" in plan)) break;
+    const attempt = await withLayoutLock(port, () =>
+      splitWorker(port, { ...input, main, tab, workspace, ticket }),
+    );
+    if (!("full" in attempt)) return attempt;
     if (Date.now() >= deadline) {
       return {
         ok: false,
@@ -184,6 +293,35 @@ export async function placeWorker(
     }
     await sleep(port.pollMs ?? DEFAULT_POLL_MS);
   }
+}
+
+/** Runs under the layout lock: list the tab, plan the slot, split, label. `full` means queue and retry. */
+async function splitWorker(
+  port: PaneLayoutPort,
+  input: {
+    cwd: string;
+    role: string;
+    access: "read" | "write";
+    main: string;
+    tab: string;
+    workspace: string;
+    ticket: string;
+  },
+): Promise<Placed | { full: true }> {
+  const { main, tab, workspace, ticket } = input;
+  const listed = await tabPanes(port, workspace, tab);
+  if (!listed.ok) return listed;
+  const panes = listed.panes;
+  const callerMain = panes.find((pane) => pane.paneId === main);
+  const mainTicket = ticketInLabel(callerMain?.label);
+  if (mainTicket && mainTicket !== ticket) {
+    return {
+      ok: false,
+      error: `caller pane ${main} is MAIN of ${mainTicket}, not ${ticket}. Nothing was started.`,
+    };
+  }
+  const plan = planWorker(main, panes);
+  if ("full" in plan) return plan;
   const mainPane = panes.find((pane) => pane.paneId === main);
   if (mainPane && !mainPane.label) {
     // Best effort: a MAIN label never blocks a launch.
@@ -230,17 +368,44 @@ export async function closeFinished(
   const main = port.env.HERDR_PANE_ID;
   for (const paneId of new Set(paneIds)) {
     if (!paneId || paneId === main) continue;
-    const got = await port.run(["herdr", "pane", "get", paneId]);
-    if (!got.ok) continue;
-    const pane = parse(got.stdout)?.pane as { agent_status?: unknown; agent?: unknown } | undefined;
-    if (!pane) continue;
-    const status = typeof pane.agent_status === "string" ? pane.agent_status : "unknown";
-    if (typeof pane.agent === "string" && status !== "idle" && status !== "done") continue;
-    if (typeof pane.agent !== "string" && status !== "unknown") continue;
+    // Herdr has no compare-and-close, so the pane is read twice: the second read happens right
+    // before the close and must show the same finished state and the same revision/state sequence.
+    // Any change in between (the agent picked up new work) skips the close. MAIN is never closed,
+    // also when this caller is not MAIN: a pane labelled `MAIN ·` is skipped.
+    const first = await finishedState(port, paneId);
+    if (!first) continue;
+    const second = await finishedState(port, paneId);
+    if (!second || second !== first) continue;
     const res = await port.run(["herdr", "pane", "close", paneId]);
     if (res.ok) closed.push(paneId);
   }
   return closed;
+}
+
+/** A fingerprint of a finished, non-MAIN pane, or undefined when it must not be closed. */
+async function finishedState(port: PaneLayoutPort, paneId: string): Promise<string | undefined> {
+  const got = await port.run(["herdr", "pane", "get", paneId]);
+  if (!got.ok) return undefined;
+  const pane = parse(got.stdout)?.pane as
+    | {
+        agent_status?: unknown;
+        agent?: unknown;
+        label?: unknown;
+        revision?: unknown;
+        state_change_seq?: unknown;
+      }
+    | undefined;
+  if (!pane) return undefined;
+  if (typeof pane.label === "string" && pane.label.startsWith("MAIN ·")) return undefined;
+  const status = typeof pane.agent_status === "string" ? pane.agent_status : "unknown";
+  if (typeof pane.agent === "string" && status !== "idle" && status !== "done") return undefined;
+  if (typeof pane.agent !== "string" && status !== "unknown") return undefined;
+  return JSON.stringify([
+    status,
+    pane.agent ?? null,
+    pane.revision ?? null,
+    pane.state_change_seq ?? null,
+  ]);
 }
 
 export interface MainPlace {
@@ -303,6 +468,14 @@ export async function placeMain(
 ): Promise<Placed> {
   const ticket = ticketOf(port.env, input.cwd);
   if (!ticket) return { ok: false, legacy: true, error: "no ticket (set HMR_TICKET=AGENT-n)" };
+  return withLayoutLock(port, () => placeMainLocked(port, input, ticket));
+}
+
+async function placeMainLocked(
+  port: PaneLayoutPort,
+  input: { cwd: string } & MainPlace,
+  ticket: string,
+): Promise<Placed> {
   const project = await projectOf(port, input.cwd, input);
   const wantTab = tabLabel(
     ticket,
@@ -341,7 +514,7 @@ export async function placeMain(
       const panes = await tabPanes(port, ws, found.tab_id);
       if (!panes.ok) return panes;
       const main = panes.panes.find((p) => p.label?.startsWith("MAIN ·")) ?? panes.panes[0];
-      if (main?.agent) {
+      if (main?.agent || (main && reserved(port, main.paneId))) {
         return {
           ok: false,
           error: `ticket ${ticket} already has a MAIN agent in tab ${found.tab_id} (pane ${main.paneId}); one MAIN per ticket tab (Shared rules §13).`,
@@ -373,5 +546,12 @@ export async function placeMain(
   }
   const label = mainLabel(ticket);
   await port.run(["herdr", "pane", "rename", root, label]);
+  // Reserved until the coordinator's agent shows in Herdr: a concurrent hmr start for the same ticket
+  // (another worktree) sees the reservation under the lock and refuses instead of reusing this pane.
+  try {
+    reserve(port, root, ticket);
+  } catch (err) {
+    return { ok: false, error: `could not reserve MAIN ${root}: ${(err as Error).message}` };
+  }
   return { ok: true, paneId: root, label, agentName: mainAgentName(ticket), ticket };
 }
