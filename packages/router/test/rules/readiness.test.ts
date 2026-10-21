@@ -143,6 +143,17 @@ describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
     const screen = `           Claude Code\n${rule}\n❯ Try "fix lint errors"\n${rule}\n  ⏵⏵ don't ask on      · ←…\n`;
     expect(screenVerdict("claude", screen).state).toBe("ready");
   });
+
+  it("accepts a read-only lane's composer when the footer is cut to plan mode", () => {
+    const rule = "─".repeat(25);
+    const screen = `${rule}\n❯ Try "refactor ChartPan…\n${rule}\n   [Opus 5.5] | cx:gp…\n  ⏸ plan mode on\n`;
+    expect(screenVerdict("claude", screen).state).toBe("ready");
+    expect(screenVerdict("claude", extractPaneText(screen)).state).toBe("ready");
+  });
+
+  it("does not take the cut plan-mode footer alone for a composer", () => {
+    expect(screenVerdict("claude", "  ⏸ plan mode on\n").state).toBe("not-ready");
+  });
 });
 
 describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
