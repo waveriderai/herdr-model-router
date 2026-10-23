@@ -1,0 +1,54 @@
+╭────────────────────
+─────────────────────
+────────╮
+│ ✨ Update
+│
+│ available!
+│
+│ 0.163.0 ->
+│
+│ 0.164.0
+│
+│ Run npm install
+│
+│ -g @openai/codex
+│
+│ to update.
+│
+│
+│
+│ See full release
+│
+│ notes:
+│
+│ https://github.com/
+openai/codex/
+releases/latest │
+╰────────────────────
+─────────────────────
+────────╯
+
+
+  >_ OpenAI Codex (v…
+     ~/…/…
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do an
+
+  GPT-6.1-Sol defaul…
+  ? for sh  ⚠ 1 · f2
