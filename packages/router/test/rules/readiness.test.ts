@@ -22,6 +22,9 @@ describe("screen readiness", () => {
     ["cursor", "cursor-ready-auto-run"],
     ["codex", "codex-ready"],
     ["codex", "codex-ready-narrow"],
+    ["codex", "codex-ready-narrow-12col"],
+    ["codex", "codex-ready-narrow-9col"],
+    ["codex", "codex-update-banner-narrow"],
   ] as const)("%s at its ordinary prompt (%s) is ready", (kind, name) => {
     expect(screenVerdict(kind, extractPaneText(screen(name)))).toEqual({ state: "ready" });
   });
@@ -169,5 +172,40 @@ describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
     expect(screenVerdict("codex", "› Ask Codex to do\n\n  GPT-6.1-Sol xhi…\n").state).not.toBe(
       "ready",
     );
+  });
+});
+
+describe("codex readiness with a cut footer or an update banner (AGENT-231)", () => {
+  it("accepts a footer cut to its warning count only below the composer", () => {
+    expect(screenVerdict("codex", extractPaneText("› Ask Co\n\n  GPT-6.…\n  ?  ⚠ 2\n")).state).toBe(
+      "ready",
+    );
+    expect(screenVerdict("codex", extractPaneText("› Ask\n\n  GPT…\n  ⚠ 2\n")).state).toBe("ready");
+  });
+
+  it.each([
+    ["a bare ?", "› Ask Co\n\n  GPT-6.…\n  ?\n"],
+    ["a footer above the composer", "  ?  ⚠ 2\n› Ask Co\n"],
+    ["no composer", "  GPT-6.…\n  ?  ⚠ 2\n"],
+    ["a numbered menu", "› 1.\n  ?  ⚠ 2\n"],
+    ["a ? line with other text", "› Ask Co\n  ?  x 2\n"],
+  ])("does not take %s for a ready composer", (_name, text) => {
+    expect(screenVerdict("codex", extractPaneText(text)).state).not.toBe("ready");
+  });
+
+  it("is ready behind Codex's non-blocking update banner in a wide pane", () => {
+    const rule = "─".repeat(60);
+    const wide = [
+      `╭${rule}╮`,
+      "│ ✨ Update available! 0.163.0 -> 0.164.0                                   │",
+      "│ Run npm install -g @openai/codex to update.                                │",
+      "│ See full release notes: https://github.com/openai/codex/releases/latest    │",
+      `╰${rule}╯`,
+      "",
+      "› Ask Codex to do anything",
+      "",
+      "  ? for shortcuts",
+    ].join("\n");
+    expect(screenVerdict("codex", extractPaneText(wide))).toEqual({ state: "ready" });
   });
 });

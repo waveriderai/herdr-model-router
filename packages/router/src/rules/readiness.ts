@@ -95,12 +95,14 @@ const DIALOG_RULES: DialogRule[] = [
     ],
   },
   {
+    // Only text of an interactive prompt. Codex 0.164.0 prints a non-blocking "Update
+    // available!" banner into history above its normal composer, so a bare "update available"
+    // or "new version available" notice is not a dialog (AGENT-231). A numbered update menu is
+    // still caught by `\d.update` and by NUMBERED_MENU.
     dialog: "update",
     patterns: [
       /\d\.update/,
       "updatenow",
-      "updateavailable",
-      "newversionavailable",
       "skipthisversion",
       "skipuntilnextversion",
       "restarttoupdate",
@@ -388,6 +390,17 @@ export function quotaReason(kind: string, label: string): string {
   return `${kind} reported a quota or usage-limit error ("${label}")`;
 }
 
+/** A composer line with placeholder or typed text; never a numbered menu option ("› 1."). */
+const CODEX_COMPOSER_LINE = /^\s*›\s+(?!\d+\s*[.)])\S/;
+/** A footer cut to its warning count: "?  ⚠ 2" at 12 columns, "⚠ 2" at 9 (AGENT-231). */
+const CODEX_WARNING_FOOTER = /^\s*(?:\?\s+)?⚠\s*\d+\s*$/;
+
+/** The warning-count footer is below the composer line, as the footer always is. */
+function hasWarningFooterBelowComposer(lines: string[]): boolean {
+  const composer = lines.findIndex((line) => CODEX_COMPOSER_LINE.test(line));
+  return composer >= 0 && lines.slice(composer + 1).some((line) => CODEX_WARNING_FOOTER.test(line));
+}
+
 const RULE_LINE = /^\s*─{8,}\s*$/;
 
 /**
@@ -433,7 +446,8 @@ const COMPOSER: Record<ReadinessKind, ((lines: string[], compact: string) => boo
         (lines.some((line) => /^\s*\?\s+f(?:or?)?(?:\s|…|\.\.\.|$)/.test(line)) &&
           // With only a cut footer, the composer line must carry placeholder or typed text and
           // never start like a menu option ("› 1." even when its text wrapped away; PR #25 review 2).
-          lines.some((line) => /^\s*›\s+(?!\d+\s*[.)])\S/.test(line)))),
+          lines.some((line) => CODEX_COMPOSER_LINE.test(line))) ||
+        hasWarningFooterBelowComposer(lines)),
     // No verified composer evidence for OpenCode: never ready.
     opencode: undefined,
   };
