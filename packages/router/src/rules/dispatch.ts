@@ -3,6 +3,7 @@ import { pretrust } from "../workspace/trust.js";
 import { redactCollectorText } from "../collectors/normalizer.js";
 import type { CommandResult, HerdrClient, HerdrPaneClient } from "../launch/herdr-client.js";
 import { herdrError, parseHerdrPaneId } from "../launch/herdr-launcher.js";
+import { placeMain, placeWorker, type PaneLayoutPort } from "../launch/pane-layout.js";
 import {
   NotOwnerError,
   OwnershipConflictError,
@@ -101,7 +102,24 @@ export interface DispatchDeps {
    * that pane for a quota or usage-limit error before it leaves the lane to the model.
    */
   quotaWatchMs?: number;
+  /**
+   * AGENT-519 (Shared rules §13): places panes in the project workspace's ticket tab with
+   * MAIN/worker labels and the MAIN + 3 worker cap. Absent (tests, no Herdr context): the old
+   * `pane split --current`.
+   */
+  layout?: PaneLayoutPort;
+  /**
+   * AGENT-519: the hard review-gate round counter. Called before any lane of a `review gate`
+   * or `design review gate` task starts; a refusal starts nothing.
+   */
+  reviewGuard?: (input: {
+    role: string;
+    cwd: string;
+  }) => Promise<{ ok: true; note?: string } | { ok: false; error: string }>;
 }
+
+/** Review-gate roles counted by the round cap (AGENT-517/519). */
+export const REVIEW_GATE_ROLES = new Set(["review gate", "design review gate"]);
 
 /** A lane's launch with argv[0] replaced by the resolved absolute executable. */
 export interface ResolvedLaunch extends NativeLaunch {
@@ -126,7 +144,12 @@ export type DispatchResult =
   | { ok: true; task: DispatchTask; lanes: LaneOutcome[] }
   | {
       ok: false;
-      code: "capability-missing" | "ownership-conflict" | "launch-unsupported" | "writer-authority";
+      code:
+        | "capability-missing"
+        | "ownership-conflict"
+        | "launch-unsupported"
+        | "writer-authority"
+        | "review-cap";
       error: string;
       owner?: unknown;
     };
@@ -501,11 +524,14 @@ export async function startNativeAgent(input: {
     | "sleep"
     | "timeoutMs"
     | "pollMs"
+    | "layout"
   >;
   laneId: string;
   cwd: string;
   launch: ResolvedLaunch;
   onPaneCreated?: (paneId: string) => void;
+  /** AGENT-519: worker placement (role, access) or MAIN (a coordinator) in the ticket tab. */
+  placement?: { role: string; access: "read" | "write"; main?: boolean };
 }): Promise<NativeStart> {
   const { deps } = input;
   // Per-launch preparation runs before any pane exists; it fails closed.
@@ -530,15 +556,34 @@ export async function startNativeAgent(input: {
       ? { ...prepared, argv: [...prepared.argv, ...trust.argv] }
       : prepared;
   const fixedEnv = { ...(deps.launchFixedEnv ?? {}), ...prepEnv };
-  const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
-  const paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
-  if (!split.ok || !paneId) {
-    return {
-      ok: false,
-      error: split.ok
-        ? "herdr pane split did not return a pane id"
-        : herdrError(split, "herdr pane split failed"),
-    };
+  let paneId: string | undefined;
+  let layoutName: string | undefined;
+  if (deps.layout && input.placement) {
+    const placed = input.placement.main
+      ? await placeMain(deps.layout, { cwd: input.cwd })
+      : await placeWorker(deps.layout, {
+          cwd: input.cwd,
+          role: input.placement.role,
+          access: input.placement.access,
+        });
+    if (placed.ok) {
+      paneId = placed.paneId;
+      layoutName = placed.agentName;
+    } else if (!placed.legacy) {
+      return { ok: false, error: `${placed.error}; no pane was created` };
+    }
+  }
+  if (!paneId) {
+    const split = await deps.herdr.splitCurrent({ cwd: input.cwd });
+    paneId = split.ok ? parseHerdrPaneId(split.stdout) : undefined;
+    if (!split.ok || !paneId) {
+      return {
+        ok: false,
+        error: split.ok
+          ? "herdr pane split did not return a pane id"
+          : herdrError(split, "herdr pane split failed"),
+      };
+    }
   }
   input.onPaneCreated?.(paneId);
   const closeWith = async (error: string, quota?: string): Promise<NativeStart> => {
@@ -587,8 +632,13 @@ export async function startNativeAgent(input: {
     if (scriptPath) deps.launchFiles.remove(scriptPath);
   }
   if (!observed.ok) return closeWith(observed.error, observed.quota);
-  const agentName = laneAgentName(launch.kind, input.laneId);
-  const renamed = await deps.herdr.renameAgent(paneId, agentName);
+  let agentName = layoutName ?? laneAgentName(launch.kind, input.laneId);
+  let renamed = await deps.herdr.renameAgent(paneId, agentName);
+  if (!renamed.ok && layoutName) {
+    // A §13 name already taken (a live agent of the same slot) falls back to the lane name.
+    agentName = laneAgentName(launch.kind, input.laneId);
+    renamed = await deps.herdr.renameAgent(paneId, agentName);
+  }
   if (!renamed.ok) {
     return closeWith(herdrError(renamed, "herdr agent rename failed; no prompt was sent"));
   }
@@ -717,6 +767,12 @@ export async function dispatchPlan(input: {
   const { plan, deps } = input;
   const preflight = await preflightLaunches(plan, deps);
   if (!preflight.ok) return preflight;
+  if (REVIEW_GATE_ROLES.has(plan.role) && deps.reviewGuard) {
+    const guard = await deps.reviewGuard({ role: plan.role, cwd: plan.cwd });
+    if (!guard.ok) {
+      return { ok: false, code: "review-cap", error: `${guard.error}${NOTHING_ELSE}` };
+    }
+  }
   let created;
   try {
     created = deps.store.createTask({
@@ -909,6 +965,7 @@ async function runLane(input: {
     laneId: lane.id,
     cwd: plan.cwd,
     launch,
+    placement: { role: plan.role, access: plan.access === "write" ? "write" : "read" },
     onPaneCreated: (paneId) => {
       outcome.paneId = paneId;
       outcome.state = "pane-created";

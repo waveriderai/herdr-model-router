@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BYPASS_FLAGS,
+  CLAUDE_CONTROL_TOOLS,
   missingCapabilities,
   CODEX_WRITER_PROFILE,
   codexWriterProfile,
@@ -34,7 +35,12 @@ function argv(
 
 const CLAUDE_READ = [
   "--permission-mode",
-  "plan",
+  "dontAsk",
+  "--setting-sources",
+  "",
+  "--strict-mcp-config",
+  "--tools",
+  "Read,Grep,Glob,WebFetch,WebSearch",
   "--allowedTools",
   "Read,Grep,Glob,WebFetch,WebSearch",
 ];
@@ -315,14 +321,30 @@ describe("native argv", () => {
     ]);
   });
 
-  it("launches a coordinator with the CLI's ordinary permissions only", () => {
+  it("launches a coordinator with ordinary permissions, except Claude: dontAsk + allow list (AGENT-519)", () => {
     expect(argv("claude", "m", "high", "control").argv).toEqual([
       "claude",
       "--model",
       "m",
       "--effort",
       "high",
+      "--permission-mode",
+      "dontAsk",
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--tools",
+      "Read,Grep,Glob,WebFetch,WebSearch,Bash",
+      "--allowedTools",
+      CLAUDE_CONTROL_TOOLS,
     ]);
+    // No Edit/Write tool exists in the lane at all, and no settings file can add allow rules.
+    expect(argv("claude", "m", "high", "control").argv.join(" ")).not.toMatch(/\bEdit\b|\bWrite\b/);
+    expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(hmr workflow:*)");
+    expect(CLAUDE_CONTROL_TOOLS).toContain("Bash(herdr agent wait:*)");
+    expect(argv("claude", "m", "high", "control").argv).not.toContain(
+      "--dangerously-skip-permissions",
+    );
     expect(argv("codex", "m", null, "control").argv).toEqual(["codex", "--model", "m"]);
     expect(argv("grok", "m", null, "control").argv).toEqual(["grok", "--model", "m"]);
     expect(argv("cursor", "m", null, "control").argv).toEqual(["cursor-agent", "--model", "m"]);
@@ -384,8 +406,11 @@ describe("native argv", () => {
       "--model",
       "--effort",
       "--permission-mode",
+      "--setting-sources",
+      "--strict-mcp-config",
+      "--tools",
       "--allowedTools",
-      "plan",
+      "dontAsk",
     ]);
     expect(argv("claude", "m", "high", "writer").requiredHelp).toEqual([
       "--model",

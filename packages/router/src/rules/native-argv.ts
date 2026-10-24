@@ -143,8 +143,34 @@ export function claudeWriterSettings(routerHome: string): string {
   });
 }
 
-/** Tools a read-only Claude lane may use without a prompt. Plan mode still blocks edits. */
+/**
+ * Tools a read-only Claude lane may use. AGENT-519 (Kai t445u item 6): read-only lanes run in
+ * `dontAsk`, so any tool off this list (edits included) is denied instead of prompting.
+ */
 const CLAUDE_READ_TOOLS = "Read,Grep,Glob,WebFetch,WebSearch";
+
+/**
+ * AGENT-519 (Kai t445u item 6: dontAsk plus an allow list, sandbox kept, no bypass): a Claude
+ * coordinator (`hmr start`, control profile) gets `dontAsk` with the read tools plus the hmr,
+ * Herdr wait/get/read and read-only git/gh commands it drives workflows with. Anything else is
+ * denied instead of prompting; nothing here bypasses permissions.
+ */
+export const CLAUDE_CONTROL_TOOLS = [
+  CLAUDE_READ_TOOLS,
+  "Bash(hmr workflow:*)",
+  "Bash(hmr task:*)",
+  "Bash(hmr coordinator:*)",
+  "Bash(herdr agent wait:*)",
+  "Bash(herdr agent get:*)",
+  "Bash(herdr agent read:*)",
+  "Bash(git status:*)",
+  "Bash(git diff:*)",
+  "Bash(git log:*)",
+  "Bash(git rev-parse:*)",
+  "Bash(gh pr view:*)",
+  "Bash(gh pr diff:*)",
+  "Bash(gh pr checks:*)",
+].join(",");
 
 /**
  * Grok permission rules. Grok accepts `--permission-mode plan` and ignores it, so read-only
@@ -205,9 +231,22 @@ export function nativeLaunch(
           "claude",
           [["--model", model], effort ? ["--effort", effort] : []],
           pick({
+            // AGENT-519 r2: --allowedTools only adds allow rules, so the lane also loads no settings file
+            // (user/project/local allow rules cannot widen it), no MCP server, and gets only these
+            // built-in tools via --tools (a hard cap). dontAsk then denies anything not allowed.
             "read-only": {
-              args: ["--permission-mode", "plan", "--allowedTools", CLAUDE_READ_TOOLS],
-              values: ["plan"],
+              args: [
+                "--permission-mode",
+                "dontAsk",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--tools",
+                CLAUDE_READ_TOOLS,
+                "--allowedTools",
+                CLAUDE_READ_TOOLS,
+              ],
+              values: ["dontAsk"],
             },
             writer: {
               // No settings file at all (user, project or local): every allow rule, sandbox setting and
@@ -222,7 +261,21 @@ export function nativeLaunch(
               ],
               values: ["dontAsk"],
             },
-            control: NONE,
+            control: {
+              // Same caps as read-only; Bash is available but only the listed command prefixes are allowed.
+              args: [
+                "--permission-mode",
+                "dontAsk",
+                "--setting-sources",
+                "",
+                "--strict-mcp-config",
+                "--tools",
+                `${CLAUDE_READ_TOOLS},Bash`,
+                "--allowedTools",
+                CLAUDE_CONTROL_TOOLS,
+              ],
+              values: ["dontAsk"],
+            },
             bypass: { args: ["--dangerously-skip-permissions"] },
           }),
         ),

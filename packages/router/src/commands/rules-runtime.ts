@@ -17,6 +17,7 @@ import type { Provider } from "../rules/descriptor.js";
 import type { DispatchDeps, LaunchFiles } from "../rules/dispatch.js";
 import { launchEnvNames, resolveExecutable } from "../rules/launch-script.js";
 import { prepareNativeLaunch } from "../rules/launch-prep.js";
+import { createReviewGuard } from "../launch/review-guard.js";
 import { cursorGuardReadyFile } from "../rules/cursor-guard.js";
 import { pathWithoutShim } from "../launch/cursor-lead.js";
 import { createLiveTypeSafeClient, type TypeSafePort } from "../semantic/typesafe-client.js";
@@ -116,6 +117,9 @@ export function openDispatchDeps(
         ...(env.CLAUDE_CONFIG_DIR ? { claudeConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
       }),
     startCursorGuard: (input) => startCursorGuardProcess(input, home, childEnv),
+    // AGENT-519: §13 pane layout and the hard review-gate round counter.
+    ...(env.HMR_LAYOUT === "off" ? {} : { layout: { run: adapter, env } }),
+    reviewGuard: createReviewGuard(quick, env),
     ...(env.MODEL_ROUTER_HOME
       ? { launchFixedEnv: { MODEL_ROUTER_HOME: env.MODEL_ROUTER_HOME } }
       : {}),

@@ -59,7 +59,10 @@ export function createProcessCommandAdapter(
         resolve({ ok: false, code: 1, stdout: "", stderr: "missing command" });
         return;
       }
-      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: options.env });
+      // AGENT-519: mark hmr as the launcher, so the DevPro `herdr` wrapper lets hmr (and only hmr or herdr-hub)
+      // start agent panes. The mark reaches only the commands hmr runs, never the agents inside the panes.
+      const env = { ...(options.env ?? process.env), HERDR_LAUNCHER: "hmr" };
+      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env });
       let stdout = "";
       let stderr = "";
       const timer = setTimeout(() => {

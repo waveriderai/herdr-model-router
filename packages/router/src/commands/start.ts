@@ -442,6 +442,7 @@ async function launchCoordinator(
       laneId: record.id,
       cwd: plan.cwd,
       launch,
+      placement: { role: plan.role, access: "read", main: true },
       onPaneCreated: (created) => {
         paneId = created;
         coordinators.notePane(record.id, created);
