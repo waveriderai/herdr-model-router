@@ -161,6 +161,27 @@ describe("claude readiness in a narrow pane under dontAsk (AGENT-285)", () => {
   it("does not take the cut plan-mode footer alone for a composer", () => {
     expect(screenVerdict("claude", "  ⏸ plan mode on\n").state).toBe("not-ready");
   });
+
+  it("still refuses trust, update and menu screens that show the cut plan-mode footer (AGENT-196)", () => {
+    const rule = "─".repeat(13);
+    const plan = "  ⏸ plan\n";
+    const trust = extractPaneText(screen("claude-trust-narrow") + plan);
+    expect(screenVerdict("claude", trust)).toMatchObject({
+      state: "dialog",
+      dialog: "workspace trust",
+    });
+    const update = `${rule}\n❯ 1. Update now\n  2. Skip\n${rule}\n${plan}`;
+    expect(screenVerdict("claude", update)).toMatchObject({ state: "dialog", dialog: "update" });
+    const menu = `${rule}\n❯ 1. Yes\n${rule}\n${plan}`;
+    expect(screenVerdict("claude", menu)).toMatchObject({
+      state: "dialog",
+      dialog: "interactive menu",
+    });
+  });
+
+  it("needs the composer between rules beside the plan footer, not a bare input marker (AGENT-196)", () => {
+    expect(screenVerdict("claude", "⏺ Done.\n❯ \n  ⏸ plan mode on\n").state).toBe("not-ready");
+  });
 });
 
 describe("codex readiness in a narrow Herdr split (AGENT-285)", () => {
