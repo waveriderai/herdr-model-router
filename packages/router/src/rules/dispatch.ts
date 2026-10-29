@@ -6,6 +6,7 @@ import { herdrError, parseHerdrPaneId } from "../launch/herdr-launcher.js";
 import {
   NotOwnerError,
   OwnershipConflictError,
+  OwnershipHandoffError,
   WorkflowTaskError,
   TaskClosedError,
   UnresolvedAttemptError,
@@ -14,6 +15,7 @@ import {
   type DispatchLane,
   type DispatchRepository,
   type DispatchTask,
+  type OwnershipHandoff,
 } from "../store/dispatch-repository.js";
 import { WriterAuthorityError } from "../store/workflow-repository.js";
 import type { Provider } from "./descriptor.js";
@@ -126,7 +128,12 @@ export type DispatchResult =
   | { ok: true; task: DispatchTask; lanes: LaneOutcome[] }
   | {
       ok: false;
-      code: "capability-missing" | "ownership-conflict" | "launch-unsupported" | "writer-authority";
+      code:
+        | "capability-missing"
+        | "ownership-conflict"
+        | "ownership-handoff-refused"
+        | "launch-unsupported"
+        | "writer-authority";
       error: string;
       owner?: unknown;
     };
@@ -700,6 +707,7 @@ export async function dispatchPlan(input: {
   deps: DispatchDeps;
   /** The workflow a writer task belongs to (see DispatchRepository.createTask). */
   workflowId?: string;
+  handoffFrom?: OwnershipHandoff;
   /** Called once the task (and, for a writer, its ownership) is recorded. */
   onTaskCreated?: (task: DispatchTask) => void;
   /** A last gate after the agent is ready, named and bound; refusing closes the pane. */
@@ -727,6 +735,7 @@ export async function dispatchPlan(input: {
       cwd: plan.cwd,
       rulesPath: plan.rulesSource.path,
       ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+      ...(input.handoffFrom ? { handoffFrom: input.handoffFrom } : {}),
       lanes: plan.lanes.map((lane, position) => ({
         index: lane.index,
         descriptor: lane.descriptor,
@@ -737,6 +746,9 @@ export async function dispatchPlan(input: {
       })),
     });
   } catch (error) {
+    if (error instanceof OwnershipHandoffError) {
+      return { ok: false, code: "ownership-handoff-refused", error: error.message };
+    }
     if (error instanceof OwnershipConflictError) {
       return { ok: false, code: "ownership-conflict", error: error.message, owner: error.owner };
     }

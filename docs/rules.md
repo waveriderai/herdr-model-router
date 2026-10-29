@@ -223,6 +223,47 @@ permissions.
       the pane and fails the lane. The script is deleted.
    4. `herdr agent rename <pane> <name>`, then send the prompt once.
 
+### Atomic writer hold handoff
+
+An external coordinator that holds `writer_ownership` for a completed writer task can pass
+that exact acquisition to a new writer:
+
+```sh
+hmr run --role bug-fix --phase fix --handoff-from '<holder-task-id>@<acquired-at>' 'Fix the reviewed change' --json
+```
+
+The coordinator keeps its hold while checking the worktree and launching HMR. It must not
+delete the row before calling `run`. The token contains the holder task ID and the row's
+exact `acquired_at` string, separated by `@`; neither field may contain whitespace or `@`.
+This is an ownership comparison token, not an authentication credential.
+
+In `createTask`'s single `IMMEDIATE` transaction, HMR requires the target worktree's row to
+match both fields. The holder must be a complete writer task on that worktree and its latest
+writer task, ordered by `created_at` and then insertion order. The ordinary writer authority
+checks still apply: an open workflow or an agent-collab binding refuses the handoff. Only
+after these checks does HMR delete the holder row and create the new task, ownership and
+lanes. A failed transaction restores the original row. No other database writer can acquire
+the worktree between deletion and insertion.
+
+An ownership or authority mismatch exits with code 2 and JSON
+`{"ok":false,"code":"ownership-handoff-refused","error":"..."}` before any pane is
+launched or prompted. The caller retains responsibility for releasing its exact hold on
+refusal, matched on worktree, task ID and acquisition time. It must never delete a competitor's
+row. Once a handoff succeeds, the new task owns the worktree and follows the ordinary task
+completion and recovery rules. Earlier launch gates, such as a missing CLI, keep their existing
+error codes and leave the hold untouched.
+
+`--handoff-from` supports rules and semantic writer runs. Malformed tokens, read-only runs
+and quota mode return `ownership-handoff-invalid`. A dry run validates the token's shape and
+writer access only; it does not open the database, validate the hold or transfer ownership.
+Without this option, writer acquisition is unchanged.
+
+This design avoids adding a paused task state, a go/abort protocol and timeout recovery that
+a pause-before-prompt design would require. It preserves ownership across the coordinator's
+final checks and dispatch. The coordinator remains responsible for its clean-state and SHA
+checks while holding the worktree; the handoff does not rerun those checks or prevent edits
+by processes outside the ownership protocol.
+
 ### Readiness check
 
 Herdr's `idle` is not enough: CLIs show first-run dialogs that look idle, and a typed task

@@ -1,6 +1,7 @@
 import { isHerdrEnv } from "../launch/readiness.js";
 import type { Phase } from "../rules/accounts.js";
 import type { Provider } from "../rules/descriptor.js";
+import type { OwnershipHandoff } from "../store/dispatch-repository.js";
 import { dispatchPlan, type DispatchDeps, type LaneOutcome } from "../rules/dispatch.js";
 import { worktreeIdentity } from "../rules/rules-source.js";
 import { classifyRole } from "../semantic/role-classifier.js";
@@ -26,6 +27,8 @@ export interface RulesRunRequest {
   bypassPermissions?: boolean;
   /** A writer's first version (default) or its fix after review; picks the account. */
   phase?: Phase;
+  /** Exact completed writer acquisition to transfer in createTask's transaction. */
+  handoffFrom?: string;
   dryRun: boolean;
 }
 
@@ -54,6 +57,16 @@ export async function executeRulesRun(
   request: RulesRunRequest,
   deps: RulesRunDeps,
 ): Promise<CommandResult> {
+  let handoffFrom: OwnershipHandoff | undefined;
+  if (request.handoffFrom !== undefined) {
+    const match = /^([^@\s]+)@([^@\s]+)$/.exec(request.handoffFrom);
+    if (!match || match[0] !== request.handoffFrom) {
+      return refused("--handoff-from must be <holder-task-id>@<acquired-at>", {
+        code: "ownership-handoff-invalid",
+      });
+    }
+    handoffFrom = { taskId: match[1]!, acquiredAt: match[2]! };
+  }
   let role = request.role;
   const notes: string[] = [];
   const effects: string[] = [];
@@ -90,6 +103,9 @@ export async function executeRulesRun(
   });
   if (!preview.ok) return preview.result;
   const plan = { ...preview.plan, notes: [...preview.plan.notes, ...notes] };
+  if (handoffFrom && plan.access !== "write") {
+    return refused("--handoff-from requires a writer role", { code: "ownership-handoff-invalid" });
+  }
   // formatPlan prints plan.notes (classification notes included) once.
   if (request.dryRun) {
     const footer =
@@ -132,6 +148,7 @@ export async function executeRulesRun(
       plan,
       prompt: task,
       worktreeId: worktreeIdentity(plan.cwd),
+      ...(handoffFrom ? { handoffFrom } : {}),
       deps: dispatch,
     });
     if (!result.ok) {

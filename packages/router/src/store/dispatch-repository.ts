@@ -86,6 +86,15 @@ export interface Ownership {
   acquiredAt: string;
 }
 
+/** Identifies one acquisition, so releasing and reacquiring the same task cannot reuse it. */
+export type OwnershipHandoff = Pick<Ownership, "taskId" | "acquiredAt">;
+
+export class OwnershipHandoffError extends Error {
+  constructor(reason: string) {
+    super(`Writer ownership handoff refused: ${reason}. No task was created or prompted.`);
+  }
+}
+
 export class OwnershipConflictError extends Error {
   constructor(readonly owner: Ownership) {
     super(
@@ -248,6 +257,8 @@ export interface NewTask {
   rulesPath: string;
   /** The workflow this writer task belongs to, if any; other open workflows refuse it. */
   workflowId?: string;
+  /** Atomically replace this exact completed standalone writer's hold. */
+  handoffFrom?: OwnershipHandoff;
   lanes: {
     index: number;
     descriptor: string;
@@ -272,7 +283,43 @@ export class DispatchRepository {
   createTask(input: NewTask): { task: DispatchTask; lanes: DispatchLane[] } {
     const create = this.db.transaction(() => {
       const at = this.now();
-      if (input.access === "write") {
+      if (input.handoffFrom) {
+        const { taskId, acquiredAt } = input.handoffFrom;
+        if (input.access !== "write" || input.workflowId) {
+          throw new OwnershipHandoffError("only a standalone writer may receive a hold");
+        }
+        const owner = this.ownerOf(input.worktreeId);
+        if (owner?.taskId !== taskId || owner.acquiredAt !== acquiredAt) {
+          throw new OwnershipHandoffError(
+            "the worktree no longer has the expected holder acquisition",
+          );
+        }
+        const holder = this.getTask(taskId);
+        if (
+          holder?.worktreeId !== input.worktreeId ||
+          holder.access !== "write" ||
+          holder.status !== "complete"
+        ) {
+          throw new OwnershipHandoffError("the holder is not a complete writer on this worktree");
+        }
+        const latest = this.db
+          .prepare(
+            "select id from dispatch_tasks where worktree_id = ? and access = 'write' order by created_at desc, rowid desc limit 1",
+          )
+          .get(input.worktreeId) as { id: string } | undefined;
+        if (latest?.id !== taskId) {
+          throw new OwnershipHandoffError(
+            "the holder is no longer the latest writer on this worktree",
+          );
+        }
+        const refusal = writerAuthorityRefusal(this.db, input.worktreeId);
+        if (refusal) throw new OwnershipHandoffError(refusal.message);
+        this.db
+          .prepare(
+            "delete from writer_ownership where worktree_id = ? and task_id = ? and acquired_at = ?",
+          )
+          .run(input.worktreeId, taskId, acquiredAt);
+      } else if (input.access === "write") {
         const refusal = writerAuthorityRefusal(this.db, input.worktreeId, input.workflowId);
         if (refusal) throw refusal;
         const owner = this.ownerOf(input.worktreeId);
