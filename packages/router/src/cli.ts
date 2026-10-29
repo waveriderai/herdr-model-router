@@ -273,6 +273,10 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
     )
     .option("--phase <phase>", PHASE_HELP, "first")
     .option("--dry-run", "Print the route without launching", false)
+    .option(
+      "--handoff-from <holder-task-id@acquired-at>",
+      "Atomically take an exact completed writer hold (rules and semantic modes)",
+    )
     .option("--json", "Emit JSON for plugins", false)
     .option("--session <id>", "Route the next phase of an earlier router session (quota mode)")
     .option(
@@ -303,6 +307,7 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
           readOnly?: boolean;
           dangerouslyBypassPermissions?: boolean;
           phase: string;
+          handoffFrom?: string;
         },
       ) => {
         const mode = (flags.routingMode ?? "rules") as RoutingModeFlag;
@@ -335,11 +340,22 @@ export function createProgram(options: CliOptions = {}): Command & { exitCode?: 
                   ...(flags.readOnly ? { readOnly: true } : {}),
                   ...(flags.dangerouslyBypassPermissions ? { bypassPermissions: true } : {}),
                   phase: phaseFlag(flags.phase),
+                  ...(flags.handoffFrom !== undefined ? { handoffFrom: flags.handoffFrom } : {}),
                 },
                 createRulesRunDeps(env, cwd, flags.rules, options.rulesOverrides),
               ),
             flags.json,
           );
+          return;
+        }
+        if (flags.handoffFrom !== undefined) {
+          const error = "--handoff-from applies to rules and semantic modes";
+          if (flags.json)
+            stdout.write(
+              `${JSON.stringify({ ok: false, code: "ownership-handoff-invalid", error })}\n`,
+            );
+          else stderr.write(`${error}\n`);
+          program.exitCode = 2;
           return;
         }
         if (
